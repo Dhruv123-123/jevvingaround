@@ -13,23 +13,28 @@ export interface SpeculatorOptions<S, R> {
   onResult?: (r: R, hash: string, cacheHit: boolean) => void;
   onError?: (e: unknown) => void;
   /** injectable for tests */
-  setTimeoutImpl?: typeof setTimeout;
-  clearTimeoutImpl?: typeof clearTimeout;
+  setTimeoutImpl?: TimerFn;
+  clearTimeoutImpl?: ClearFn;
 }
 
+// Kept opaque on purpose: DOM says timers are numbers, Node says they are objects, and this file runs in both.
+type TimerHandle = unknown;
+type TimerFn = (fn: () => void, ms: number) => TimerHandle;
+type ClearFn = (t: TimerHandle) => void;
+
 export class Speculator<S, R> {
-  private timer: ReturnType<typeof setTimeout> | null = null;
+  private timer: TimerHandle | null = null;
   private cache = new Map<string, R>();
   private inflight = new Map<string, Promise<R>>();
   private seq = 0;
   private latestHash: string | null = null;
-  private readonly st: typeof setTimeout;
-  private readonly ct: typeof clearTimeout;
+  private readonly st: TimerFn;
+  private readonly ct: ClearFn;
 
   constructor(private opts: SpeculatorOptions<S, R>) {
     // wrapped, not referenced: browsers throw "Illegal invocation" when a timer fn is called as a method
-    this.st = opts.setTimeoutImpl ?? ((fn: () => void, ms?: number) => setTimeout(fn, ms));
-    this.ct = opts.clearTimeoutImpl ?? ((t: ReturnType<typeof setTimeout> | undefined) => clearTimeout(t));
+    this.st = opts.setTimeoutImpl ?? ((fn, ms) => setTimeout(fn, ms));
+    this.ct = opts.clearTimeoutImpl ?? ((t) => clearTimeout(t as ReturnType<typeof setTimeout>));
   }
 
   /** Call on every keystroke / recipient change. */
