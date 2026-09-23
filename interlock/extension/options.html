@@ -1,0 +1,72 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Interlock</title>
+<style>
+body{font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;color:#202124;max-width:880px;margin:32px auto;padding:0 16px}
+h1{font-size:20px;margin:0 0 4px}h2{font-size:15px;margin:28px 0 8px}
+.muted{color:#5f6368}label{display:block;margin:10px 0 4px;font-weight:600}
+input[type=text],input[type=password],input[type=number],select,textarea{width:100%;font:inherit;padding:7px 9px;border:1px solid #dadce0;border-radius:6px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:0 20px}
+button{font:inherit;border-radius:6px;padding:7px 14px;border:1px solid #dadce0;background:#fff;cursor:pointer;margin-right:8px}
+button.primary{background:#1a73e8;border-color:#1a73e8;color:#fff}
+table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:left;padding:6px 8px;border-bottom:1px solid #eee;vertical-align:top}
+td input[type=number]{width:64px}
+.ok{color:#188038}.err{color:#d93025}
+pre{background:#f8f9fa;padding:8px;border-radius:6px;overflow:auto;font-size:12px}
+.tag{display:inline-block;padding:1px 6px;border-radius:8px;background:#e8f0fe;color:#1967d2;font-size:11px;margin-left:6px}
+</style></head>
+<body>
+<h1>Interlock</h1>
+<div class="muted">The sensor is Jev. The policy is yours. Nothing here blocks a send you insist on; everything is logged.</div>
+
+<h2>Connection</h2>
+<div class="grid">
+  <div><label>API key</label><input id="apiKey" type="password" placeholder="sk-…"></div>
+  <div><label>Base URL</label>
+    <select id="baseUrl">
+      <option value="https://api.typesafe.ai">TypeSafe direct (api.typesafe.ai)</option>
+      <option value="https://openrouter.ai/api">OpenRouter (openrouter.ai/api)</option>
+      <option value="custom">Custom…</option>
+    </select>
+    <input id="baseUrlCustom" type="text" placeholder="https://…" style="margin-top:6px;display:none"></div>
+  <div><label>Model</label><input id="model" type="text" value="jev-latest"></div>
+  <div><label>&nbsp;</label><button id="test">Test connection</button> <span id="testOut" class="muted"></span></div>
+</div>
+
+<h2>Behaviour</h2>
+<div class="grid">
+  <div><label>Redaction before sending to Jev</label>
+    <select id="redaction">
+      <option value="body">body — scrub emails/phones/cards in text; keep recipient addresses</option>
+      <option value="strict">strict — also replace recipient addresses with domain-only placeholders</option>
+      <option value="none">none</option>
+    </select></div>
+  <div><label>Interrupt budget per day (confirms + blocks)</label><input id="interruptBudgetPerDay" type="number" min="0" max="50"></div>
+  <div><label>Hold duration (seconds)</label><input id="holdSeconds" type="number" min="3" max="120"></div>
+  <div><label>Typing pause before speculative evaluation (ms)</label><input id="debounceMs" type="number" min="150" max="3000" step="50"></div>
+  <div><label>If Jev is unreachable</label>
+    <select id="failMode"><option value="open">fail open — send goes through, pill shows offline</option><option value="closed">fail closed — require an override</option></select></div>
+</div>
+
+<h2>Questions <span class="muted" style="font-weight:400">— thresholds on P(true). Blank = level disabled.</span></h2>
+<table id="bank"><thead><tr><th>Question</th><th>Instructions</th><th>Nudge</th><th>Hold</th><th>Confirm</th><th>Block</th><th>On</th></tr></thead><tbody></tbody></table>
+
+<h2>Add a question <span class="tag">policy-as-questions</span></h2>
+<div class="muted">Plain English. It runs in the same call as the built-ins, with no effect on their answers.</div>
+<div class="grid">
+  <div><label>ID (snake_case)</label><input id="qId" type="text" placeholder="falcon_codename_external"></div>
+  <div><label>Reason shown to the user</label><input id="qReason" type="text" placeholder="Mentions Project Falcon to an outsider ({p}%)"></div>
+</div>
+<label>Instructions</label><textarea id="qInstr" rows="2" placeholder="The message reveals the existence of Project Falcon to someone outside the company."></textarea>
+<div class="grid">
+  <div><label>Criteria: true</label><input id="qTrue" type="text" placeholder="Falcon is named or described and a recipient is external."></div>
+  <div><label>Criteria: false</label><input id="qFalse" type="text" placeholder="Falcon is not mentioned, or all recipients are internal."></div>
+</div>
+<div style="margin-top:8px"><button id="addQ">Add question</button></div>
+
+<div style="margin-top:24px"><button id="save" class="primary">Save</button><span id="saveOut" class="ok"></span></div>
+
+<h2>Audit log <span class="muted" style="font-weight:400">— last 50, newest first</span></h2>
+<div><button id="refreshLog">Refresh</button><button id="exportLog">Export JSON</button><button id="clearLog">Clear</button> <span id="stats" class="muted"></span></div>
+<table id="log"><thead><tr><th>When</th><th>Level</th><th>Regret</th><th>Action</th><th>Reasons</th><th>ms</th><th>tokens</th><th>cache</th></tr></thead><tbody></tbody></table>
+<script src="options.js"></script>
+</body></html>

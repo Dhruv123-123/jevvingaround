@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "Interlock for Gmail",
+  "version": "0.1.0",
+  "description": "A 100 ms pre-send judgment on every email. Sensor: TypeSafe Jev. Policy: yours.",
+  "permissions": ["storage"],
+  "host_permissions": ["https://mail.google.com/*", "https://api.typesafe.ai/*", "https://openrouter.ai/*"],
+  "background": { "service_worker": "background.js", "type": "module" },
+  "content_scripts": [
+    { "matches": ["https://mail.google.com/*"], "js": ["content.js"], "run_at": "document_idle" }
+  ],
+  "options_page": "options.html",
+  "action": { "default_title": "Interlock settings" }
+}

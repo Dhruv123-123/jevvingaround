@@ -1,0 +1,26 @@
+{
+  "name": "interlock",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Sub-perceptual pre-send interlock for Gmail, powered by TypeSafe Jev",
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "build:test": "node scripts/build.mjs --test",
+    "watch": "node scripts/build.mjs --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:e2e": "npm run build:test && node --test --test-concurrency=1 test/e2e.mjs",
+    "bench": "node --import tsx scripts/bench.ts",
+    "mock": "node scripts/mock-jev.mjs"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.3.0",
+    "@types/node": "^22.20.4",
+    "esbuild": "^0.28.2",
+    "playwright": "^1.63.0",
+    "tsx": "^4.20.0",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.1"
+  }
+}
