@@ -1,4 +1,4 @@
-import type { Answer, EmailState, QuestionDef, Reason, Verdict, VerdictLevel } from "./types.js";
+import type { Answer, QuestionDef, Reason, Verdict, VerdictLevel } from "./types.js";
 
 export const LEVEL_ORDER: VerdictLevel[] = ["proceed", "nudge", "hold", "confirm", "block"];
 const rank = (l: VerdictLevel) => LEVEL_ORDER.indexOf(l);
@@ -17,6 +17,10 @@ export interface PolicyContext {
 /** L0 flags that are hard blocks on their own. Everything else L0 flags is just a fact in the state. */
 const L0_HARD: Record<string, VerdictLevel> = {
   secret_pattern_in_body: "block",
+  catastrophic_command_in_args: "block",
+  catastrophic_command: "block",
+  force_push_to_protected: "confirm",
+  payee_details_changed_recently: "confirm",
 };
 
 const HYSTERESIS = 0.05;
@@ -32,17 +36,18 @@ export function levelFor(q: QuestionDef, p: number, previousLevel?: VerdictLevel
   return "proceed";
 }
 
-export function reasonText(q: QuestionDef, a: Answer, state: EmailState): string {
-  const p = a.type === "noul" ? a.noul : a.type === "choice" ? a.confidence : a.confidence;
+export function reasonText(q: QuestionDef, a: Answer, answers: Record<string, Answer> = {}): string {
+  const rich = q.reasonFor?.(a, answers);
+  if (rich) return rich;
+  const p = a.type === "noul" ? a.noul : a.confidence;
   let s = q.reason ?? `${q.id.replace(/_/g, " ")} ({p}%)`;
   s = s.replace("{p}", String(Math.round(p * 100)));
   if (a.type === "choice") s = s.replace("{choice}", a.choice);
-  // enrich the recipient reasons with the model's own pick, if it made one
-  void state;
   return s;
 }
 
-export function decide(bank: QuestionDef[], answers: Record<string, Answer>, state: EmailState, ctx: PolicyContext): Verdict {
+/** Surface-agnostic: the state is only here so callers can pass it through for logging symmetry. */
+export function decide(bank: QuestionDef[], answers: Record<string, Answer>, _state: unknown, ctx: PolicyContext): Verdict {
   const notes: string[] = [];
   const reasons: Reason[] = [];
   const prevById = new Map((ctx.previous?.reasons ?? []).map((r) => [r.id, r.level] as const));
@@ -54,12 +59,7 @@ export function decide(bank: QuestionDef[], answers: Record<string, Answer>, sta
     if (!a || a.type !== "noul") continue;
     const lvl = levelFor(q, a.noul, prevById.get(q.id));
     if (lvl !== "proceed") {
-      let text = reasonText(q, a, state);
-      if ((q.id === "wrong_recipient") && answers["most_suspicious_recipient"]?.type === "choice") {
-        const pick = answers["most_suspicious_recipient"] as Extract<Answer, { type: "choice" }>;
-        if (pick.choice !== "none" && pick.confidence >= 0.5) text = `${pick.choice} looks out of place (${Math.round(a.noul * 100)}%)`;
-      }
-      reasons.push({ id: q.id, p: a.noul, text, level: lvl });
+      reasons.push({ id: q.id, p: a.noul, text: reasonText(q, a, answers), level: lvl });
       level = maxLevel(level, lvl);
     }
   }

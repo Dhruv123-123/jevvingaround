@@ -1,0 +1,21 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Slack lookalike</title><meta name="interlock-surface" content="slack">
+<style>body{font:14px sans-serif;margin:24px}.msg{margin:6px 0}[data-qa="message_input"]{border:1px solid #ccc;padding:8px;width:640px;margin-top:16px}.ql-editor{min-height:60px;outline:none}button{margin-top:6px}</style>
+</head><body>
+<button data-qa="user-button" aria-label="User: Me">Me</button>
+<h1><span data-qa="channel_name">#eng-general</span></h1>
+<span data-qa="channel_members_count">128 members</span>
+<div data-qa="virtual-list-item" class="msg"><span data-qa="message_sender_name">Priya</span>: <span data-qa="message-text">Reminder: we agreed no deploys on Friday afternoon.</span></div>
+<div data-qa="virtual-list-item" class="msg"><span data-qa="message_sender_name">Sam</span>: <span data-qa="message-text">Ack. Release goes Monday 9am.</span></div>
+<div data-qa="composer">
+  <div data-qa="message_input"><div class="ql-editor" contenteditable="true" role="textbox"></div></div>
+  <button data-qa="texty_send_button" aria-label="Send now" id="send">Send</button>
+  <span id="sent"></span>
+</div>
+<script>
+  window.__sent = 0;
+  document.getElementById('send').addEventListener('click', () => { window.__sent++; document.getElementById('sent').textContent = 'SENT ' + window.__sent; });
+  // Slack sends on Enter: the fixture mirrors that so the interlock has to intercept the key, not just the button
+  document.querySelector('.ql-editor').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); document.getElementById('send').click(); } });
+</script>
+</body></html>

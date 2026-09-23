@@ -46,15 +46,18 @@ async function handle(req: Req): Promise<unknown> {
       await chrome.storage.local.set({ history: h });
       return h;
     }
+    // one counter per surface, so a noisy Slack day can't silence the email gate
     case "budget.get": {
-      const b = (await chrome.storage.local.get("budget")).budget as { used: number; date: string } | undefined;
+      const all = ((await chrome.storage.local.get("budget")).budget as Record<string, { used: number; date: string }> | undefined) ?? {};
+      const b = all[req.surface];
       return b && b.date === today() ? b : { used: 0, date: today() };
     }
     case "budget.spend": {
-      const b = (await handle({ type: "budget.get" })) as { used: number; date: string };
-      const next = { used: b.used + 1, date: today() };
-      await chrome.storage.local.set({ budget: next });
-      return next;
+      const all = ((await chrome.storage.local.get("budget")).budget as Record<string, { used: number; date: string }> | undefined) ?? {};
+      const b = (await handle({ type: "budget.get", surface: req.surface })) as { used: number; date: string };
+      all[req.surface] = { used: b.used + 1, date: today() };
+      await chrome.storage.local.set({ budget: all });
+      return all[req.surface];
     }
     case "log.append": {
       const cur = ((await chrome.storage.local.get("log")).log as AuditRecord[] | undefined) ?? [];

@@ -191,6 +191,52 @@ test("Ctrl+Enter is intercepted too", async () => {
   await page.close();
 });
 
+async function openSlack() {
+  const page = await ctx.newPage();
+  await page.goto(`${mock.url}/fixtures/slack.html`);
+  const pill = page.getByTestId("interlock-pill");
+  await pill.waitFor();
+  return { page, pill, body: page.locator(".ql-editor") };
+}
+
+test("slack: Enter is intercepted, the compiled state carries channel facts, and a quiet message sends", async () => {
+  const { page, body } = await openSlack();
+  await body.click();
+  await page.keyboard.type("sounds good, see you Monday");
+  await page.waitForTimeout(700);
+  const req = await lastRequest();
+  assert.equal(req.state.action, "slack.send");
+  assert.equal(req.state.channel.name, "#eng-general");
+  assert.equal(req.state.channel.kind, "channel");
+  assert.equal(req.state.channel.member_count_bucket, "100+");
+  assert.equal(req.state.recent.length, 2);
+  assert.match(req.state.recent[0].text_head, /no deploys on Friday/);
+  assert.ok("wrong_channel" in req.questions && "broadcast_unneeded" in req.questions);
+  await page.keyboard.press("Enter");
+  await page.waitForFunction(() => window.__sent === 1);
+  await page.close();
+});
+
+test("slack: @channel to a large channel is an L0 fact and a steered confirm stops Enter", async () => {
+  const { page, body } = await openSlack();
+  await body.click();
+  await page.keyboard.type("@channel deploying to prod now [[q:contradicts_thread=0.85]]");
+  await page.waitForTimeout(700);
+  const req = await lastRequest();
+  assert.ok(req.state.l0_flags.includes("broadcast_to_large_channel"));
+  assert.deepEqual(req.state.message.broadcast_mentions, ["@channel"]);
+  await page.keyboard.press("Enter");
+  const card = page.getByTestId("interlock-card");
+  await card.waitFor();
+  assert.equal(await card.getAttribute("data-kind"), "confirm");
+  assert.match(await card.innerText(), /goes against something said just above \(85%\)/);
+  assert.equal(await page.evaluate(() => window.__sent), 0);
+  await card.getByRole("button", { name: "Go back" }).click();
+  await page.keyboard.press("Shift+Enter"); // newline, not a send
+  assert.equal(await page.evaluate(() => window.__sent), 0);
+  await page.close();
+});
+
 test("fail-open: when Jev is down the pill goes offline and the send still goes through", async () => {
   const { page, body, send, pill } = await openCompose();
   await fetch(`${mock.url}/__fail`, { method: "POST", body: "4" });

@@ -13,6 +13,7 @@ const entries = [
   { entryPoints: ["src/ext/content.ts"], outfile: `${out}/content.js`, format: "iife" },
   { entryPoints: ["src/ext/background.ts"], outfile: `${out}/background.js`, format: "esm" },
   { entryPoints: ["src/ext/options.ts"], outfile: `${out}/options.js`, format: "iife" },
+  { entryPoints: ["src/cli/main.ts"], outfile: `${out}/cli.js`, format: "esm", platform: "node", target: "node20", banner: { js: "#!/usr/bin/env node\nimport { createRequire } from 'node:module'; const require = createRequire(import.meta.url);" } },
 ];
 
 cpSync("extension/options.html", `${out}/options.html`);

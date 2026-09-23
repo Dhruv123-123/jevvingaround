@@ -18,6 +18,12 @@ export const EMAIL_BANK: QuestionDef[] = [
     thresholds: { nudge: 0.4, confirm: 0.7 },
     reason: "One recipient looks out of place ({p}%)",
     weight: 1.0,
+    reasonFor: (a, answers) => {
+      const pick = answers["most_suspicious_recipient"];
+      if (a.type === "noul" && pick?.type === "choice" && pick.choice !== "none" && pick.confidence >= 0.5)
+        return `${pick.choice} looks out of place (${Math.round(a.noul * 100)}%)`;
+      return undefined;
+    },
   },
   {
     id: "missing_recipient",

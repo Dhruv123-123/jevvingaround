@@ -1,4 +1,4 @@
-import type { AuditRecord, EvalResult, SenderHistory, Settings, WireQuestion } from "../core/types.js";
+import type { AuditRecord, EvalResult, SenderHistory, Settings, Surface, WireQuestion } from "../core/types.js";
 
 export type Req =
   | { type: "settings.get" }
@@ -6,8 +6,8 @@ export type Req =
   | { type: "evaluate"; state: unknown; questions: Record<string, WireQuestion> }
   | { type: "history.get" }
   | { type: "history.touch"; addrs: string[] }
-  | { type: "budget.get" }
-  | { type: "budget.spend" }
+  | { type: "budget.get"; surface: Surface }
+  | { type: "budget.spend"; surface: Surface }
   | { type: "log.append"; record: AuditRecord }
   | { type: "log.list" }
   | { type: "log.clear" }

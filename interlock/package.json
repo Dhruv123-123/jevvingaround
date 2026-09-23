@@ -4,6 +4,7 @@
   "private": true,
   "description": "Sub-perceptual pre-send interlock for Gmail, powered by TypeSafe Jev",
   "type": "module",
+  "bin": { "interlock": "dist/cli.js" },
   "scripts": {
     "build": "node scripts/build.mjs",
     "build:test": "node scripts/build.mjs --test",

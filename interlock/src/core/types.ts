@@ -17,7 +17,11 @@ export interface QuestionDef {
   weight?: number;
   /** Questions an org adds are marked so the UI can show provenance. */
   origin?: "builtin" | "org" | "user";
+  /** Optional richer reason using sibling answers (e.g. name the recipient a choice question picked). */
+  reasonFor?: (a: Answer, answers: Record<string, Answer>) => string | undefined;
 }
+
+export type Surface = "email" | "slack" | "agent" | "shell" | "git" | "payment";
 
 export interface WireQuestion {
   type: QuestionType;
@@ -134,9 +138,9 @@ export interface Verdict {
   notes: string[];
 }
 
-export interface Evaluation {
+export interface Evaluation<S = unknown> {
   hash: string;
-  state: EmailState;
+  state: S;
   answers: Record<string, Answer>;
   verdict: Verdict;
   latencyMs: number;
@@ -144,11 +148,13 @@ export interface Evaluation {
   at: number;
 }
 
-export type UserAction = "sent" | "sent_after_hold" | "sent_now_from_hold" | "overrode_confirm" | "overrode_block" | "cancelled" | "edited";
+export type UserAction =
+  | "sent" | "sent_after_hold" | "sent_now_from_hold" | "overrode_confirm" | "overrode_block" | "cancelled" | "edited"
+  | "allowed" | "held" | "confirmed" | "blocked" | "overridden";
 
 export interface AuditRecord {
   at: number;
-  surface: "email";
+  surface: Surface;
   hash: string;
   level: VerdictLevel;
   regret: number;
@@ -158,6 +164,8 @@ export interface AuditRecord {
   latencyMs: number;
   inputTokens: number;
   cacheHit: boolean;
+  /** free-text override justification, when the surface collects one */
+  note?: string;
 }
 
 export interface Settings {

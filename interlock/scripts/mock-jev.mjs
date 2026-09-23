@@ -34,10 +34,13 @@ function json(res, v) { res.writeHead(200, { "content-type": "application/json" 
 function answer({ model, state, questions }) {
   const text = JSON.stringify(state);
   const has = (m) => text.includes(m);
+  // Generic steering: any "[[q:<id>=<p>]]" marker anywhere in the state sets that noul.
+  const steer = {};
+  for (const m of text.matchAll(/\[\[q:([a-z0-9_]+)=([0-9.]+)\]\]/g)) steer[m[1]] = Number(m[2]);
   const answers = {};
   for (const [id, q] of Object.entries(questions)) {
     if (q.type === "noul") {
-      let p = 0.04;
+      let p = steer[id] ?? 0.04;
       if (id === "external_leak" && has("[[confirm]]")) p = 0.8;
       if (id === "hostile_tone" && has("[[hold]]")) p = 0.7;
       if (id === "wrong_recipient" && has("[[wrong]]")) p = 0.9;
