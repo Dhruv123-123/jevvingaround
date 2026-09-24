@@ -17,6 +17,9 @@ class ComposeInterlock<S> {
   private spec: Speculator<S, Evaluation<S>>;
   private counters: ComposeCounters = { openedAt: Date.now(), keystrokes: 0, deletions: 0 };
   private previous: Verdict | undefined;
+  private packName = "";
+  private sensorName = "";
+  private budgetUsed = 0;
   private bypassNext = false;
   private disposed = false;
   private onInput = (e: Event) => {
@@ -49,10 +52,13 @@ class ComposeInterlock<S> {
 
   private async evaluate(state: S, hash: string): Promise<Evaluation<S>> {
     this.ui.setPending(true);
-    const bank = this.a.bank(state, this.settings);
-    const res = await send<EvalResult>({ type: "evaluate", state, questions: toWire(bank) });
+    const pack = this.a.pack(state, this.settings);
+    this.packName = `${pack.name}@${pack.version}`;
+    const res = await send<EvalResult>({ type: "evaluate", state, questions: toWire(pack.questions) });
+    this.sensorName = `jev:${res.model}`;
     const budget = await send<BudgetData>({ type: "budget.get", surface: this.a.surface });
-    const verdict = decide(bank, res.answers, state, { interruptsUsed: budget.used, interruptBudget: this.settings.interruptBudgetPerDay, previous: this.previous, l0Flags: this.a.l0(state) });
+    this.budgetUsed = budget.used;
+    const verdict = decide(pack.questions, res.answers, state, { interruptsUsed: budget.used, interruptBudget: this.settings.interruptBudgetPerDay, previous: this.previous, l0Flags: this.a.l0(state), l0Rules: pack.l0 });
     this.previous = verdict;
     return { hash, state, answers: res.answers, verdict, latencyMs: res.latencyMs, inputTokens: res.inputTokens, at: Date.now() };
   }
@@ -69,14 +75,14 @@ class ComposeInterlock<S> {
 
   private async gate(): Promise<void> {
     const s = this.state();
-    if (!s) return this.release("sent", null, false);
+    if (!s) return this.release("allowed", null, false);
     let ev: Evaluation<S>, cacheHit: boolean;
     try {
       this.ui.setPending(true);
       ({ result: ev, cacheHit } = await this.spec.verdictFor(s));
     } catch (e) {
       this.onError(e);
-      if (this.settings.failMode === "open") return this.release("sent", null, false);
+      if (this.settings.failMode === "open") return this.release("allowed", null, false);
       this.ui.showConfirm("block", [{ id: "offline", p: 1, text: "Interlock can't reach Jev and is set to fail closed.", level: "block" }], {
         onSend: () => this.release("overrode_block", null, false),
         onCancel: () => {},
@@ -88,7 +94,7 @@ class ComposeInterlock<S> {
     switch (v.level) {
       case "proceed":
       case "nudge":
-        return this.release("sent", ev, cacheHit);
+        return this.release("allowed", ev, cacheHit);
       case "hold":
         return this.ui.showHold(this.settings.holdSeconds, v.reasons, {
           onSendNow: () => this.release("sent_now_from_hold", ev, cacheHit),
@@ -120,13 +126,16 @@ class ComposeInterlock<S> {
     btn.click();
   }
 
-  private log(action: UserAction, ev: Evaluation<S>, cacheHit: boolean, note?: string): void {
+  private log(outcome: UserAction, ev: Evaluation<S>, cacheHit: boolean, note?: string): void {
     const nouls: Record<string, number> = {};
     for (const [k, a] of Object.entries(ev.answers)) if (a.type === "noul") nouls[k] = Math.round(a.noul * 1000) / 1000;
     const rec: AuditRecord = {
-      at: Date.now(), surface: this.a.surface, hash: ev.hash, level: ev.verdict.level, regret: ev.verdict.regret,
-      reasons: ev.verdict.reasons.map((r) => ({ id: r.id, p: Math.round(r.p * 1000) / 1000 })),
-      nouls, action, latencyMs: ev.latencyMs, inputTokens: ev.inputTokens, cacheHit,
+      v: 1, kind: "decision", at: new Date().toISOString(), surface: this.a.surface, pack: this.packName, sensor: this.sensorName, hash: ev.hash,
+      level: ev.verdict.level, regret: ev.verdict.regret, nouls,
+      fired: ev.verdict.reasons.filter((r) => !r.id.startsWith("l0:")).map((r) => r.id),
+      l0: ev.verdict.reasons.filter((r) => r.id.startsWith("l0:")).map((r) => r.id.slice(3)),
+      outcome, latency_ms: ev.latencyMs, input_tokens: ev.inputTokens, cost_usd: Math.round(ev.inputTokens * 0.042 / 1e6 * 1e8) / 1e8, cache_hit: cacheHit,
+      actor: "human", budget: { used: this.budgetUsed, cap: this.settings.interruptBudgetPerDay },
     };
     if (note) rec.note = note;
     void send({ type: "log.append", record: rec });

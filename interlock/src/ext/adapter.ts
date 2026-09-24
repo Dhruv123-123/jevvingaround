@@ -1,7 +1,8 @@
-import { effectiveBank } from "../core/bank.js";
 import { compileEmailState } from "../core/compile.js";
 import type { EmailState, QuestionDef, SenderHistory, Settings, Surface } from "../core/types.js";
-import { SLACK_BANK } from "../surfaces/slack/bank.js";
+import { PACKS } from "../generated/packs.js";
+import type { GatePack } from "../node/gate.js";
+import { applySettings } from "../pack/settings.js";
 import { compileSlackState, type SlackState } from "../surfaces/slack/compile.js";
 import { extractDraft, findBody, findComposeRoots, findSendButton, type ComposeCounters } from "./gmail.js";
 import { extractSlackDraft, findSlackBody, findSlackRoots, findSlackSend } from "./slack.js";
@@ -15,7 +16,8 @@ export interface SurfaceAdapter<S> {
   /** Keystroke that sends on this surface (Gmail: Ctrl/⌘+Enter; Slack: Enter). */
   isSendKey(e: KeyboardEvent): boolean;
   compile(root: HTMLElement, doc: Document, counters: ComposeCounters, history: SenderHistory, settings: Settings): S | null;
-  bank(state: S, settings: Settings): QuestionDef[];
+  /** the pack for this state: built-in pack + user settings + any per-state dynamic questions */
+  pack(state: S, settings: Settings): GatePack;
   l0(state: S): string[];
   /** addresses to remember as "sent to" after a successful send (email only) */
   recipients(state: S): string[];
@@ -32,10 +34,18 @@ export const gmailAdapter: SurfaceAdapter<EmailState> = {
     if (!raw.recipients.length && !raw.bodyText.trim()) return null;
     return compileEmailState(raw, history, { redaction: settings.redaction });
   },
-  bank: (state, settings) => effectiveBank(settings, state),
+  pack: (state, settings) => applySettings(PACKS["email"]!, settings, recipientChoice(state)),
   l0: (s) => s.l0_flags,
   recipients: (s) => s.recipients.map((r) => r.addr).filter((a) => !a.startsWith("<")),
 };
+
+/** `wrong_recipient__which`: a choice over the actual recipients, so the reason can name the suspect one. */
+function recipientChoice(state: EmailState): QuestionDef[] {
+  if (state.recipients.length < 2) return [];
+  const criteria: Record<string, string | null> = { none: "All recipients look right" };
+  for (const r of state.recipients.slice(0, 40)) criteria[r.addr] = null;
+  return [{ id: "wrong_recipient__which", type: "choice", instructions: "If any recipient looks like a mistake, which one?", criteria, weight: 0 }];
+}
 
 export const slackAdapter: SurfaceAdapter<SlackState> = {
   surface: "slack",
@@ -48,12 +58,7 @@ export const slackAdapter: SurfaceAdapter<SlackState> = {
     if (!raw.text.trim()) return null;
     return compileSlackState(raw, { redaction: settings.redaction });
   },
-  bank: (_state, settings) => {
-    const disabled = new Set(settings.disabledQuestions);
-    return [...SLACK_BANK, ...settings.extraQuestions.filter((q) => q.origin !== "builtin")]
-      .filter((q) => !disabled.has(q.id))
-      .map((q) => (settings.thresholdOverrides[q.id] ? { ...q, thresholds: { ...q.thresholds, ...settings.thresholdOverrides[q.id] } } : q));
-  },
+  pack: (_state, settings) => applySettings(PACKS["slack"]!, settings),
   l0: (s) => s.l0_flags,
   recipients: () => [],
 };

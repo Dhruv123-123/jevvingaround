@@ -26,12 +26,14 @@ export function toWire(defs: QuestionDef[]): Record<string, WireQuestion> {
 export class JevClient {
   private opts: Required<JevClientOptions>;
   constructor(opts: JevClientOptions) {
+    // undefined options must not clobber defaults: a `timeoutMs: undefined` makes the abort timer fire at 0 ms
+    const given = Object.fromEntries(Object.entries(opts).filter(([, v]) => v !== undefined)) as JevClientOptions;
     this.opts = {
       // wrapped, not referenced: calling fetch as a method of `opts` throws "Illegal invocation"
       fetchImpl: (input, init) => globalThis.fetch(input, init),
       retryDelayMs: 150,
       timeoutMs: 2500,
-      ...opts,
+      ...given,
     };
   }
 

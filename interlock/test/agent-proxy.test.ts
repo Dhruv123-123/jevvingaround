@@ -6,6 +6,9 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { startProxy, JUSTIFICATION_KEY } from "../src/surfaces/agent/proxy.js";
 import { compileAgentState } from "../src/surfaces/agent/compile.js";
 import { DEFAULT_SETTINGS, type Settings } from "../src/core/types.js";
+import { loadPack } from "../src/pack/loader.js";
+import { jevSensor } from "../src/sensors/jev.js";
+import { noneSensor } from "../src/sensors/none.js";
 // @ts-expect-error plain ESM helper
 import { startMock } from "../scripts/mock-jev.mjs";
 
@@ -18,7 +21,9 @@ beforeAll(async () => {
 });
 afterAll(() => mock.server.close());
 
-function harness(settings: Partial<Settings> = {}, opts: { allowOverride?: boolean; task?: string } = {}) {
+const AGENT = loadPack("packs/agent.pack.yaml");
+
+function harness(settings: Partial<Settings> = {}, opts: { allowOverride?: boolean; task?: string; sensor?: "jev" | "none" | "down" } = {}) {
   const stdin = new PassThrough();
   const stdout = new PassThrough();
   const stderr = new PassThrough();
@@ -39,9 +44,11 @@ function harness(settings: Partial<Settings> = {}, opts: { allowOverride?: boole
     }
   });
   const next = () => new Promise<any>((r) => (lines.length ? r(lines.shift()) : waiters.push(r)));
+  const s: Settings = { ...DEFAULT_SETTINGS, apiKey: "test-key", baseUrl: mock.url, ...settings };
+  const sensor = opts.sensor === "none" ? noneSensor : jevSensor({ apiKey: s.apiKey, baseUrl: opts.sensor === "down" ? "http://127.0.0.1:9" : s.baseUrl, model: s.model, timeoutMs: 500 });
   const proxy = startProxy({
     command: process.execPath, args: ["test/fixtures/fake-mcp-server.mjs"],
-    settings: { ...DEFAULT_SETTINGS, apiKey: "test-key", baseUrl: mock.url, ...settings },
+    settings: s, pack: AGENT, sensor,
     stdin, stdout, stderr, allowOverride: opts.allowOverride, task: opts.task ?? "Read the README and summarise it",
   });
   let id = 0;
@@ -103,16 +110,23 @@ describe("MCP proxy", () => {
     h.close();
   });
 
-  it("fails open with a degraded note when there is no key", async () => {
-    const h = harness({ apiKey: "" });
+  it("fails open with a degraded note when the sensor is unreachable", async () => {
+    const h = harness({}, { sensor: "down" });
     h.send("tools/call", { name: "read_file", arguments: { path: "a" } });
     expect((await h.next()).result.content[0].text).toMatch(/^ok:read_file/);
-    expect(h.errLines.join("")).toMatch(/degraded: .*no api key/);
+    expect(h.errLines.join("")).toMatch(/degraded: /);
+    h.close();
+  });
+
+  it("the none sensor lets everything through except L0", async () => {
+    const h = harness({}, { sensor: "none" });
+    h.send("tools/call", { name: "delete_repo", arguments: { name: "x", note: "[[q:escalates_permissions=0.95]]" } });
+    expect((await h.next()).result.isError).toBeUndefined();
     h.close();
   });
 
   it("fails closed when configured", async () => {
-    const h = harness({ apiKey: "", failMode: "closed" });
+    const h = harness({ failMode: "closed" }, { sensor: "down" });
     h.send("tools/call", { name: "read_file", arguments: { path: "a" } });
     const r = await h.next();
     expect(r.result.isError).toBe(true);
@@ -120,13 +134,17 @@ describe("MCP proxy", () => {
     h.close();
   });
 
-  it("writes an audit trail with the surface and noul vector", () => {
+  it("writes Audit Vector v1 lines with actor=agent, pack, sensor and the noul vector", () => {
     const log = readFileSync(join(home, "audit.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
     expect(log.length).toBeGreaterThanOrEqual(5);
-    expect(log.every((r) => r.surface === "agent")).toBe(true);
-    expect(log.some((r) => r.action === "overridden" && r.note?.startsWith("user asked"))).toBe(true);
-    expect(log.some((r) => r.action === "blocked")).toBe(true);
+    expect(log.every((r) => r.v === 1 && r.kind === "decision" && r.surface === "agent" && r.actor === "agent" && r.pack === "agent@1")).toBe(true);
+    expect(log.some((r) => r.outcome === "asked")).toBe(true);
+    expect(log.some((r) => r.outcome === "overridden" && r.note?.startsWith("user asked"))).toBe(true);
+    expect(log.some((r) => r.outcome === "blocked" && r.l0.includes("catastrophic_command_in_args"))).toBe(true);
+    expect(log.some((r) => r.sensor.startsWith("jev"))).toBe(true);
     expect(Object.keys(log[0].nouls)).toContain("irreversible");
+    expect(typeof log[0].cost_usd).toBe("number");
+    expect(log[0].budget).toHaveProperty("cap");
   });
 });
 

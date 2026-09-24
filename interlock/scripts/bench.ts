@@ -1,7 +1,7 @@
 // Measure real Jev latency for the email bank from wherever you run this.
 //   JEV_API_KEY=… npm run bench            (TypeSafe direct)
 //   JEV_API_KEY=… JEV_BASE_URL=https://openrouter.ai/api npm run bench
-import { EMAIL_BANK, dynamicQuestions } from "../src/core/bank.js";
+import { loadPack } from "../src/pack/loader.js";
 import { compileEmailState } from "../src/core/compile.js";
 import { JevClient, toWire } from "../src/core/jev.js";
 
@@ -20,7 +20,7 @@ const state = compileEmailState(
   },
   { sentTo: { "cfo@ourco.com": 5 }, recentSends: [] },
 );
-const questions = toWire([...EMAIL_BANK, ...dynamicQuestions(state)]);
+const questions = toWire(loadPack("packs/email.pack.yaml").questions);
 const n = Number(process.env.N ?? 20);
 const lat: number[] = [];
 let tokens = 0;

@@ -1,0 +1,102 @@
+pack: git-push
+version: 1
+surface: git
+description: Gate for git push, run from the pre-push hook.
+
+l0:
+  - { flag: secret_in_diff, level: confirm }
+  - { flag: force_push_to_protected, level: confirm }
+  - { flag: deleting_protected_branch, level: block }
+
+questions:
+  - id: destructive_migration
+    type: noul
+    instructions: The push contains a schema migration that drops or truncates data, or renames/removes a column in a way that loses data on deploy.
+    criteria:
+      true: Migration files with DROP/TRUNCATE/remove_column style operations on tables that plausibly hold data.
+      false: No migrations, or only additive ones (add column, create table, add index).
+    thresholds: { nudge: 0.5, confirm: 0.75, block: 0.95 }
+    reason: "A migration here destroys data ({p}%)"
+    weight: 1.5
+  - id: disables_tests_or_checks
+    type: noul
+    instructions: The push skips, disables, or deletes tests, or weakens CI checks, without an explanation in the commit messages.
+    criteria:
+      true: Added .skip/.only/@skip lines, deleted test files, or loosened CI config, and no commit says why.
+      false: Tests and checks are untouched, strengthened, or the skip is explained.
+    thresholds: { nudge: 0.5, confirm: 0.8 }
+    reason: "This disables tests or checks ({p}%)"
+    weight: 1.2
+  - id: commit_message_contradicts_diff
+    type: noul
+    instructions: The commit subjects describe something materially different from what the files and hunks show.
+    criteria:
+      true: Subjects say one thing (e.g. 'fix typo') while the diff touches infra, migrations, auth, or many unrelated files.
+      false: Subjects reasonably describe the diff.
+    thresholds: { nudge: 0.5, confirm: 0.8 }
+    reason: "The commit messages don't match the diff ({p}%)"
+    weight: 1.0
+  - id: unrelated_changes_bundled
+    type: noul
+    instructions: The push mixes unrelated changes that should be separate (feature + infra + formatting + dependency bumps).
+    criteria:
+      true: Files span several unrelated areas and the commits don't separate them.
+      false: Changes are cohesive or clearly separated by commit.
+    thresholds: { nudge: 0.6, hold: 0.85 }
+    reason: "Unrelated changes are bundled ({p}%)"
+    weight: 0.5
+  - id: infra_change_unmentioned
+    type: noul
+    instructions: Infrastructure, CI, deployment, or configuration files change, and no commit message mentions it.
+    criteria:
+      true: CI/infra/config files are in the diff and the subjects are silent about them.
+      false: No such files, or the subjects mention the change.
+    thresholds: { nudge: 0.5, confirm: 0.8 }
+    reason: "Infra or CI changed without being mentioned ({p}%)"
+    weight: 1.0
+  - id: not_ready_to_share
+    type: noul
+    instructions: "The push looks unfinished: WIP subjects, leftover debug output, TODO/FIXME in new code, or a branch being pushed to a protected name."
+    criteria:
+      true: WIP-style subjects, debugger/console.log/print additions, or obvious placeholders.
+      false: Commits read as complete.
+    thresholds: { nudge: 0.6, hold: 0.8 }
+    reason: "This looks unfinished ({p}%)"
+    weight: 0.6
+  - id: off_hours_to_protected
+    type: noul
+    instructions: A push to a protected or deployed branch late in the day or week, when a problem would be hard to catch quickly.
+    criteria:
+      true: Protected branch, and the local time is a late evening or Friday afternoon or weekend.
+      false: Not protected, or normal working hours.
+    thresholds: { nudge: 0.6, hold: 0.8 }
+    reason: "Off-hours push to a protected branch ({p}%)"
+    weight: 0.5
+  - id: blast_radius
+    type: score
+    instructions: If this push is a mistake, how bad is it?
+    criteria: ["nothing: a personal branch", "small: a feature branch others may pull", "medium: a shared branch, easily reverted", "large: a deployed branch or a data change", "severe: irreversible data loss or a security regression"]
+
+tests:
+  - name: docs-only change on a feature branch
+    state: { action: git.push, remote: origin, branch: feature/readme, protected_branch: false, is_force: false, is_delete: false, is_new_branch: false, commits: ["docs: clarify install steps"], commit_count: 1, files: ["M README.md"], files_changed: 1, insertions: 4, deletions: 1, facts: { migration_files: [], destructive_migration_ops: [], tests_disabled_lines: [], test_files_deleted: [], ci_config_changed: [], infra_files_changed: [], lockfile_changed_without_manifest: false, large_files_added: [], subjects_look_like_wip: false }, key_hunks: [], local_time: "Tue 11h", l0_flags: [] }
+    expect: { level: proceed, not_fires: [destructive_migration, disables_tests_or_checks] }
+    requires_sensor: true
+  - name: secret in diff is a confirm by rule
+    state: { action: git.push, remote: origin, branch: feature/x, protected_branch: false, is_force: false, is_delete: false, is_new_branch: false, commits: ["add config"], commit_count: 1, files: ["A config.js"], files_changed: 1, insertions: 2, deletions: 0, facts: { migration_files: [], destructive_migration_ops: [], tests_disabled_lines: [], test_files_deleted: [], ci_config_changed: [], infra_files_changed: [], lockfile_changed_without_manifest: false, large_files_added: [], subjects_look_like_wip: false }, key_hunks: ["+const key = '<SECRET>';"], local_time: "Tue 11h", l0_flags: [secret_in_diff] }
+    expect: { level: [confirm, block] }
+  - name: deleting main is blocked by rule
+    state: { action: git.push, remote: origin, branch: main, protected_branch: true, is_force: false, is_delete: true, is_new_branch: false, commits: [], commit_count: 0, files: [], files_changed: 0, insertions: 0, deletions: 0, facts: { migration_files: [], destructive_migration_ops: [], tests_disabled_lines: [], test_files_deleted: [], ci_config_changed: [], infra_files_changed: [], lockfile_changed_without_manifest: false, large_files_added: [], subjects_look_like_wip: false }, key_hunks: [], local_time: "Tue 11h", l0_flags: [deleting_protected_branch] }
+    expect: { level: block }
+  - name: "'fix typo' that drops a column and skips a test, to main, Friday night"
+    state: { action: git.push, remote: origin, branch: main, protected_branch: true, is_force: false, is_delete: false, is_new_branch: false, commits: ["fix typo"], commit_count: 1, files: ["M migrations/0042_users.sql", "M test/users.test.js", "M src/users.js"], files_changed: 3, insertions: 9, deletions: 30, facts: { migration_files: ["migrations/0042_users.sql"], destructive_migration_ops: ["+ALTER TABLE users DROP COLUMN email;"], tests_disabled_lines: ["+it.skip('rejects duplicate email', ..."], test_files_deleted: [], ci_config_changed: [], infra_files_changed: [], lockfile_changed_without_manifest: false, large_files_added: [], subjects_look_like_wip: false }, key_hunks: ["+ALTER TABLE users DROP COLUMN email;", "+it.skip('rejects duplicate email', ..."], local_time: "Fri 19h", l0_flags: [] }
+    expect: { level: [confirm, block], fires: [destructive_migration, commit_message_contradicts_diff, disables_tests_or_checks] }
+    requires_sensor: true
+  - name: WIP commits to a personal branch
+    state: { action: git.push, remote: origin, branch: dhruv/scratch, protected_branch: false, is_force: false, is_delete: false, is_new_branch: true, commits: ["wip", "asdf", "wip 2"], commit_count: 3, files: ["M src/a.ts"], files_changed: 1, insertions: 40, deletions: 2, facts: { migration_files: [], destructive_migration_ops: [], tests_disabled_lines: [], test_files_deleted: [], ci_config_changed: [], infra_files_changed: [], lockfile_changed_without_manifest: false, large_files_added: [], subjects_look_like_wip: true }, key_hunks: ["+console.log('debug', x);"], local_time: "Tue 11h", l0_flags: [] }
+    expect: { level: [proceed, nudge, hold], not_fires: [destructive_migration] }
+    requires_sensor: true
+  - name: CI workflow rewritten under a 'bump deps' subject
+    state: { action: git.push, remote: origin, branch: main, protected_branch: true, is_force: false, is_delete: false, is_new_branch: false, commits: ["bump deps"], commit_count: 1, files: ["M .github/workflows/ci.yml", "M package-lock.json"], files_changed: 2, insertions: 60, deletions: 45, facts: { migration_files: [], destructive_migration_ops: [], tests_disabled_lines: [], test_files_deleted: [], ci_config_changed: [".github/workflows/ci.yml"], infra_files_changed: [], lockfile_changed_without_manifest: true, large_files_added: [], subjects_look_like_wip: false }, key_hunks: ["-    - run: npm test", "+    - run: echo skipping tests"], local_time: "Wed 15h", l0_flags: [] }
+    expect: { level: [confirm, block], fires: [infra_change_unmentioned, disables_tests_or_checks] }
+    requires_sensor: true

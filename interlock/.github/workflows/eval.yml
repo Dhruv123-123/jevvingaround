@@ -1,0 +1,20 @@
+name: packs
+on: [push, pull_request]
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: npm ci
+        working-directory: interlock
+      - run: npm run typecheck && npm test && npm run build
+        working-directory: interlock
+      # L0 and proceed cases run without a key; model-dependent cases only when the secret is present
+      - run: node dist/cli.js eval agent shell git-push email slack payment --sensor none
+        working-directory: interlock
+      - if: ${{ secrets.JEV_API_KEY != '' }}
+        run: node dist/cli.js eval agent shell git-push email slack payment --sensor jev
+        working-directory: interlock
+        env: { JEV_API_KEY: "${{ secrets.JEV_API_KEY }}" }

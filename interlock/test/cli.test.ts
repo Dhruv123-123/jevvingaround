@@ -5,6 +5,8 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createPaymentServer } from "../src/surfaces/payment/server.js";
 import { DEFAULT_SETTINGS } from "../src/core/types.js";
+import { loadPack } from "../src/pack/loader.js";
+import { jevSensor } from "../src/sensors/jev.js";
 // @ts-expect-error plain ESM helper
 import { startMock } from "../scripts/mock-jev.mjs";
 
@@ -15,7 +17,9 @@ const CLI = join(process.cwd(), "dist", "cli.js");
 beforeAll(async () => {
   mock = await startMock();
   home = mkdtempSync(join(tmpdir(), "interlock-cli-"));
-  if (!existsSync(CLI)) spawnSync("node", ["scripts/build.mjs"], { stdio: "ignore" });
+  // always rebuild: these tests exercise the bundled CLI, and a stale dist/ is the classic false pass
+  spawnSync("node", ["scripts/build.mjs"], { stdio: "ignore" });
+  if (!existsSync(CLI)) throw new Error("build failed");
 });
 afterAll(() => mock.server.close());
 
@@ -61,10 +65,10 @@ describe("interlock shell (CLI)", () => {
   it("logs everything to the audit file", async () => {
     await run(["shell", "--", "terraform apply # [[q:irreversible=0.9]]"]);
     const log = readFileSync(join(home, "audit.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
-    expect(log.some((r) => r.surface === "shell" && r.level === "block")).toBe(true);
-    expect(log.some((r) => r.surface === "shell" && r.level === "confirm" && r.action === "cancelled")).toBe(true);
+    expect(log.some((r) => r.surface === "shell" && r.level === "block" && r.actor === "human")).toBe(true);
+    expect(log.some((r) => r.surface === "shell" && r.level === "confirm" && r.outcome === "cancelled")).toBe(true);
     const out = await run(["log", "--surface", "shell"]);
-    expect(out.stdout).toMatch(/shell\s+block/);
+    expect(out.stdout).toMatch(/shell\s+human\s+block/);
   });
   it("shell-init emits the zsh widget and bash trap", async () => {
     expect((await run(["shell-init", "zsh"])).stdout).toMatch(/zle -N accept-line interlock-accept-line/);
@@ -72,10 +76,39 @@ describe("interlock shell (CLI)", () => {
   });
 });
 
+describe("interlock eval / packs / recall (CLI)", () => {
+  it("lists packs and runs every pack's L0 cases under the none sensor", async () => {
+    const ls = await run(["packs"]);
+    expect(ls.stdout).toMatch(/agent\s+v1\s+agent/);
+    expect(ls.stdout).toMatch(/git-push/);
+    const r = await run(["eval", "agent", "shell", "git-push", "email", "slack", "payment", "--sensor", "none"]);
+    expect(r.status).toBe(0);
+    expect(r.stderr).toMatch(/agent@1\s+sensor=none\s+\d+ passed/);
+    expect(r.stderr).toMatch(/skipped \(need a sensor\)/);
+  });
+  it("runs the model-dependent cases against the steerable mock and reports calibration", async () => {
+    const r = await run(["eval", "agent", "--sensor", "jev", "--json"]);
+    const [rep] = JSON.parse(r.stdout);
+    expect(rep.skipped).toBe(0);
+    expect(rep.cases.length).toBe(6);
+    // the mock answers 0.04 to everything unless steered, so model-dependent 'fires' cases fail: that is the point of eval
+    expect(rep.failed).toBeGreaterThan(0);
+    expect(rep.cases.find((c: any) => c.name.startsWith("rm -rf")).pass).toBe(true);
+    expect(rep.calibration.some((row: any) => row.id === "irreversible")).toBe(true);
+    expect(rep.latency.p95).toBeGreaterThanOrEqual(0);
+  });
+  it("recall runs without a git repo or history and says so", async () => {
+    const r = await run(["recall", "--since", "7d"]);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toMatch(/regret events in the last 7d/);
+  });
+});
+
 describe("payment gate server", () => {
   it("returns a verdict, fails closed when Jev is down, and records decisions", async () => {
     process.env.INTERLOCK_HOME = home;
-    const srv = createPaymentServer({ ...DEFAULT_SETTINGS, apiKey: "test-key", baseUrl: mock.url });
+    const PAY = loadPack("packs/payment.pack.yaml");
+    const srv = createPaymentServer({ ...DEFAULT_SETTINGS, apiKey: "test-key", baseUrl: mock.url }, PAY, jevSensor({ apiKey: "test-key", baseUrl: mock.url, model: "jev-latest" }));
     await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r));
     const port = (srv.address() as { port: number }).port;
     const post = (path: string, body: unknown) => fetch(`http://127.0.0.1:${port}${path}`, { method: "POST", body: JSON.stringify(body) }).then((r) => r.json() as Promise<any>);
@@ -88,7 +121,7 @@ describe("payment gate server", () => {
     const dec = await post("/gate/payment/p2/decision", { action: "cancelled", note: "called vendor, confirmed fraud" });
     expect(dec.ok).toBe(true);
     srv.close();
-    const down = createPaymentServer({ ...DEFAULT_SETTINGS, apiKey: "test-key", baseUrl: "http://127.0.0.1:9" });
+    const down = createPaymentServer({ ...DEFAULT_SETTINGS, apiKey: "test-key", baseUrl: "http://127.0.0.1:9" }, PAY, jevSensor({ apiKey: "test-key", baseUrl: "http://127.0.0.1:9", model: "jev-latest", timeoutMs: 500 }));
     await new Promise<void>((r) => down.listen(0, "127.0.0.1", r));
     const p2 = (down.address() as { port: number }).port;
     const r = await fetch(`http://127.0.0.1:${p2}/gate/payment`, { method: "POST", body: JSON.stringify({ amount: 10, currency: "USD", payee: { name: "x" }, requester: { id: "a" } }) }).then((r) => r.json() as Promise<any>);
@@ -96,6 +129,6 @@ describe("payment gate server", () => {
     expect(r.degraded).toBe(true);
     down.close();
     const log = readFileSync(join(home, "audit.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
-    expect(log.some((x) => x.surface === "payment" && x.action === "cancelled" && x.note?.includes("confirmed fraud"))).toBe(true);
+    expect(log.some((x) => x.surface === "payment" && x.outcome === "cancelled" && x.note?.includes("confirmed fraud"))).toBe(true);
   });
 });

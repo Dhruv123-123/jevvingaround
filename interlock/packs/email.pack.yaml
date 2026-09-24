@@ -1,0 +1,142 @@
+pack: email
+version: 1
+surface: email
+description: Pre-send gate for email drafts. Nouls are the sensor; thresholds are the policy.
+
+l0:
+  - { flag: secret_pattern_in_body, level: block }
+
+questions:
+  - id: wrong_recipient
+    type: noul
+    instructions: "A recipient appears to be included by mistake: an autocomplete slip, a lookalike address, or a person with no role in this conversation."
+    criteria:
+      true: At least one recipient has no apparent reason to receive this message given the thread, subject and body.
+      false: Every recipient plausibly belongs given the thread, subject and body.
+    thresholds: { nudge: 0.4, confirm: 0.7 }
+    reason: "One recipient looks out of place ({p}%)"
+    weight: 1.0
+  - id: missing_recipient
+    type: noul
+    instructions: Someone who was part of the thread, or who the body clearly addresses or depends on, is not a recipient.
+    criteria:
+      true: A thread participant or a person the body names as needing this is absent from the recipients and the omission looks accidental.
+      false: The recipient set looks intentional; dropped participants, if any, are clearly deliberate.
+    thresholds: { nudge: 0.5, confirm: 0.8 }
+    reason: "Someone from the thread was dropped ({p}%)"
+    weight: 0.6
+  - id: external_leak
+    type: noul
+    instructions: Internal, confidential, or explicitly restricted content is being sent to a recipient outside the sender's organisation.
+    criteria:
+      true: The body, attachment names, or the thread mark content as internal/confidential/not-to-be-shared, and at least one recipient is external.
+      false: Nothing appears restricted, or all recipients are internal.
+    thresholds: { nudge: 0.4, confirm: 0.65, block: 0.92 }
+    reason: "Restricted content is going outside the org ({p}%)"
+    weight: 1.4
+  - id: reply_all_unneeded
+    type: noul
+    instructions: This reply-all should have been a reply to one or two people.
+    criteria:
+      true: The message is addressed to one person or is a brief acknowledgement, yet many thread participants are copied.
+      false: The content is relevant to everyone copied, or the message is not a reply-all.
+    thresholds: { nudge: 0.6, hold: 0.8 }
+    reason: "This looks like it should be a reply, not reply-all ({p}%)"
+    weight: 0.4
+  - id: secret_present
+    type: noul
+    instructions: "The message body or an attachment name contains or refers to a credential: password, API key, token, private key, or login details."
+    criteria:
+      true: A credential or something that reads as one appears in the body or attachment names.
+      false: No credentials present; mentions of security are generic.
+    thresholds: { confirm: 0.6, block: 0.9 }
+    reason: "Looks like a credential is in this email ({p}%)"
+    weight: 1.5
+  - id: missing_attachment
+    type: noul
+    instructions: The text refers to an attachment, but nothing is attached.
+    criteria:
+      true: The body says something is attached or enclosed and the attachment list is empty.
+      false: Either nothing is referenced as attached, or an attachment is present.
+    thresholds: { confirm: 0.7 }
+    reason: "You mention an attachment but nothing is attached ({p}%)"
+    weight: 0.9
+  - id: commits_to_terms
+    type: noul
+    instructions: The sender commits the organisation to a specific price, discount, date, or deliverable.
+    criteria:
+      true: The body states a concrete price, discount, delivery date or promise as agreed or offered.
+      false: No concrete commitment; discussion is exploratory or references existing terms.
+    thresholds: { nudge: 0.6, hold: 0.8 }
+    reason: "This commits you to terms ({p}%)"
+    weight: 0.7
+  - id: contradicts_thread
+    type: noul
+    instructions: The draft ignores or contradicts an explicit instruction or constraint stated earlier in the thread.
+    criteria:
+      true: An earlier message set a constraint (don't share X, wait for Y, use Z) and the draft violates it.
+      false: No earlier constraint, or the draft respects it.
+    thresholds: { nudge: 0.5, confirm: 0.75 }
+    reason: "This goes against something said earlier in the thread ({p}%)"
+    weight: 1.1
+  - id: unfinished_draft
+    type: noul
+    instructions: "The draft is not finished: placeholders, half sentences, missing greeting where one is expected, or a subject line that is empty or a leftover."
+    criteria:
+      true: Placeholders like TODO/TBD/[name], trailing incomplete sentences, or an empty/placeholder subject remain.
+      false: The draft reads as complete.
+    thresholds: { nudge: 0.5, confirm: 0.8 }
+    reason: "This looks unfinished ({p}%)"
+    weight: 0.8
+  - id: hostile_tone
+    type: noul
+    instructions: A reasonable recipient would read the message as angry, sarcastic, contemptuous, or passive-aggressive.
+    criteria:
+      true: Wording, punctuation, or framing would land as hostile to the recipient.
+      false: Neutral, warm, or firm-but-professional.
+    thresholds: { nudge: 0.45, hold: 0.65, confirm: 0.85 }
+    reason: "This may read as hostile ({p}%)"
+    weight: 0.9
+  - id: sender_rushed
+    type: noul
+    instructions: "Signals suggest the sender is hurried or emotional: a burst of sends, late on a Friday, heavy deletions, terse wording."
+    criteria:
+      true: The sender context and wording together indicate haste or agitation.
+      false: Pace and wording look normal.
+    thresholds: { nudge: 0.7 }
+    reason: "You seem to be in a hurry ({p}%)"
+    weight: 0.3
+  - id: will_be_forwarded
+    type: noul
+    instructions: The content is the kind that gets screenshotted or forwarded beyond its recipients.
+    criteria:
+      true: Gossip, criticism of named people, salary or HR matters, or blunt opinions about customers/partners.
+      false: Routine content with no forwarding appeal.
+    thresholds: { nudge: 0.6, hold: 0.8 }
+    reason: "This is the kind of email that gets forwarded ({p}%)"
+    weight: 0.5
+  - id: regret_risk
+    type: score
+    instructions: How likely is the sender to wish they had not sent this message, as written, to these recipients?
+    criteria: ["none: nothing to regret", "minor awkwardness: a small typo-level embarrassment", "needs a follow-up correction: they'd have to send a fix", "damages a relationship or deal", "legal, security, or HR incident"]
+
+tests:
+  - name: routine internal reply
+    state: { action: email.send, draft: { subject: "Re: standup", body_head: "Thanks, will do.", body_tail: "", body_chars: 16, attachments: [], mentions_attachment_in_text: false, has_placeholders: false, key_sentences: [] }, recipients: [{ addr: "cfo@ourco.com", kind: to, external: false, first_time_ever: false, domain_first_time: false, in_original_thread: true }], thread: { message_count: 1, participants_not_in_recipients: [], last_msg_from: "cfo@ourco.com", last_msg_head: "Can you send the standup notes?", is_reply_all: false, original_recipient_count: 2 }, sender_context: { sends_in_last_5_min: 0, local_time: "Tue 10h", draft_age: "<30s", deletions_ratio: 0, external_recipient_count: 0, recipient_count: 1 }, l0_flags: [] }
+    expect: { level: proceed, not_fires: [external_leak, wrong_recipient, hostile_tone] }
+    requires_sensor: true
+  - name: AWS key in the body is blocked by rule
+    state: { action: email.send, draft: { subject: "creds", body_head: "here: AKIA…", body_tail: "", body_chars: 30, attachments: [], mentions_attachment_in_text: false, has_placeholders: false, key_sentences: [] }, recipients: [{ addr: "dev@ourco.com", kind: to, external: false, first_time_ever: false, domain_first_time: false, in_original_thread: false }], thread: null, sender_context: { sends_in_last_5_min: 0, local_time: "Tue 10h", draft_age: "<30s", deletions_ratio: 0, external_recipient_count: 0, recipient_count: 1 }, l0_flags: [secret_pattern_in_body] }
+    expect: { level: block }
+  - name: pricing schedule to an external first-time recipient after legal said not to
+    state: { action: email.send, draft: { subject: "Re: Q3 pricing", body_head: "Hi Sam, attached is the discount schedule we discussed.", body_tail: "", body_chars: 55, attachments: ["Q3_pricing_FINAL_v3.xlsx"], mentions_attachment_in_text: true, has_placeholders: false, key_sentences: ["attached is the discount schedule we discussed."] }, recipients: [{ addr: "sam@acme.com", kind: to, external: true, first_time_ever: true, domain_first_time: false, in_original_thread: false }, { addr: "cfo@ourco.com", kind: cc, external: false, first_time_ever: false, domain_first_time: false, in_original_thread: true }], thread: { message_count: 1, participants_not_in_recipients: ["legal@ourco.com"], last_msg_from: "legal@ourco.com", last_msg_head: "Please don't share the discount schedule externally until we sign the MSA.", is_reply_all: true, original_recipient_count: 3 }, sender_context: { sends_in_last_5_min: 1, local_time: "Fri 17h", draft_age: "30s-2m", deletions_ratio: 0.1, external_recipient_count: 1, recipient_count: 2 }, l0_flags: [sensitive_attachment_name, external_recipient_present] }
+    expect: { level: [confirm, block], fires: [external_leak, contradicts_thread] }
+    requires_sensor: true
+  - name: says attached, nothing attached
+    state: { action: email.send, draft: { subject: "invoice", body_head: "Please find the invoice attached.", body_tail: "", body_chars: 33, attachments: [], mentions_attachment_in_text: true, has_placeholders: false, key_sentences: ["Please find the invoice attached."] }, recipients: [{ addr: "ap@client.com", kind: to, external: true, first_time_ever: false, domain_first_time: false, in_original_thread: false }], thread: null, sender_context: { sends_in_last_5_min: 0, local_time: "Tue 10h", draft_age: "<30s", deletions_ratio: 0, external_recipient_count: 1, recipient_count: 1 }, l0_flags: [external_recipient_present, mentions_attachment_none_attached] }
+    expect: { level: confirm, fires: [missing_attachment] }
+    requires_sensor: true
+  - name: lookalike recipient
+    state: { action: email.send, draft: { subject: "Re: contract", body_head: "Sam, the signed copy is attached.", body_tail: "", body_chars: 33, attachments: ["contract-signed.pdf"], mentions_attachment_in_text: true, has_placeholders: false, key_sentences: [] }, recipients: [{ addr: "sam@acme.com", kind: to, external: true, first_time_ever: true, domain_first_time: false, in_original_thread: false, looks_like_a_known_contact: "sam.b@acme.com" }], thread: { message_count: 2, participants_not_in_recipients: ["sam.b@acme.com"], last_msg_from: "sam.b@acme.com", last_msg_head: "Send it over when signed.", is_reply_all: false, original_recipient_count: 2 }, sender_context: { sends_in_last_5_min: 0, local_time: "Tue 10h", draft_age: "<30s", deletions_ratio: 0, external_recipient_count: 1, recipient_count: 1 }, l0_flags: [external_recipient_present, lookalike_recipient] }
+    expect: { level: [nudge, confirm], fires: [wrong_recipient] }
+    requires_sensor: true

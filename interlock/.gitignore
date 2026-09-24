@@ -4,3 +4,4 @@ dist-test/
 test-results/
 *.log
 .env
+src/generated/

@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { EMAIL_BANK, dynamicQuestions, effectiveBank } from "../src/core/bank.js";
+import { loadPack, withWhichConvention } from "../src/pack/loader.js";
+import { applySettings } from "../src/pack/settings.js";
 import { decide, levelFor } from "../src/core/policy.js";
 import type { Answer, EmailState, QuestionDef } from "../src/core/types.js";
+
+const EMAIL_PACK = loadPack("packs/email.pack.yaml");
+const EMAIL_BANK = EMAIL_PACK.questions;
+const whichQ = (): QuestionDef => ({ id: "wrong_recipient__which", type: "choice", instructions: "which?", criteria: { none: null, "a@x.com": null, "b@y.com": null }, weight: 0 });
 
 const state: EmailState = {
   action: "email.send",
@@ -75,13 +80,15 @@ describe("decide", () => {
     expect(v.regret).toBe(1);
   });
 
-  it("names the suspicious recipient when the model picked one confidently", () => {
-    const bank = [...EMAIL_BANK, ...dynamicQuestions(state)];
+  it("names the suspicious recipient via the __which convention when the model picked one confidently", () => {
+    const bank = withWhichConvention([...EMAIL_BANK, whichQ()]);
     const a = quiet();
     a["wrong_recipient"] = { type: "noul", noul: 0.82 };
-    a["most_suspicious_recipient"] = { type: "choice", choice: "a@x.com", probabilities: { "a@x.com": 0.8, "b@y.com": 0.1, none: 0.1 }, confidence: 0.8 };
+    a["wrong_recipient__which"] = { type: "choice", choice: "a@x.com", probabilities: { "a@x.com": 0.8, "b@y.com": 0.1, none: 0.1 }, confidence: 0.8 };
     const v = decide(bank, a, state, ctx);
     expect(v.reasons[0]!.text).toBe("a@x.com looks out of place (82%)");
+    a["wrong_recipient__which"] = { type: "choice", choice: "none", probabilities: { none: 0.9 }, confidence: 0.9 };
+    expect(decide(bank, a, state, ctx).reasons[0]!.text).toBe("One recipient looks out of place (82%)");
   });
 
   it("uses the model's regret score for the meter when present", () => {
@@ -101,15 +108,18 @@ describe("decide", () => {
   });
 });
 
-describe("effectiveBank", () => {
-  it("applies overrides, disables, and appends org questions", () => {
-    const bank = effectiveBank(
+describe("applySettings", () => {
+  it("applies overrides, disables, appends org questions and per-state dynamic ones", () => {
+    const pack = applySettings(
+      EMAIL_PACK,
       { thresholdOverrides: { hostile_tone: { confirm: 0.5 } }, disabledQuestions: ["sender_rushed"], extraQuestions: [{ id: "falcon", type: "noul", instructions: "x", criteria: { true: "t", false: "f" }, thresholds: { confirm: 0.6 } }] },
-      state,
+      [whichQ()],
     );
+    const bank = pack.questions;
     expect(bank.find((q) => q.id === "hostile_tone")!.thresholds).toEqual({ nudge: 0.45, hold: 0.65, confirm: 0.5 });
     expect(bank.some((q) => q.id === "sender_rushed")).toBe(false);
     expect(bank.some((q) => q.id === "falcon")).toBe(true);
-    expect(bank.find((q) => q.id === "most_suspicious_recipient")!.criteria).toHaveProperty("a@x.com");
+    expect(bank.find((q) => q.id === "wrong_recipient__which")!.criteria).toHaveProperty("a@x.com");
+    expect(pack.l0).toEqual({ secret_pattern_in_body: "block" });
   });
 });

@@ -1,4 +1,4 @@
-import { EMAIL_BANK } from "../core/bank.js";
+import { PACKS } from "../generated/packs.js";
 import { DEFAULT_SETTINGS, type AuditRecord, type QuestionDef, type Settings } from "../core/types.js";
 import { send } from "./messages.js";
 
@@ -10,7 +10,7 @@ let settings: Settings = DEFAULT_SETTINGS;
 function renderBank(): void {
   const tb = $("bank").querySelector("tbody")!;
   tb.innerHTML = "";
-  const all: QuestionDef[] = [...EMAIL_BANK.filter((q) => q.type === "noul"), ...settings.extraQuestions];
+  const all: QuestionDef[] = [...PACKS["email"]!.questions.filter((q) => q.type === "noul"), ...PACKS["slack"]!.questions.filter((q) => q.type === "noul" && !PACKS["email"]!.questions.some((e) => e.id === q.id)), ...settings.extraQuestions];
   for (const q of all) {
     const t = { ...q.thresholds, ...settings.thresholdOverrides[q.id] };
     const tr = document.createElement("tr");
@@ -26,7 +26,7 @@ function readBank(): void {
   const overrides: Settings["thresholdOverrides"] = {};
   for (const inp of document.querySelectorAll<HTMLInputElement>("input[data-q]")) {
     const id = inp.dataset.q!, l = inp.dataset.l as (typeof LEVELS)[number];
-    const base = EMAIL_BANK.find((q) => q.id === id)?.thresholds?.[l];
+    const base = (PACKS["email"]!.questions.find((q) => q.id === id) ?? PACKS["slack"]!.questions.find((q) => q.id === id))?.thresholds?.[l];
     const v = inp.value === "" ? undefined : Number(inp.value);
     if (v !== base) (overrides[id] ??= {})![l] = v;
   }
@@ -69,14 +69,14 @@ async function refreshLog(): Promise<void> {
   tb.innerHTML = "";
   for (const r of [...log].reverse().slice(0, 50)) {
     const tr = document.createElement("tr");
-    tr.innerHTML = `<td>${new Date(r.at).toLocaleString()}</td><td>${r.level}</td><td>${r.regret}</td><td>${r.action}</td>
-      <td>${r.reasons.map((x) => `${x.id} ${Math.round(x.p * 100)}%`).join(", ")}</td><td>${r.latencyMs}</td><td>${r.inputTokens}</td><td>${r.cacheHit ? "hit" : "miss"}</td>`;
+    tr.innerHTML = `<td>${new Date(r.at).toLocaleString()}</td><td>${r.level}</td><td>${r.regret}</td><td>${r.outcome}</td>
+      <td>${[...r.fired.map((id) => `${id} ${Math.round((r.nouls[id] ?? 0) * 100)}%`), ...r.l0.map((f) => `rule:${f}`)].join(", ")}</td><td>${r.latency_ms}</td><td>${r.input_tokens}</td><td>${r.cache_hit ? "hit" : "miss"}</td>`;
     tb.appendChild(tr);
   }
   const interrupts = log.filter((r) => r.level === "confirm" || r.level === "block");
-  const accepted = interrupts.filter((r) => r.action === "cancelled" || r.action === "edited").length;
-  const hits = log.filter((r) => r.cacheHit).length;
-  const lat = log.filter((r) => !r.cacheHit).map((r) => r.latencyMs).sort((a, b) => a - b);
+  const accepted = interrupts.filter((r) => r.outcome === "cancelled").length;
+  const hits = log.filter((r) => r.cache_hit).length;
+  const lat = log.filter((r) => !r.cache_hit).map((r) => r.latency_ms).sort((a, b) => a - b);
   const p = (q: number) => (lat.length ? lat[Math.min(lat.length - 1, Math.floor(q * lat.length))] : "–");
   $("stats").textContent = `${log.length} sends · ${interrupts.length} interrupts, ${accepted} acted on (${interrupts.length ? Math.round((100 * accepted) / interrupts.length) : 0}% precision proxy) · cache hit ${log.length ? Math.round((100 * hits) / log.length) : 0}% · miss latency p50 ${p(0.5)} p95 ${p(0.95)} ms`;
 }
@@ -115,7 +115,7 @@ async function main(): Promise<void> {
   $("addQ").addEventListener("click", () => {
     const id = $<HTMLInputElement>("qId").value.trim();
     if (!/^[a-z][a-z0-9_]{2,40}$/.test(id)) return alert("ID must be snake_case");
-    if ([...EMAIL_BANK, ...settings.extraQuestions].some((q) => q.id === id)) return alert("ID already exists");
+    if ([...PACKS["email"]!.questions, ...PACKS["slack"]!.questions, ...settings.extraQuestions].some((q) => q.id === id)) return alert("ID already exists");
     settings.extraQuestions.push({
       id, type: "noul", origin: "user",
       instructions: $<HTMLTextAreaElement>("qInstr").value.trim(),

@@ -1,5 +1,9 @@
 import { build, context } from "esbuild";
+import { execFileSync } from "node:child_process";
 import { cpSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
+
+// packs/*.pack.yaml → src/generated/packs.ts (the extension bundles them; the CLI reads YAML at runtime)
+execFileSync(process.execPath, ["--import", "tsx", "scripts/packs-to-json.ts"], { stdio: "inherit" });
 
 const test = process.argv.includes("--test");
 const watch = process.argv.includes("--watch");

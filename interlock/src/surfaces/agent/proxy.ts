@@ -11,9 +11,9 @@
  */
 import { spawn, type ChildProcess } from "node:child_process";
 import { createInterface } from "node:readline";
-import type { Settings, Verdict } from "../../core/types.js";
-import { record, runGate } from "../../node/gate.js";
-import { AGENT_BANK } from "./bank.js";
+import type { Settings, UserAction, Verdict } from "../../core/types.js";
+import { record, runGate, type GatePack } from "../../node/gate.js";
+import type { Sensor } from "../../sensors/types.js";
 import { compileAgentState, type RecentCall, type ToolSchema } from "./compile.js";
 
 interface Rpc { jsonrpc: "2.0"; id?: number | string; method?: string; params?: Record<string, unknown>; result?: unknown; error?: unknown }
@@ -24,7 +24,8 @@ export interface ProxyOptions {
   settings: Settings;
   task?: string;
   allowOverride?: boolean;
-  bank?: typeof AGENT_BANK;
+  pack: GatePack;
+  sensor: Sensor;
   stdin?: NodeJS.ReadableStream;
   stdout?: NodeJS.WritableStream;
   stderr?: NodeJS.WritableStream;
@@ -36,7 +37,6 @@ export function startProxy(opts: ProxyOptions): { child: ChildProcess; close(): 
   const stdin = opts.stdin ?? process.stdin;
   const stdout = opts.stdout ?? process.stdout;
   const stderr = opts.stderr ?? process.stderr;
-  const bank = opts.bank ?? AGENT_BANK;
   const child = spawn(opts.command, opts.args, { stdio: ["pipe", "pipe", "inherit"] });
   const tools = new Map<string, ToolSchema>();
   const recent: RecentCall[] = [];
@@ -66,16 +66,18 @@ export function startProxy(opts: ProxyOptions): { child: ChildProcess; close(): 
     const justification = typeof args[JUSTIFICATION_KEY] === "string" ? (args[JUSTIFICATION_KEY] as string) : undefined;
     delete args[JUSTIFICATION_KEY];
     const state = compileAgentState({ tool: params.name, args, schema: tools.get(params.name), task: opts.task, recent, server: serverName, client: clientName });
-    const { evaluation: ev, degraded } = await runGate({ surface: "agent", state, bank, l0Flags: state.l0_flags, settings: opts.settings, previous });
+    const g = await runGate({ surface: "agent", state, pack: opts.pack, sensor: opts.sensor, l0Flags: state.l0_flags, settings: opts.settings, previous });
+    const { evaluation: ev, degraded } = g;
     previous = ev.verdict;
     const v = ev.verdict;
-    const forward = (action: Parameters<typeof record>[2], note?: string) => {
-      record("agent", ev, action, note);
+    const meta = { pack: g.pack, sensor: g.sensor, actor: "agent" as const, costUsd: g.costUsd, cap: opts.settings.interruptBudgetPerDay };
+    const forward = (action: UserAction, note?: string) => {
+      record("agent", ev, action, meta, note);
       pendingCalls.set(msg.id!, { tool: params.name, argsHead: JSON.stringify(args).slice(0, 80) });
       toChild({ ...msg, params: { ...params, arguments: args } });
     };
     const refuse = (kind: "confirm" | "block") => {
-      record("agent", ev, kind === "confirm" ? "confirmed" : "blocked");
+      record("agent", ev, kind === "confirm" ? "asked" : "blocked", meta);
       const lines = v.reasons.slice(0, 4).map((r) => `- ${r.text}`).join("\n");
       const text = kind === "confirm"
         ? `INTERLOCK: this call needs confirmation before it runs.\n${lines}\nIf it is genuinely required for the task, call ${params.name} again with the same arguments plus "${JUSTIFICATION_KEY}": "<one sentence on why>". Otherwise choose a different step.`

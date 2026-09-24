@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/dhruv123-123/jevvingaround/interlock/schema/audit.schema.json",
+  "title": "Interlock Audit Vector v1 (one JSON line per record)",
+  "oneOf": [
+    {
+      "type": "object",
+      "required": ["v", "kind", "at", "surface", "pack", "sensor", "hash", "level", "regret", "nouls", "fired", "l0", "outcome", "latency_ms", "input_tokens", "cost_usd", "cache_hit", "actor", "budget"],
+      "additionalProperties": false,
+      "properties": {
+        "v": { "const": 1 },
+        "kind": { "const": "decision" },
+        "at": { "type": "string", "format": "date-time" },
+        "surface": { "type": "string" },
+        "pack": { "type": "string", "description": "name@version" },
+        "sensor": { "type": "string" },
+        "hash": { "type": "string", "description": "stable hash of the compiled state; never the state" },
+        "level": { "enum": ["proceed", "nudge", "hold", "confirm", "block"] },
+        "regret": { "type": "number", "minimum": 0, "maximum": 1 },
+        "nouls": { "type": "object", "additionalProperties": { "type": "number", "minimum": 0, "maximum": 1 } },
+        "fired": { "type": "array", "items": { "type": "string" } },
+        "l0": { "type": "array", "items": { "type": "string" } },
+        "outcome": { "enum": ["allowed", "held", "sent_after_hold", "sent_now_from_hold", "overrode_confirm", "overrode_block", "overridden", "cancelled", "blocked", "asked"] },
+        "note": { "type": "string", "description": "the only field that may carry content: an override justification" },
+        "latency_ms": { "type": "integer", "minimum": 0 },
+        "input_tokens": { "type": "integer", "minimum": 0 },
+        "cost_usd": { "type": "number", "minimum": 0 },
+        "cache_hit": { "type": "boolean" },
+        "actor": { "enum": ["human", "agent"] },
+        "budget": { "type": "object", "required": ["used", "cap"], "properties": { "used": { "type": "integer" }, "cap": { "type": "integer" } } }
+      }
+    },
+    {
+      "type": "object",
+      "required": ["v", "kind", "at", "surface", "detector"],
+      "additionalProperties": false,
+      "properties": {
+        "v": { "const": 1 },
+        "kind": { "const": "regret" },
+        "at": { "type": "string", "format": "date-time" },
+        "surface": { "type": "string" },
+        "detector": { "type": "string" },
+        "hash": { "type": "string" },
+        "ref": { "type": "string" },
+        "detail": { "type": "string" }
+      }
+    }
+  ]
+}

@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/dhruv123-123/jevvingaround/interlock/schema/pack.schema.json",
+  "title": "Interlock Question Pack",
+  "type": "object",
+  "required": ["pack", "version", "surface", "questions"],
+  "additionalProperties": false,
+  "properties": {
+    "pack": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{0,60}$" },
+    "version": { "type": "integer", "minimum": 1 },
+    "surface": { "type": "string" },
+    "description": { "type": "string" },
+    "extends": { "type": "array", "items": { "type": "string" } },
+    "l0": {
+      "type": "array",
+      "items": { "type": "object", "required": ["flag", "level"], "additionalProperties": false,
+        "properties": { "flag": { "type": "string" }, "level": { "enum": ["confirm", "block"] } } }
+    },
+    "questions": {
+      "type": "array", "minItems": 1,
+      "items": {
+        "type": "object", "required": ["id", "type", "instructions", "criteria"], "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,60}$" },
+          "type": { "enum": ["noul", "choice", "score"] },
+          "instructions": { "type": "string", "minLength": 1 },
+          "criteria": {
+            "oneOf": [
+              { "type": "object", "additionalProperties": { "type": ["string", "null"] }, "minProperties": 2, "maxProperties": 255 },
+              { "type": "array", "items": { "type": "string" }, "minItems": 2, "maxItems": 10 }
+            ]
+          },
+          "thresholds": { "$ref": "#/$defs/thresholds" },
+          "reason": { "type": "string" },
+          "weight": { "type": "number", "minimum": 0 }
+        }
+      }
+    },
+    "thresholds": { "type": "object", "additionalProperties": { "$ref": "#/$defs/thresholds" } },
+    "tests": {
+      "type": "array",
+      "items": {
+        "type": "object", "required": ["name", "state", "expect"], "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string" },
+          "state": {},
+          "expect": {
+            "type": "object", "required": ["level"], "additionalProperties": false,
+            "properties": {
+              "level": { "oneOf": [ { "$ref": "#/$defs/level" }, { "type": "array", "items": { "$ref": "#/$defs/level" } } ] },
+              "fires": { "type": "array", "items": { "type": "string" } },
+              "not_fires": { "type": "array", "items": { "type": "string" } }
+            }
+          },
+          "requires_sensor": { "type": "boolean" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "level": { "enum": ["proceed", "nudge", "hold", "confirm", "block"] },
+    "thresholds": { "type": "object", "additionalProperties": false,
+      "properties": { "nudge": { "type": "number", "minimum": 0, "maximum": 1 }, "hold": { "type": "number", "minimum": 0, "maximum": 1 }, "confirm": { "type": "number", "minimum": 0, "maximum": 1 }, "block": { "type": "number", "minimum": 0, "maximum": 1 } } }
+  }
+}

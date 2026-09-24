@@ -148,24 +148,47 @@ export interface Evaluation<S = unknown> {
   at: number;
 }
 
+/** Closed set of outcomes. `asked` = a confirmation was requested and not yet answered (an agent may re-issue). */
 export type UserAction =
-  | "sent" | "sent_after_hold" | "sent_now_from_hold" | "overrode_confirm" | "overrode_block" | "cancelled" | "edited"
-  | "allowed" | "held" | "confirmed" | "blocked" | "overridden";
+  | "allowed" | "held" | "sent_after_hold" | "sent_now_from_hold"
+  | "overrode_confirm" | "overrode_block" | "overridden"
+  | "cancelled" | "blocked" | "asked";
 
+/** Audit Vector v1: one line per decision, no content, only hashes and probabilities. See docs/audit.md. */
 export interface AuditRecord {
-  at: number;
+  v: 1;
+  kind: "decision";
+  at: string;
   surface: Surface;
+  pack: string;
+  sensor: string;
   hash: string;
   level: VerdictLevel;
   regret: number;
-  reasons: Array<{ id: string; p: number }>;
   nouls: Record<string, number>;
-  action: UserAction;
-  latencyMs: number;
-  inputTokens: number;
-  cacheHit: boolean;
-  /** free-text override justification, when the surface collects one */
+  fired: string[];
+  l0: string[];
+  outcome: UserAction;
+  /** the only field that may carry content: what the person or agent typed to override */
   note?: string;
+  latency_ms: number;
+  input_tokens: number;
+  cost_usd: number;
+  cache_hit: boolean;
+  actor: "human" | "agent";
+  budget: { used: number; cap: number };
+}
+
+/** A regret event found by `interlock recall`; joins to a decision by hash when one exists. */
+export interface RegretRecord {
+  v: 1;
+  kind: "regret";
+  at: string;
+  surface: Surface;
+  detector: string;
+  hash?: string;
+  ref?: string;
+  detail?: string;
 }
 
 export interface Settings {

@@ -10,12 +10,14 @@ export interface PolicyContext {
   interruptBudget: number;
   /** last verdict for this same compose, for hysteresis */
   previous?: Verdict;
-  /** L0 hard rules that force a level regardless of the model */
+  /** L0 flags the compiler raised for this state */
   l0Flags: string[];
+  /** flag → forced level, from the pack; only confirm|block */
+  l0Rules?: Record<string, VerdictLevel>;
 }
 
-/** L0 flags that are hard blocks on their own. Everything else L0 flags is just a fact in the state. */
-const L0_HARD: Record<string, VerdictLevel> = {
+/** Fallback when no pack supplies rules (the built-in packs all do). */
+export const DEFAULT_L0_RULES: Record<string, VerdictLevel> = {
   secret_pattern_in_body: "block",
   catastrophic_command_in_args: "block",
   catastrophic_command: "block",
@@ -65,8 +67,9 @@ export function decide(bank: QuestionDef[], answers: Record<string, Answer>, _st
   }
 
   // L0 hard rules override the model, in both directions of trust: they never wait on the network.
+  const rules = ctx.l0Rules ?? DEFAULT_L0_RULES;
   for (const f of ctx.l0Flags) {
-    const forced = L0_HARD[f];
+    const forced = rules[f];
     if (forced) {
       reasons.push({ id: `l0:${f}`, p: 1, text: `Blocked by rule: ${f.replace(/_/g, " ")}`, level: forced });
       level = maxLevel(level, forced);

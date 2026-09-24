@@ -1,97 +1,99 @@
 # Interlock
 
-A 100 ms judgment before irreversible actions. The sensor is [TypeSafe Jev](https://typesafe.ai); the policy is yours.
+**Policy as questions. Decisions as vectors. A 100 ms judgment before irreversible actions.**
 
-Every interlock that exists today is either too slow (people turn it off) or too dumb (people click through it).
-Jev answers ~10–15 independent typed questions about a state in one ~100 ms call for ~$0.00005. That is cheap
-and fast enough to put LLM-grade judgment *inside* the moment — under a click, inside an agent's tool loop,
-before a shell command runs — without anyone noticing it's there until it has something to say.
+Interlock is a reference implementation of *pre-action judgment*: before a person or an agent does something they
+can't undo (run, push, send, pay), a small typed model answers a bank of plain-English questions about the
+situation in one ~100 ms call, and a policy you can read turns the answers into one of five rungs.
+
+The two things worth copying are the formats:
+
+- **[Question Packs](docs/packs.md)** — policy as typed questions with thresholds, hard rules, and *tests*. A YAML file in your repo, validated by a [schema](schema/pack.schema.json), run in CI.
+- **[Audit Vectors](docs/audit.md)** — every decision as a named probability vector plus what happened next. No content, only hashes. The only record from which precision and recall can be computed.
+
+The runtime proves them across six surfaces. The sensor is pluggable: [TypeSafe Jev](https://typesafe.ai) today, `none` (rules only) for CI, anything else behind one interface.
 
 ```
-state compiler (per surface, does all the numbers)
-      → Jev (one call, many questions, calibrated probabilities)
-      → policy (thresholds → proceed | nudge | hold | confirm | block, hysteresis, daily interrupt budget)
-      → surface UI (pill / countdown / one-line confirm / block with a written override)
-      → audit log (the noul vector + what the human or agent did = a label)
+surface adapter → state compiler → pack → sensor → policy → verdict → audit line
+   (hook)        (does all the numbers)  (YAML)  (Jev|none)  (ladder)   (JSONL)
 ```
+
+## Try it
+
+```bash
+npm install && npm run build && npm link
+interlock packs                                   # the six built-in packs
+interlock eval agent --sensor none                # rules-only cases pass without a key
+export JEV_API_KEY=…                              # or: interlock config --key …
+interlock eval agent shell git-push --sensor jev  # pass/fail, calibration per question, p50/p95 latency, $/eval
+```
+
+Then put a gate somewhere real:
+
+```bash
+eval "$(interlock shell-init zsh)"     # risky shell commands (rm -rf, kubectl delete, terraform apply, curl|sh …)
+interlock install-hooks                # git push, via pre-push
+interlock mcp --task "Refactor auth" -- npx -y @modelcontextprotocol/server-filesystem .   # any MCP server
+interlock log                          # what was judged, what happened, who did it (human or agent)
+interlock recall                       # regret events in your git/shell history, joined to decisions
+```
+
+For agents, drop the `mcp` line into `claude_desktop_config.json` / `.mcp.json` as the server's `command`. A
+`confirm` comes back to the agent as an `isError` result naming the reasons and asking it to re-issue the call
+with `"_interlock_justification": "…"`; that sentence lands in the audit log next to the noul vector.
 
 ## Surfaces
 
-| Surface | Hook point | Entry | Fail mode |
+| Surface | Hook | Pack | Fail mode |
 |---|---|---|---|
-| **Gmail** | compose window, Send click / ⌘⏎ | browser extension (`dist/`) | open |
-| **Slack** (web) | composer, Enter / Send | same extension | open |
-| **AI agent tool calls** | MCP stdio proxy around any server | `interlock mcp -- <server…>` | open (`INTERLOCK_FAIL_MODE=closed`) |
-| **Shell** | zsh accept-line widget / bash DEBUG trap | `eval "$(interlock shell-init zsh)"` | open |
-| **git push** | `pre-push` hook | `interlock install-hooks` | open |
-| **Payments / AP** | HTTP gate in the approval path | `interlock payment-server` | **closed** |
+| AI agent tool calls | MCP stdio proxy around any server | `agent` | open (`INTERLOCK_FAIL_MODE=closed`) |
+| Shell | zsh `accept-line` widget / bash `DEBUG` trap; only risky verbs reach a sensor | `shell` | open |
+| git push | `pre-push` | `git-push` | open |
+| Payments / AP | HTTP gate (`interlock payment-server`) | `payment` | **closed** |
+| Gmail, Slack web | browser extension in `src/ext/` — a demo of the runtime, best-effort | `email`, `slack` | open |
 
-One engine (`src/core`), one runtime for Node surfaces (`src/node`), one state compiler + question bank per surface (`src/surfaces/*`).
+## What the numbers mean
 
-### What each surface asks
+`interlock eval` prints, per pack: each case's rung and which questions fired; a calibration table per noul
+(cases bucketed by predicted P against the share labelled true — the honest way to see whether 0.7 means 70%);
+p50/p95 latency and mean cost per evaluation for the sensor used. Model-dependent cases are skipped under
+`--sensor none` and reported as such. Publish the misses; that is what makes the good numbers believable.
 
-- **Email**: wrong / missing recipient, external leak, reply-all, secret, missing attachment, commits to terms, contradicts the thread, unfinished, hostile tone, rushed sender, forward-bait; `regret_risk`; a dynamic `choice` over recipients.
-- **Slack**: wrong channel, names a person negatively, screenshot bait, @channel unneeded, hostile, secret, commits to terms, contradicts the recent messages, unfinished.
-- **Agent**: outside task scope, irreversible, touches unmentioned data, escalates permissions, spends money, fabricated argument, stuck in a loop, exfiltration shape; `blast_radius`.
-- **Shell**: destructive on a shared resource, wrong context (kube/AWS/branch vs intent), skipped an available dry run, affects many resources, irreversible, looks like a slip; `blast_radius`. Only risky verbs reach the network; `ls` costs 0 ms.
-- **git push**: destructive migration, disables tests/checks, commit message contradicts diff, unrelated changes bundled, infra/CI change unmentioned, not ready to share, off-hours to protected; `blast_radius`. L0: secrets in diff, force-push to a protected branch.
-- **Payment**: unexplained anomaly, BEC pattern, invoice inconsistent, no business purpose, threshold-shaped amount; `fraud_likelihood`. L0 computes every ratio (amount vs median/max, days since bank details changed, duplicates, self-approval, lookalike payee).
-
-## Speculation: the click costs 0 ms
-
-On the compose surfaces the draft is scored on every typing pause (≈400 ms debounce), hashed, and cached.
-When Send is pressed the verdict for *that exact draft* is usually already there. The e2e proves the click
-makes zero new requests on a hit. The state is built so this works: time is `Fri 17h`, draft age is a bucket,
-keystroke counters never enter the state.
-
-## For agents
-
-```jsonc
-// claude_desktop_config.json / .mcp.json / cursor — wrap any server:
-{ "mcpServers": { "fs": { "command": "interlock", "args": ["mcp", "--task", "Refactor the auth module", "--", "npx", "-y", "@modelcontextprotocol/server-filesystem", "."] } } }
-```
-
-`tools/call` goes through the gate; everything else is forwarded byte-for-byte. A `confirm` comes back to the
-agent as an `isError` result that names the reasons and asks it to re-issue the call with
-`"_interlock_justification": "…"`. That sentence is logged next to the noul vector. A `block` has no override
-unless `--allow-override`. The tool schema already *is* the typed action set — no compiler to write.
-
-## Run it
-
-```bash
-npm install && npm run build
-npm link                       # puts `interlock` on PATH (dist/cli.js)
-interlock config --key sk-…    # or JEV_API_KEY / JEV_BASE_URL env
-eval "$(interlock shell-init zsh)"
-interlock install-hooks        # in a repo
-interlock payment-server --port 8790
-interlock log --surface shell
-```
-
-Browser: load `dist/` unpacked at `chrome://extensions`, open its options page, paste the key, click **Test connection**.
-
-```bash
-npm test          # 51 unit tests: compilers, policy, speculator, client, MCP proxy, CLI, payment server
-npm run test:e2e  # 11 scenarios: the real extension in Chromium against Gmail + Slack lookalikes and a mock Jev
-JEV_API_KEY=… npm run bench
-```
+`interlock recall` looks for regret in local history (a revert or force-push within an hour of a push, the same
+risky command re-run with one token changed, an agent asked three times for the same call), writes them as
+`regret` records, and reports how many of the regrets that passed through a gate were at hold or above.
 
 ## Design rules the code follows
 
-1. **The compiler does everything quantitative.** Jev can't count or compare numbers, so ratios, ages, set differences, and duplicates are computed first and stated as facts.
-2. **Nouls are the sensor; code is the policy.** Per-question `nudge/hold/confirm/block` thresholds; max rung wins; 0.05 hysteresis; a daily interrupt budget per surface degrades unaffordable confirms to holds (never blocks).
-3. **L0 never waits on the network.** Credential patterns, `rm -rf /`, force-push to `main`, changed bank details, duplicate invoices, self-approval: hard rules, instant.
-4. **Redact after computing, before sending.** Emails, phones, card/account numbers become typed placeholders; policy metadata never leaves the machine.
-5. **Policy-as-questions.** An org adds a plain-English noul; Jev scores questions independently so it doesn't perturb the built-ins.
-6. **Every decision is a label.** The audit log stores the noul vector + the outcome (`sent`, `overrode_confirm`, `cancelled`, `blocked`, an agent's justification, an approver's note).
-7. **Fail mode is chosen per surface, in writing.** Chat and shell fail open; money fails closed.
+1. **The compiler does everything quantitative.** Jev can't count or compare numbers; ratios, ages, set differences, duplicates are computed first and stated as facts.
+2. **Nouls are the sensor; the pack is the policy.** Per-question `nudge/hold/confirm/block` thresholds; max rung wins; 0.05 hysteresis; a daily interrupt budget per surface degrades unaffordable confirms to holds, never blocks.
+3. **L0 never waits on the network.** Credential patterns, `rm -rf /`, force-push to `main`, changed bank details: rules, instant.
+4. **Redact after computing, before sending.** Emails, phones, card/account numbers become placeholders; policy metadata never leaves the machine.
+5. **Every decision is a label.** The audit vector plus the outcome is a training example nobody else is collecting at this granularity.
+6. **Fail mode is chosen per surface, in writing.** Chat and shell fail open; money fails closed.
 
-## Honest caveats
+## Layout
 
-- Gmail and Slack DOMs are obfuscated and move. Every selector lives in `src/ext/gmail.ts` / `src/ext/slack.ts` with fallbacks; the fixtures mirror the first form of each. A redesign needs a selector refresh.
-- Slack native apps have no pre-send hook; this covers the web client only.
-- The bash integration uses the `DEBUG` trap with `extdebug`, which fires per simple command; the prefilter keeps it cheap but zsh's widget is the better experience.
-- Draft text goes to a hosted API. Redaction reduces what leaves; it does not make it zero.
-- The extension can be uninstalled; the MCP proxy and payment gate are the enforcement-shaped ones.
+```
+packs/            the six built-in Question Packs (YAML, with tests)
+schema/           JSON Schema for packs and audit vectors
+src/core/         engine: policy ladder, speculation cache, hashing, email compiler
+src/pack/         pack loader (extends, validation, the __which convention), settings overlay
+src/sensors/      Sensor interface; jev and none implementations
+src/node/         config, JSONL audit, per-surface budget, runGate
+src/surfaces/     agent (compiler + MCP proxy), shell, git, slack, payment compilers
+src/cli/          interlock: config, packs, eval, recall, mcp, shell, git-push, install-hooks, payment-server, log
+src/ext/          the Gmail/Slack extension (imports the generated packs)
+test/             61 unit tests + 11 Chromium e2e scenarios; mock sensor in scripts/mock-jev.mjs
+```
+
+## Caveats, on purpose
+
+- Calibration is published as measured. Some nuanced questions (`contradicts_thread`, `wrong_context_for_intent`) may not be well calibrated; the eval exists to find out.
+- Gmail/Slack DOMs are obfuscated and move; the extension is a demo of the runtime, not a deliverable.
+- Email and Slack recall detectors need an export and are not implemented yet.
+- Draft text goes to a hosted sensor. Redaction reduces what leaves; it does not make it zero.
 - Passing the gate ≠ safe. It catches regret-shaped mistakes.
-- Not built: clinical order entry. It needs a hospital partner and a regulatory path, and the interrupt-budget idea is where it would matter most.
+- Not built: clinical order entry. It needs a partner and a regulatory path.
+
+MIT.

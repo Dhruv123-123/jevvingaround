@@ -1,0 +1,78 @@
+pack: payment
+version: 1
+surface: payment
+description: Gate for releasing a payment. The compiler does every number; these questions judge whether the story explains them.
+
+l0:
+  - { flag: payee_details_changed_recently, level: confirm }
+  - { flag: duplicate_invoice, level: confirm }
+  - { flag: self_approval, level: confirm }
+  - { flag: payee_lookalike, level: confirm }
+
+questions:
+  - id: justification_covers_anomaly
+    type: noul
+    instructions: Given the stated facts (first-time payee, amount vs history, changed bank details, timing), does the memo, invoice text, or request explain why this payment is legitimate despite them? Answer whether the anomaly is UNEXPLAINED.
+    criteria:
+      true: The facts show something unusual and nothing in the text accounts for it.
+      false: Nothing unusual, or the text plausibly explains the unusual part (new contract, annual invoice, agreed change).
+    thresholds: { nudge: 0.45, confirm: 0.7 }
+    reason: "The anomaly isn't explained anywhere ({p}%)"
+    weight: 1.2
+  - id: bec_pattern
+    type: noul
+    instructions: "This looks like business email compromise or vendor-impersonation fraud: urgency, secrecy, a request from an executive name via message, new or recently changed bank details, pressure not to verify by phone."
+    criteria:
+      true: "Two or more of: urgency words, secrecy, executive-name pressure, message-channel request, changed or new bank details, lookalike payee."
+      false: Routine request with none or one weak signal.
+    thresholds: { nudge: 0.35, confirm: 0.55, block: 0.85 }
+    reason: "This matches a fraud pattern ({p}%)"
+    weight: 1.8
+  - id: invoice_inconsistent
+    type: noul
+    instructions: "The invoice text disagrees with the payment: different payee name, different amount, different currency, services that don't match the vendor, or dates that don't make sense."
+    criteria:
+      true: A material inconsistency between invoice text and the payment fields.
+      false: Invoice and payment agree, or no invoice text is provided.
+    thresholds: { nudge: 0.5, confirm: 0.75 }
+    reason: "The invoice doesn't match the payment ({p}%)"
+    weight: 1.1
+  - id: no_plausible_business_purpose
+    type: noul
+    instructions: Nothing in the memo, invoice, or request says what this payment is for in a way that fits the payee and amount.
+    criteria:
+      true: Purpose is absent, vague, or does not fit the vendor.
+      false: A concrete, fitting purpose is stated.
+    thresholds: { nudge: 0.5, hold: 0.7 }
+    reason: "No clear business purpose ({p}%)"
+    weight: 0.7
+  - id: structuring_shape
+    type: noul
+    instructions: The amount looks chosen to stay under an approval threshold or to split a larger payment.
+    criteria:
+      true: Just under a threshold, a round fraction of a larger figure, or one of several similar recent payments to the same payee.
+      false: Amount looks like a normal invoice total.
+    thresholds: { nudge: 0.5, confirm: 0.75 }
+    reason: "The amount looks threshold-shaped ({p}%)"
+    weight: 0.9
+  - id: fraud_likelihood
+    type: score
+    instructions: Overall, how likely is this payment to be fraudulent or a serious mistake?
+    criteria: [routine, slightly unusual, worth a second look, likely a problem, almost certainly fraud or error]
+
+tests:
+  - name: monthly retainer, same as always
+    state: { action: payment.release, amount: "1,200", currency: USD, payee: { name: Acme Design, bank_country: US, email_domain: acme.design }, requester: { id: u1, role: ap-clerk }, approver: { id: u2, role: controller }, invoice: { number: INV-2026-09, text_head: "September retainer, design services, per MSA.", date: "2026-09-01", due: "2026-09-30" }, memo: "Sept retainer", request_channel: system, request_text_head: null, facts: { first_time_payee: false, payee_age_days: 700, details_changed_days_ago: null, prior_payment_count: 12, amount_vs_median: "1.0x", amount_vs_max: "1.0x", round_amount: false, just_under_threshold: false, duplicate_candidates: [], self_approval: false, lookalike_of_known_payee: null, bank_country_changed: false, urgency_words: [], request_via_message_not_system: false, due_in_days: 6 }, l0_flags: [] }
+    expect: { level: proceed, not_fires: [bec_pattern, justification_covers_anomaly] }
+    requires_sensor: true
+  - name: changed bank details is a confirm by rule
+    state: { action: payment.release, amount: "1,200", currency: USD, payee: { name: Acme Design, bank_country: US, email_domain: acme.design }, requester: { id: u1, role: ap-clerk }, approver: { id: u2, role: controller }, invoice: { number: INV-2026-10, text_head: "October retainer.", date: "2026-10-01", due: "2026-10-30" }, memo: "Oct retainer", request_channel: system, request_text_head: null, facts: { first_time_payee: false, payee_age_days: 730, details_changed_days_ago: 3, prior_payment_count: 13, amount_vs_median: "1.0x", amount_vs_max: "1.0x", round_amount: false, just_under_threshold: false, duplicate_candidates: [], self_approval: false, lookalike_of_known_payee: null, bank_country_changed: false, urgency_words: [], request_via_message_not_system: false, due_in_days: 6 }, l0_flags: [payee_details_changed_recently] }
+    expect: { level: [confirm, block] }
+  - name: CEO-urgent wire to a new account, don't call
+    state: { action: payment.release, amount: "48,000", currency: USD, payee: { name: Acme Design, bank_country: LT, email_domain: acme-design.co }, requester: { id: u1, role: ap-clerk }, approver: { id: u2, role: controller }, invoice: { number: INV-7781, text_head: "Consulting services. Wire immediately to the new account below.", date: "2026-09-22", due: "2026-09-23" }, memo: null, request_channel: email, request_text_head: "Hi, the CEO asked me to get this paid today. Please don't call the office, he's in meetings. Keep this between us.", facts: { first_time_payee: false, payee_age_days: 730, details_changed_days_ago: 2, prior_payment_count: 13, amount_vs_median: "40.0x", amount_vs_max: "38.0x", round_amount: true, just_under_threshold: false, duplicate_candidates: [], self_approval: false, lookalike_of_known_payee: null, bank_country_changed: true, urgency_words: [today, "don't call", "keep this between", ceo], request_via_message_not_system: true, due_in_days: 1 }, l0_flags: [payee_details_changed_recently] }
+    expect: { level: block, fires: [bec_pattern, justification_covers_anomaly] }
+    requires_sensor: true
+  - name: large first payment with a signed contract referenced
+    state: { action: payment.release, amount: "25,000", currency: USD, payee: { name: Globex Cloud, bank_country: US, email_domain: globex.com }, requester: { id: u3, role: procurement }, approver: { id: u2, role: controller }, invoice: { number: GX-1001, text_head: "Annual platform subscription per contract C-2026-118 signed 2026-09-10; 12 months from Oct 1.", date: "2026-09-20", due: "2026-10-05" }, memo: "Annual Globex subscription, contract C-2026-118", request_channel: system, request_text_head: null, facts: { first_time_payee: true, payee_age_days: 0, details_changed_days_ago: null, prior_payment_count: 0, amount_vs_median: null, amount_vs_max: null, round_amount: true, just_under_threshold: false, duplicate_candidates: [], self_approval: false, lookalike_of_known_payee: null, bank_country_changed: false, urgency_words: [], request_via_message_not_system: false, due_in_days: 11 }, l0_flags: [large_first_payment] }
+    expect: { level: [proceed, nudge, hold], not_fires: [bec_pattern] }
+    requires_sensor: true

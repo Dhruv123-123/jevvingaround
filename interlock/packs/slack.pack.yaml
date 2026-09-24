@@ -1,0 +1,111 @@
+pack: slack
+version: 1
+surface: slack
+description: Pre-send gate for Slack messages (web client).
+
+l0:
+  - { flag: secret_pattern_in_body, level: block }
+
+questions:
+  - id: wrong_channel
+    type: noul
+    instructions: "This message belongs somewhere else: a DM-shaped message in a public channel, a topic that doesn't fit the channel's purpose or recent conversation, or a reply meant for a thread."
+    criteria:
+      true: Content, tone, or addressee do not fit this channel or the recent messages in it.
+      false: The message fits where it is being posted.
+    thresholds: { nudge: 0.45, confirm: 0.75 }
+    reason: "This may be the wrong channel ({p}%)"
+    weight: 1.2
+  - id: names_person_negatively
+    type: noul
+    instructions: The message criticises, blames, or mocks a named or identifiable person.
+    criteria:
+      true: A specific person is portrayed negatively.
+      false: No person is criticised, or criticism is of a thing, not a person.
+    thresholds: { nudge: 0.5, hold: 0.7, confirm: 0.85 }
+    reason: "This criticises someone by name ({p}%)"
+    weight: 1.1
+  - id: screenshot_bait
+    type: noul
+    instructions: "This is the kind of message that gets screenshotted and forwarded: gossip, blunt opinions about customers, leadership, pay, layoffs, or legal matters."
+    criteria:
+      true: Would be embarrassing or damaging if it left the channel.
+      false: Routine work content.
+    thresholds: { nudge: 0.55, hold: 0.75 }
+    reason: "This is screenshot bait ({p}%)"
+    weight: 0.8
+  - id: broadcast_unneeded
+    type: noul
+    instructions: An @here/@channel/@everyone is used for something that doesn't need everyone's attention right now.
+    criteria:
+      true: The content is routine or aimed at a few people, yet the whole channel is pinged.
+      false: No broadcast mention, or the content genuinely needs everyone now.
+    thresholds: { nudge: 0.5, confirm: 0.75 }
+    reason: "That @-broadcast probably isn't needed ({p}%)"
+    weight: 0.9
+  - id: hostile_tone
+    type: noul
+    instructions: A reasonable reader would take the message as angry, sarcastic, or passive-aggressive.
+    criteria:
+      true: Wording or punctuation would land as hostile.
+      false: Neutral, friendly, or firm-but-fine.
+    thresholds: { nudge: 0.45, hold: 0.65, confirm: 0.85 }
+    reason: "This may read as hostile ({p}%)"
+    weight: 0.9
+  - id: secret_present
+    type: noul
+    instructions: The message contains a credential, token, password, private key, or internal URL with an embedded secret.
+    criteria:
+      true: Something that reads as a credential is present.
+      false: No credentials.
+    thresholds: { confirm: 0.6, block: 0.9 }
+    reason: "Looks like a credential is in this message ({p}%)"
+    weight: 1.5
+  - id: commits_to_terms
+    type: noul
+    instructions: The message commits the sender or company to a date, price, deliverable, or decision, in a channel where that will be treated as binding.
+    criteria:
+      true: A concrete commitment is stated.
+      false: No commitment, or clearly tentative.
+    thresholds: { nudge: 0.6, hold: 0.8 }
+    reason: "This commits you to something ({p}%)"
+    weight: 0.6
+  - id: contradicts_thread
+    type: noul
+    instructions: The message ignores or contradicts something said in the recent messages shown.
+    criteria:
+      true: A recent message set a constraint, decision, or correction that this message goes against.
+      false: Consistent with the recent conversation, or no recent messages.
+    thresholds: { nudge: 0.5, confirm: 0.75 }
+    reason: "This goes against something said just above ({p}%)"
+    weight: 1.0
+  - id: unfinished
+    type: noul
+    instructions: "The message is incomplete: placeholders, a trailing half sentence, or clearly missing context."
+    criteria:
+      true: Placeholders or a truncated thought.
+      false: Reads as complete.
+    thresholds: { nudge: 0.5, confirm: 0.8 }
+    reason: "This looks unfinished ({p}%)"
+    weight: 0.7
+  - id: regret_risk
+    type: score
+    instructions: How likely is the sender to wish they had not posted this, as written, here?
+    criteria: ["none", "minor awkwardness", "needs a follow-up correction", "damages a relationship or trust", "HR, legal, or security incident"]
+
+tests:
+  - name: quiet reply in the right channel
+    state: { action: slack.send, channel: { name: "#eng-general", kind: channel, memberCount: 128, isPrivate: null, isSharedExternal: null, member_count_bucket: "100+" }, message: { text_head: "sounds good, see you Monday", text_chars: 27, broadcast_mentions: [], user_mentions: 0, has_attachment: false, has_code_block: false, external_links: [], has_placeholders: false }, recent: [{ author: Priya, text_head: "Reminder: we agreed no deploys on Friday afternoon." }, { author: Sam, text_head: "Ack. Release goes Monday 9am." }], sender_context: { local_time: "Fri 15h", draft_age: "<30s", deletions_ratio: 0, name: Me }, l0_flags: [] }
+    expect: { level: proceed, not_fires: [contradicts_thread, wrong_channel] }
+    requires_sensor: true
+  - name: slack token pasted is blocked by rule
+    state: { action: slack.send, channel: { name: "#eng-general", kind: channel, memberCount: 128, isPrivate: null, isSharedExternal: null, member_count_bucket: "100+" }, message: { text_head: "use xoxb-… for the bot", text_chars: 40, broadcast_mentions: [], user_mentions: 0, has_attachment: false, has_code_block: false, external_links: [], has_placeholders: false }, recent: [], sender_context: { local_time: "Tue 10h", draft_age: "<30s", deletions_ratio: 0, name: Me }, l0_flags: [secret_pattern_in_body] }
+    expect: { level: block }
+  - name: "@channel deploy announcement that contradicts the Friday freeze"
+    state: { action: slack.send, channel: { name: "#eng-general", kind: channel, memberCount: 128, isPrivate: null, isSharedExternal: null, member_count_bucket: "100+" }, message: { text_head: "@channel deploying the release to prod now, ignore Priya's note", text_chars: 63, broadcast_mentions: ["@channel"], user_mentions: 0, has_attachment: false, has_code_block: false, external_links: [], has_placeholders: false }, recent: [{ author: Priya, text_head: "Reminder: we agreed no deploys on Friday afternoon." }, { author: Sam, text_head: "Ack. Release goes Monday 9am." }], sender_context: { local_time: "Fri 16h", draft_age: "<30s", deletions_ratio: 0.2, name: Me }, l0_flags: [broadcast_to_large_channel] }
+    expect: { level: [confirm, block], fires: [contradicts_thread] }
+    requires_sensor: true
+  - name: venting about a colleague in a public channel
+    state: { action: slack.send, channel: { name: "#random", kind: channel, memberCount: 400, isPrivate: null, isSharedExternal: null, member_count_bucket: "100+" }, message: { text_head: "honestly Mark's review comments are useless, he clearly didn't read the PR", text_chars: 72, broadcast_mentions: [], user_mentions: 0, has_attachment: false, has_code_block: false, external_links: [], has_placeholders: false }, recent: [], sender_context: { local_time: "Thu 18h", draft_age: "<30s", deletions_ratio: 0.3, name: Me }, l0_flags: [] }
+    expect: { level: [hold, confirm], fires: [names_person_negatively, screenshot_bait] }
+    requires_sensor: true

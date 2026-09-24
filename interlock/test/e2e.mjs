@@ -79,7 +79,7 @@ test("speculative evaluation runs on a typing pause and the compiled state is wh
   assert.ok(s.l0_flags.includes("sensitive_attachment_name"));
   assert.ok(s.l0_flags.includes("external_recipient_present"));
   assert.ok("wrong_recipient" in req.questions && "falcon" in req.questions, "builtin + org question in the same call");
-  assert.ok("most_suspicious_recipient" in req.questions, "dynamic choice over recipients");
+  assert.ok("wrong_recipient__which" in req.questions, "dynamic choice over recipients (the __which convention)");
   assert.equal(req.questions.wrong_recipient.thresholds, undefined, "policy metadata never leaves the browser");
   assert.equal(await page.evaluate(() => window.__sent), 0);
   await page.close();
@@ -118,7 +118,7 @@ test("confirm: an external leak stops the send until the user says 'send anyway'
   await opt.waitForFunction(() => document.querySelectorAll("#log tbody tr").length >= 2);
   const rows = await opt.$$eval("#log tbody tr", (trs) => trs.map((tr) => tr.innerText));
   assert.ok(rows.some((r) => /confirm\t0\.\d+\toverrode_confirm\texternal_leak 80%/.test(r)), rows.join("\n"));
-  assert.ok(rows.some((r) => /proceed\t.*\tsent\t/.test(r)));
+  assert.ok(rows.some((r) => /proceed\t.*\tallowed\t/.test(r)));
   await opt.close();
 });
 

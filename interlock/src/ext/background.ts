@@ -60,12 +60,12 @@ async function handle(req: Req): Promise<unknown> {
       return all[req.surface];
     }
     case "log.append": {
-      const cur = ((await chrome.storage.local.get("log")).log as AuditRecord[] | undefined) ?? [];
+      const cur = (((await chrome.storage.local.get("log")).log as AuditRecord[] | undefined) ?? []).filter((r) => r && (r as { v?: number }).v === 1);
       cur.push(req.record);
       await chrome.storage.local.set({ log: cur.slice(-LOG_MAX) });
       return { size: Math.min(cur.length, LOG_MAX) };
     }
-    case "log.list": return ((await chrome.storage.local.get("log")).log as AuditRecord[] | undefined) ?? [];
+    case "log.list": return (((await chrome.storage.local.get("log")).log as AuditRecord[] | undefined) ?? []).filter((r) => r && (r as { v?: number }).v === 1);
     case "log.clear": { await chrome.storage.local.set({ log: [] }); return { size: 0 }; }
   }
 }

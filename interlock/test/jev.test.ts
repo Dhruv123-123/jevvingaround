@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { JevClient, JevError, toWire } from "../src/core/jev.js";
-import { EMAIL_BANK } from "../src/core/bank.js";
+import { loadPack } from "../src/pack/loader.js";
+const EMAIL_BANK = loadPack("packs/email.pack.yaml").questions;
 
 const ok = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
