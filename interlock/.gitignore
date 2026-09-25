@@ -5,3 +5,4 @@ test-results/
 *.log
 .env
 src/generated/
+dist-extension/

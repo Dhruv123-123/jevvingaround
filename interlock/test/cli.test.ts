@@ -90,7 +90,7 @@ describe("interlock eval / packs / recall (CLI)", () => {
     const r = await run(["eval", "agent", "--sensor", "jev", "--json"]);
     const [rep] = JSON.parse(r.stdout);
     expect(rep.skipped).toBe(0);
-    expect(rep.cases.length).toBe(6);
+    expect(rep.cases.length).toBe(loadPack("packs/agent.pack.yaml").tests.length);
     // the mock answers 0.04 to everything unless steered, so model-dependent 'fires' cases fail: that is the point of eval
     expect(rep.failed).toBeGreaterThan(0);
     expect(rep.cases.find((c: any) => c.name.startsWith("rm -rf")).pass).toBe(true);

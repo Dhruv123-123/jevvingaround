@@ -1,0 +1,7 @@
+[
+  { "type": "message", "user": "U1", "text": "deploying to prod now", "ts": "1789293600.000100", "edited": { "user": "U1", "ts": "1789293620.000000" } },
+  { "type": "message", "user": "U1", "text": "release notes are in the doc", "ts": "1789297200.000100" },
+  { "type": "message", "user": "U1", "text": "sorry wrong channel", "ts": "1789297230.000100" },
+  { "type": "message", "user": "U2", "text": "no worries", "ts": "1789297260.000100" },
+  { "type": "message", "user": "U1", "text": "edited much later", "ts": "1789300800.000100", "edited": { "user": "U1", "ts": "1789304400.000000" } }
+]

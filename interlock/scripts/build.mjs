@@ -7,30 +7,34 @@ execFileSync(process.execPath, ["--import", "tsx", "scripts/packs-to-json.ts"], 
 
 const test = process.argv.includes("--test");
 const watch = process.argv.includes("--watch");
-const out = test ? "dist-test" : "dist";
+// dist/cli.js is what npm publishes. The extension builds to dist-extension/ (dist-test/ for the e2e).
+const ext = test ? "dist-test" : "dist-extension";
 
-rmSync(out, { recursive: true, force: true });
-mkdirSync(out, { recursive: true });
+rmSync(ext, { recursive: true, force: true });
+mkdirSync(ext, { recursive: true });
+if (!test) { rmSync("dist", { recursive: true, force: true }); mkdirSync("dist", { recursive: true }); }
 
-const common = { bundle: true, target: "chrome120", sourcemap: "inline", logLevel: "info", define: { "process.env.NODE_ENV": '"production"' } };
+const common = { bundle: true, logLevel: "info", define: { "process.env.NODE_ENV": '"production"' } };
+const browser = { ...common, target: "chrome120", sourcemap: "inline" };
 const entries = [
-  { entryPoints: ["src/ext/content.ts"], outfile: `${out}/content.js`, format: "iife" },
-  { entryPoints: ["src/ext/background.ts"], outfile: `${out}/background.js`, format: "esm" },
-  { entryPoints: ["src/ext/options.ts"], outfile: `${out}/options.js`, format: "iife" },
-  { entryPoints: ["src/cli/main.ts"], outfile: `${out}/cli.js`, format: "esm", platform: "node", target: "node20", banner: { js: "#!/usr/bin/env node\nimport { createRequire } from 'node:module'; const require = createRequire(import.meta.url);" } },
+  { ...browser, entryPoints: ["src/ext/content.ts"], outfile: `${ext}/content.js`, format: "iife" },
+  { ...browser, entryPoints: ["src/ext/background.ts"], outfile: `${ext}/background.js`, format: "esm" },
+  { ...browser, entryPoints: ["src/ext/options.ts"], outfile: `${ext}/options.js`, format: "iife" },
 ];
+if (!test) entries.push({ ...common, entryPoints: ["src/cli/main.ts"], outfile: "dist/cli.js", format: "esm", platform: "node", target: "node20", sourcemap: false, // createRequire: the yaml dependency is CommonJS and esbuild's ESM output needs a real require for it
+  banner: { js: "#!/usr/bin/env node\nimport { createRequire } from 'node:module'; const require = createRequire(import.meta.url);" } });
 
-cpSync("extension/options.html", `${out}/options.html`);
+cpSync("extension/options.html", `${ext}/options.html`);
 const manifest = JSON.parse(readFileSync("extension/manifest.json", "utf8"));
 if (test) {
-  // The e2e loads a local Gmail lookalike; the shipped manifest only ever matches mail.google.com.
+  // The e2e loads local Gmail/Slack lookalikes; the shipped manifest only ever matches the real hosts.
   manifest.content_scripts[0].matches.push("http://127.0.0.1/*", "http://localhost/*");
   manifest.host_permissions.push("http://127.0.0.1/*", "http://localhost/*");
 }
-writeFileSync(`${out}/manifest.json`, JSON.stringify(manifest, null, 2));
+writeFileSync(`${ext}/manifest.json`, JSON.stringify(manifest, null, 2));
 
 if (watch) {
-  for (const e of entries) (await context({ ...common, ...e })).watch();
+  for (const e of entries) (await context(e)).watch();
 } else {
-  await Promise.all(entries.map((e) => build({ ...common, ...e })));
+  await Promise.all(entries.map((e) => build(e)));
 }

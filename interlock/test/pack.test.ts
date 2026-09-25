@@ -48,7 +48,7 @@ describe("eval", () => {
   it("under none: L0 cases pass, model cases are skipped, nothing fails", async () => {
     const r = await evalPack(p, noneSensor);
     expect(r.failed).toBe(0);
-    expect(r.skipped).toBe(4);
+    expect(r.skipped).toBe(p.tests.filter((t) => t.requires_sensor).length);
     expect(r.cases.find((c) => c.name.startsWith("rm -rf"))!.level).toBe("block");
     expect(r.cases.find((c) => c.name.startsWith("force push"))!.level).toBe("confirm");
   });
@@ -71,7 +71,7 @@ describe("eval", () => {
     expect(r.skipped).toBe(0);
     expect(r.latency.p50).toBe(42);
     const row = r.calibration.find((x) => x.id === "destructive_on_shared_resource")!;
-    expect(row.buckets[4]!.positives).toBe(1);
-    expect(row.buckets[0]!.n).toBe(1);
+    expect(row.buckets[4]!.positives).toBe(p.tests.filter((t) => t.expect.fires?.includes("destructive_on_shared_resource")).length);
+    expect(row.buckets[0]!.n).toBe(p.tests.filter((t) => t.expect.not_fires?.includes("destructive_on_shared_resource")).length);
   });
 });

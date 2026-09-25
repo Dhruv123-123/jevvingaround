@@ -8,8 +8,9 @@ import { join } from "node:path";
 import type { RegretRecord } from "../core/types.js";
 import { appendAudit, readAudit, readRegrets } from "../node/audit.js";
 import { isInteresting } from "../surfaces/shell/compile.js";
+import { mboxRegrets, slackRegrets } from "./exports.js";
 
-export interface RecallOptions { cwd: string; since: string; home: string; write?: boolean }
+export interface RecallOptions { cwd: string; since: string; home: string; write?: boolean; mbox?: string; slackExport?: string; self?: string }
 export interface RecallReport {
   since: string;
   regrets: RegretRecord[];
@@ -98,8 +99,10 @@ export function agentRegrets(since: number): RegretRecord[] {
 
 export async function runRecall(opts: RecallOptions): Promise<RecallReport> {
   const since = sinceMs(opts.since);
-  const notes: string[] = ["email and slack detectors need an export and are not implemented in this version"];
+  const notes: string[] = [];
   const regrets = [...gitRegrets(opts.cwd, since), ...shellRegrets(opts.home, since), ...agentRegrets(since)];
+  if (opts.mbox) regrets.push(...mboxRegrets(opts.mbox, since, opts.self)); else notes.push("email: pass --mbox <Takeout .mbox> to scan sent mail for sorry-follow-ups");
+  if (opts.slackExport) regrets.push(...slackRegrets(opts.slackExport, since, opts.self)); else notes.push("slack: pass --slack-export <dir> to scan an export for quick edits and corrections");
   const known = new Set(readRegrets().map((r) => `${r.detector}|${r.ref ?? r.hash ?? r.at}`));
   for (const r of regrets) if (!known.has(`${r.detector}|${r.ref ?? r.hash ?? r.at}`)) appendAudit(r);
   const decisions = readAudit(20000).filter((d) => new Date(d.at).getTime() >= since);

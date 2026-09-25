@@ -1,0 +1,25 @@
+name: "Interlock packs"
+description: "Run Question Pack tests (interlock eval) in CI: rules-only without a key, with a sensor when one is configured."
+inputs:
+  packs:
+    description: "Space-separated pack names (built-ins or files in packs-dir)"
+    required: true
+  packs-dir:
+    description: "Directory holding your *.pack.yaml files (sets INTERLOCK_PACKS)"
+    required: false
+    default: ""
+  sensor:
+    description: "jev | llm | none"
+    required: false
+    default: "none"
+  version:
+    description: "interlock-gate version to run"
+    required: false
+    default: "latest"
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        INTERLOCK_PACKS: ${{ inputs.packs-dir }}
+      run: npx --yes interlock-gate@${{ inputs.version }} eval ${{ inputs.packs }} --sensor ${{ inputs.sensor }}

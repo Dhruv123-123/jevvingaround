@@ -31,8 +31,9 @@ function usage(): never {
 
   interlock config [--key K] [--base-url U] [--model M] [--fail-mode open|closed] [--budget N]
   interlock packs                            (list the packs the runtime can see)
-  interlock eval <pack…> [--sensor jev|none] [--json]   (run a pack's tests: pass/fail, calibration, latency, cost)
-  interlock recall [--since 90d] [--json]    (find regret events in git/shell/audit history; join to decisions)
+  interlock eval <pack…> [--sensor jev|llm|none] [--json]   (run a pack's tests: pass/fail, calibration, latency, cost)
+  interlock recall [--since 90d] [--mbox f] [--slack-export d] [--self me@x] [--json]
+                                             (regret events in git/shell/audit history and exports; joined to decisions)
   interlock mcp [--task "…"] [--allow-override] [--pack agent] -- <mcp server command…>
   interlock shell -- "<command line>"        (exit 0 = run it, 1 = don't)
   interlock shell-init zsh|bash              (eval this in your rc file)
@@ -189,7 +190,7 @@ async function main(): Promise<number> {
   }
 
   if (cmd === "recall") {
-    const r = await runRecall({ cwd: process.cwd(), since: flag("--since") ?? "90d", home: homedir() });
+    const r = await runRecall({ cwd: process.cwd(), since: flag("--since") ?? "90d", home: homedir(), mbox: flag("--mbox"), slackExport: flag("--slack-export"), self: flag("--self") });
     if (argv.includes("--json")) process.stdout.write(JSON.stringify(r, null, 2) + "\n");
     else process.stdout.write(formatRecall(r) + "\n");
     return 0;

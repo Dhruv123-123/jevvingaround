@@ -1,11 +1,45 @@
 {
-  "name": "interlock",
-  "version": "0.1.0",
-  "private": true,
-  "description": "Sub-perceptual pre-send interlock for Gmail, powered by TypeSafe Jev",
+  "name": "interlock-gate",
+  "version": "0.2.0",
+  "description": "A 100 ms judgment before irreversible actions. Policy as Question Packs, decisions as Audit Vectors, sensor pluggable (TypeSafe Jev, any OpenAI-compatible LLM, or rules only).",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Dhruv123-123/jevvingaround.git",
+    "directory": "interlock"
+  },
+  "homepage": "https://github.com/Dhruv123-123/jevvingaround/tree/main/interlock#readme",
+  "bugs": "https://github.com/Dhruv123-123/jevvingaround/issues",
+  "keywords": [
+    "jev",
+    "typesafe",
+    "guardrails",
+    "mcp",
+    "pre-push",
+    "shell",
+    "policy",
+    "audit",
+    "system-one"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "private": false,
   "type": "module",
   "bin": {
     "interlock": "dist/cli.js"
+  },
+  "files": [
+    "dist/cli.js",
+    "packs",
+    "schema",
+    "docs",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
     "build": "node scripts/build.mjs",
@@ -16,7 +50,11 @@
     "test": "npm run gen && vitest run",
     "test:e2e": "npm run build:test && node --test --test-concurrency=1 test/e2e.mjs",
     "bench": "node --import tsx scripts/bench.ts",
-    "mock": "node scripts/mock-jev.mjs"
+    "mock": "node scripts/mock-jev.mjs",
+    "prepublishOnly": "npm run typecheck && npm test && npm run build"
+  },
+  "dependencies": {
+    "yaml": "^2.9.1"
   },
   "devDependencies": {
     "@types/chrome": "^0.3.0",
@@ -26,8 +64,5 @@
     "tsx": "^4.20.0",
     "typescript": "^7.0.2",
     "vitest": "^5.0.1"
-  },
-  "dependencies": {
-    "yaml": "^2.9.1"
   }
 }

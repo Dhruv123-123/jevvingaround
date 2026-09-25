@@ -11,7 +11,7 @@ The two things worth copying are the formats:
 - **[Question Packs](docs/packs.md)** — policy as typed questions with thresholds, hard rules, and *tests*. A YAML file in your repo, validated by a [schema](schema/pack.schema.json), run in CI.
 - **[Audit Vectors](docs/audit.md)** — every decision as a named probability vector plus what happened next. No content, only hashes. The only record from which precision and recall can be computed.
 
-The runtime proves them across six surfaces. The sensor is pluggable: [TypeSafe Jev](https://typesafe.ai) today, `none` (rules only) for CI, anything else behind one interface.
+The runtime proves them across six surfaces. The sensor is pluggable ([docs/sensors.md](docs/sensors.md)): [TypeSafe Jev](https://typesafe.ai) for calibrated ~100 ms answers, `llm` for any OpenAI-compatible endpoint so the latency and calibration gap is measured rather than asserted, `none` (rules only) for CI.
 
 ```
 surface adapter → state compiler → pack → sensor → policy → verdict → audit line
@@ -21,11 +21,12 @@ surface adapter → state compiler → pack → sensor → policy → verdict �
 ## Try it
 
 ```bash
-npm install && npm run build && npm link
+npm i -g interlock-gate                           # or from a checkout: npm install && npm run build && npm link
 interlock packs                                   # the six built-in packs
 interlock eval agent --sensor none                # rules-only cases pass without a key
 export JEV_API_KEY=…                              # or: interlock config --key …
 interlock eval agent shell git-push --sensor jev  # pass/fail, calibration per question, p50/p95 latency, $/eval
+LLM_MODEL=gpt-4o-mini LLM_API_KEY=… interlock eval agent --sensor llm   # the same tests through a chat model
 ```
 
 Then put a gate somewhere real:
@@ -36,11 +37,20 @@ interlock install-hooks                # git push, via pre-push
 interlock mcp --task "Refactor auth" -- npx -y @modelcontextprotocol/server-filesystem .   # any MCP server
 interlock log                          # what was judged, what happened, who did it (human or agent)
 interlock recall                       # regret events in your git/shell history, joined to decisions
+interlock recall --mbox ~/Takeout/Mail/Sent.mbox --slack-export ~/slack-export --self me@x.com
 ```
 
-For agents, drop the `mcp` line into `claude_desktop_config.json` / `.mcp.json` as the server's `command`. A
-`confirm` comes back to the agent as an `isError` result naming the reasons and asking it to re-issue the call
-with `"_interlock_justification": "…"`; that sentence lands in the audit log next to the noul vector.
+In CI, run your own packs' tests with the action:
+
+```yaml
+- uses: Dhruv123-123/jevvingaround/interlock/action@main
+  with: { packs: "deploy-policy", packs-dir: ".interlock", sensor: none }
+```
+
+For agents, drop the `mcp` line into `.mcp.json` / `claude_desktop_config.json` as the server's `command`
+([docs/agents.md](docs/agents.md)). A `confirm` comes back to the agent as an `isError` result naming the reasons
+and asking it to re-issue the call with `"_interlock_justification": "…"`; that sentence lands in the audit log
+next to the noul vector.
 
 ## Surfaces
 
@@ -50,7 +60,7 @@ with `"_interlock_justification": "…"`; that sentence lands in the audit log n
 | Shell | zsh `accept-line` widget / bash `DEBUG` trap; only risky verbs reach a sensor | `shell` | open |
 | git push | `pre-push` | `git-push` | open |
 | Payments / AP | HTTP gate (`interlock payment-server`) | `payment` | **closed** |
-| Gmail, Slack web | browser extension in `src/ext/` — a demo of the runtime, best-effort | `email`, `slack` | open |
+| Gmail, Slack web | browser extension (`npm run build` → `dist-extension/`, load unpacked) — a demo of the runtime, best-effort | `email`, `slack` | open |
 
 ## What the numbers mean
 
@@ -60,8 +70,10 @@ p50/p95 latency and mean cost per evaluation for the sensor used. Model-dependen
 `--sensor none` and reported as such. Publish the misses; that is what makes the good numbers believable.
 
 `interlock recall` looks for regret in local history (a revert or force-push within an hour of a push, the same
-risky command re-run with one token changed, an agent asked three times for the same call), writes them as
-`regret` records, and reports how many of the regrets that passed through a gate were at hold or above.
+risky command re-run with one token changed, an agent asked three times for the same call) and in exports (a
+"sorry, wrong attachment" follow-up within 15 min in a Takeout mbox; a Slack message edited within 60 s or
+followed by "wrong channel"), writes them as `regret` records, and reports how many of the regrets that passed
+through a gate were at hold or above.
 
 ## Design rules the code follows
 
@@ -79,19 +91,21 @@ packs/            the six built-in Question Packs (YAML, with tests)
 schema/           JSON Schema for packs and audit vectors
 src/core/         engine: policy ladder, speculation cache, hashing, email compiler
 src/pack/         pack loader (extends, validation, the __which convention), settings overlay
-src/sensors/      Sensor interface; jev and none implementations
+src/sensors/      Sensor interface; jev, llm (OpenAI-compatible) and none implementations
+action/           composite GitHub Action: run your packs' tests in CI
 src/node/         config, JSONL audit, per-surface budget, runGate
 src/surfaces/     agent (compiler + MCP proxy), shell, git, slack, payment compilers
 src/cli/          interlock: config, packs, eval, recall, mcp, shell, git-push, install-hooks, payment-server, log
 src/ext/          the Gmail/Slack extension (imports the generated packs)
-test/             61 unit tests + 11 Chromium e2e scenarios; mock sensor in scripts/mock-jev.mjs
+test/             unit tests + 11 Chromium e2e scenarios; mock sensor in scripts/mock-jev.mjs
 ```
 
 ## Caveats, on purpose
 
 - Calibration is published as measured. Some nuanced questions (`contradicts_thread`, `wrong_context_for_intent`) may not be well calibrated; the eval exists to find out.
 - Gmail/Slack DOMs are obfuscated and move; the extension is a demo of the runtime, not a deliverable.
-- Email and Slack recall detectors need an export and are not implemented yet.
+- The email and Slack recall detectors read exports, so they see what you sent, not what you deleted.
+- The `llm` sensor's probabilities are numbers a chat model wrote. That is the point of comparing it.
 - Draft text goes to a hosted sensor. Redaction reduces what leaves; it does not make it zero.
 - Passing the gate ≠ safe. It catches regret-shaped mistakes.
 - Not built: clinical order entry. It needs a partner and a regulatory path.
