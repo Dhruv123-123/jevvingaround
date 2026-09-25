@@ -1,0 +1,11 @@
+# docker compose up  → watch Jev play 2048 at http://localhost:8080 with no hardware at all.
+# For a phone: DEVICE=adb://<phone-ip>:5555 docker compose run --service-ports anygame play clash-royale
+services:
+  anygame:
+    build: .
+    image: ghcr.io/dhruv123-123/anygame
+    ports: ["8080:8080"]
+    environment:
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+      DEVICE: ${DEVICE:-web://games/2048.html}
+    command: ["play", "${PACK:-2048}", "--device", "${DEVICE:-web://games/2048.html}", "--hold"]

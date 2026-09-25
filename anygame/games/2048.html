@@ -1,0 +1,70 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>2048</title>
+<style>
+  html,body{margin:0;background:#faf8ef;font-family:"Helvetica Neue",Arial,sans-serif;-webkit-user-select:none;user-select:none;touch-action:none}
+  #wrap{width:540px;margin:0 auto;padding:16px 0}
+  h1{margin:0 0 4px;font-size:48px;color:#776e65}
+  #scorebox{position:absolute;right:40px;top:26px;background:#bbada0;color:#fff;border-radius:6px;padding:8px 18px;font-weight:700;font-size:26px;min-width:90px;text-align:center}
+  #board{position:relative;width:500px;height:500px;background:#bbada0;border-radius:8px;margin:70px auto 0;padding:10px;box-sizing:border-box}
+  .cell{position:absolute;width:110px;height:110px;border-radius:5px;background:#cdc1b4}
+  .tile{position:absolute;width:110px;height:110px;border-radius:5px;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:54px;color:#776e65;background:#eee4da}
+  .t2{background:#eee4da}.t4{background:#ede0c8}.t8{background:#f2b179;color:#f9f6f2}.t16{background:#f59563;color:#f9f6f2}
+  .t32{background:#f67c5f;color:#f9f6f2}.t64{background:#f65e3b;color:#f9f6f2}.t128{background:#edcf72;color:#f9f6f2;font-size:46px}
+  .t256{background:#edcc61;color:#f9f6f2;font-size:46px}.t512{background:#edc850;color:#f9f6f2;font-size:46px}
+  .t1024{background:#edc53f;color:#f9f6f2;font-size:38px}.t2048{background:#edc22e;color:#f9f6f2;font-size:38px}
+  #over{position:absolute;inset:0;display:none;align-items:center;justify-content:center;background:rgba(238,228,218,.8);font-size:56px;font-weight:700;color:#776e65;border-radius:8px}
+</style></head><body>
+<div id="wrap"><h1>2048</h1><div id="scorebox"><span id="score">0</span></div>
+<div id="board"><div id="over">Game over</div></div></div>
+<script>
+(() => {
+  const q = new URLSearchParams(location.search);
+  let seed = Number(q.get("seed") || 42);
+  const rnd = () => { seed = (seed * 1664525 + 1013904223) % 4294967296; return seed / 4294967296; };
+  let grid = Array(16).fill(0), score = 0, over = false;
+  const boardEl = document.getElementById("board"), scoreEl = document.getElementById("score"), overEl = document.getElementById("over");
+  for (let i = 0; i < 16; i++) { const c = document.createElement("div"); c.className = "cell"; c.style.left = (10 + (i % 4) * 120) + "px"; c.style.top = (10 + Math.floor(i / 4) * 120) + "px"; boardEl.appendChild(c); }
+  const empties = () => grid.map((v, i) => v ? -1 : i).filter(i => i >= 0);
+  const spawn = () => { const e = empties(); if (!e.length) return; grid[e[Math.floor(rnd() * e.length)]] = rnd() < 0.9 ? 2 : 4; };
+  const render = () => {
+    boardEl.querySelectorAll(".tile").forEach(t => t.remove());
+    grid.forEach((v, i) => { if (!v) return; const t = document.createElement("div"); t.className = "tile t" + v; t.textContent = v; t.style.left = (10 + (i % 4) * 120) + "px"; t.style.top = (10 + Math.floor(i / 4) * 120) + "px"; boardEl.appendChild(t); });
+    scoreEl.textContent = String(score);
+    overEl.style.display = over ? "flex" : "none";
+  };
+  const slide = (row) => { const a = row.filter(v => v); const out = []; for (let i = 0; i < a.length; i++) { if (a[i] === a[i + 1]) { out.push(a[i] * 2); score += a[i] * 2; i++; } else out.push(a[i]); } while (out.length < 4) out.push(0); return out; };
+  const move = (dir) => {
+    if (over) return false;
+    const before = grid.join(",");
+    const g = [...grid];
+    const get = (r, c) => g[r * 4 + c], set = (r, c, v) => { g[r * 4 + c] = v; };
+    for (let k = 0; k < 4; k++) {
+      let line = [];
+      for (let m = 0; m < 4; m++) line.push(dir === "left" ? get(k, m) : dir === "right" ? get(k, 3 - m) : dir === "up" ? get(m, k) : get(3 - m, k));
+      line = slide(line);
+      for (let m = 0; m < 4; m++) { const v = line[m]; if (dir === "left") set(k, m, v); else if (dir === "right") set(k, 3 - m, v); else if (dir === "up") set(m, k, v); else set(3 - m, k, v); }
+    }
+    grid = g;
+    const moved = grid.join(",") !== before;
+    if (moved) spawn();
+    const canMove = empties().length > 0 || grid.some((v, i) => (i % 4 < 3 && v === grid[i + 1]) || (i < 12 && v === grid[i + 4]));
+    over = !canMove;
+    render();
+    return moved;
+  };
+  const preset = q.get("board");
+  if (preset) grid = preset.split(",").map(Number); else { spawn(); spawn(); }
+  render();
+  window.__state = () => ({ grid: [...grid], score, over });
+  window.__move = move;
+  document.addEventListener("keydown", (e) => { const m = { ArrowLeft: "left", ArrowRight: "right", ArrowUp: "up", ArrowDown: "down" }[e.key]; if (m) { e.preventDefault(); move(m); } });
+  // swipes: mouse and touch, so a generic "swipe" action from any device backend works
+  let start = null;
+  const down = (x, y) => { start = [x, y]; };
+  const up = (x, y) => { if (!start) return; const dx = x - start[0], dy = y - start[1]; start = null; if (Math.max(Math.abs(dx), Math.abs(dy)) < 20) return; move(Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? "right" : "left") : (dy > 0 ? "down" : "up")); };
+  document.addEventListener("mousedown", (e) => down(e.clientX, e.clientY));
+  document.addEventListener("mouseup", (e) => up(e.clientX, e.clientY));
+  document.addEventListener("touchstart", (e) => down(e.touches[0].clientX, e.touches[0].clientY), { passive: true });
+  document.addEventListener("touchend", (e) => up(e.changedTouches[0].clientX, e.changedTouches[0].clientY));
+})();
+</script></body></html>

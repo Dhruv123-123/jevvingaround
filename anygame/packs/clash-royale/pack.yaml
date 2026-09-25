@@ -1,0 +1,52 @@
+game: clash-royale
+screen: { orientation: portrait, size: [1080, 2400] }     # author on your phone's resolution; zones are normalized so it scales
+zones:
+  arena:      { rect: [0.03, 0.14, 0.97, 0.78], grid: [6, 9] }   # 6 columns × 9 rows; rows 1-4 enemy half, 6-9 ours, row 5 the river
+  hand:       { rect: [0.17, 0.865, 0.97, 0.965], grid: [4, 1] }
+  next_card:  { rect: [0.03, 0.90, 0.14, 0.96] }
+  elixir_bar: { rect: [0.17, 0.972, 0.97, 0.985] }
+  timer:      { rect: [0.72, 0.04, 0.96, 0.08] }
+  enemy_towers: { rect: [0.03, 0.14, 0.97, 0.40] }
+  our_towers:   { rect: [0.03, 0.55, 0.97, 0.78] }
+read:
+  screen:  { kind: color, rect: [0.17, 0.972, 0.97, 0.985], options: { battle: "#e83e8c", menu: "#3b6fd9" }, max_dist: 150, otherwise: other }
+  elixir:  { kind: bar, zone: elixir_bar, color: "#e83e8c", tol: 45, scale: 10, step: 1 }
+  hand:    { kind: templates, zone: hand, assets: "cards/*.png", threshold: 0.55 }        # paste 1 crop per card in cards/<name>.png
+  next:    { kind: templates, zone: next_card, assets: "cards/*.png", threshold: 0.5 }
+  timer:   { kind: ocr, zone: timer, every: 3 }
+  units:   { kind: blobs, zone: arena, colors: { enemy: "#e2402c", ally: "#2f7bf5" }, tol: 38, min_area: 120, max: 12 }   # health bars are red/blue
+  # optional, needs `pip install ultralytics` — names things instead of colours; blobs stay as the fallback
+  # units_named: { kind: vocab, zone: arena, prompts: [knight, archer, giant, hog rider, tower, skeleton], side_by_color: { ally: "#2f7bf5", enemy: "#e2402c" }, imgsz: 416 }
+act:
+  - { id: play_card, kind: play, slot: hand, target: arena, gesture: tap-tap, description: "tap a card in hand, then tap an arena cell" }
+  - { id: wait, description: "do nothing this tick (save elixir, watch)" }
+tick_hz: 3
+play: >
+  Two-lane tower defense on a 6x9 arena grid (columns c1-c6, rows r1-r9; r1 is the enemy king tower row, r5 is
+  the river, r9 is our king tower row; the left lane is c1-c3, the right lane is c4-c6). Cards cost elixir
+  (1-9); elixir refills at about 1 per 2.8 seconds. Play defensively: respond to the lane the enemy commits
+  units to, placing troops in our half (r6-r8) between their units and our tower, and counter-push in the other
+  lane once the defence is done. Never play a card when no enemy unit is on the board unless elixir is 10.
+  Keep at least 2-3 elixir in reserve. Cheap cycle cards go down before expensive ones. Big tanks (giant,
+  golem) go behind our king tower at r9 when elixir is 10.
+questions:
+  - id: enemy_committing_left
+    type: noul
+    instructions: Are enemy units moving down the left lane (columns c1-c3) toward our towers?
+    criteria: { true: "One or more enemy units in c1-c3 at row r5 or below.", false: "No enemy presence in the left lane on our side." }
+  - id: enemy_committing_right
+    type: noul
+    instructions: Are enemy units moving down the right lane (columns c4-c6) toward our towers?
+    criteria: { true: "One or more enemy units in c4-c6 at row r5 or below.", false: "No enemy presence in the right lane on our side." }
+  - id: should_hold
+    type: noul
+    instructions: Given elixir, the hand, and the board, is holding this tick better than playing anything?
+    criteria: { true: "Nothing threatens us and elixir is not full, or the hand has no card that answers the threat yet.", false: "There is a threat we can answer now, or elixir is 10 and waiting wastes it." }
+  - id: threat_level
+    type: score
+    instructions: How dangerous is the enemy push right now?
+    criteria: ["nothing on the board", "a cheap unit or two, towers can handle it", "a real push that needs an answer", "a big push at our tower", "we are about to lose a tower"]
+tests:
+  # Replace with frames from your phone: `anygame record --device adb://<ip>:5555 --out packs/clash-royale/fixtures --pack clash-royale`
+  - frame: fixtures/README-placeholder.png
+    expect: { screen: other }

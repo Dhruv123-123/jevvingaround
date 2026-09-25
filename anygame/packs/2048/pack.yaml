@@ -1,0 +1,48 @@
+game: "2048"
+screen: { orientation: portrait, size: [540, 700] }
+zones:
+  board: { rect: [0.037, 0.2, 0.963, 0.914], grid: [4, 4] }   # the 500x500 board sits at (20,140) on a 540x700 frame
+  score: { rect: [0.69, 0.035, 0.93, 0.105] }
+read:
+  # every tile value has its own background colour, so the board is a colour read, not OCR: ~1 ms instead of ~3 s
+  tiles: { kind: color, zone: board, parse: int, empty: 0, inset: 0.3, max_dist: 45, otherwise: "0",
+           options: { "0": "#cdc1b4", "2": "#eee4da", "4": "#ede0c8", "8": "#f2b179", "16": "#f59563", "32": "#f67c5f", "64": "#f65e3b", "128": "#edcf72", "256": "#edcc61", "512": "#edc850", "1024": "#edc53f", "2048": "#edc22e" } }
+  score: { kind: ocr, zone: score, parse: int, every: 5 }
+  # the gap between two rows is board-coloured while playing and washed out under the game-over overlay
+  over:  { kind: color, rect: [0.1, 0.373, 0.9, 0.384], options: { playing: "#bbada0", over: "#e4d9ce" }, max_dist: 80, otherwise: playing }
+act:
+  - { id: up,    kind: swipe, zone: board, dir: up }
+  - { id: down,  kind: swipe, zone: board, dir: down }
+  - { id: left,  kind: swipe, zone: board, dir: left }
+  - { id: right, kind: swipe, zone: board, dir: right }
+tick_hz: 3
+stop_when: { read: over, equals: over }
+play: >
+  2048 on a 4x4 grid. A swipe slides every tile as far as it goes in that direction; two tiles with the
+  same number that collide merge into one with double the number. Keep the largest tile in one corner
+  (bottom-right), build a monotone chain along the bottom row, and avoid the swipe that lifts the big
+  tile out of its corner. Prefer moves that merge; among merges prefer ones that keep the bottom row
+  full. Never swipe up unless nothing else changes the board.
+questions:
+  - id: corner_at_risk
+    type: noul
+    instructions: Would the most natural merging move lift the largest tile out of the bottom-right corner?
+    criteria: { true: "The best-looking merge requires moving the largest tile away from its corner.", false: "The largest tile stays anchored whatever the good moves are." }
+  - id: board_nearly_full
+    type: noul
+    instructions: Are fewer than 4 cells empty?
+    criteria: { true: "Three or fewer zeros in the grid.", false: "Four or more zeros." }
+  - id: action
+    type: choice
+    instructions: Which swipe now? Consider merges available in each direction and the corner strategy in the play notes.
+    criteria: { up: "slide all tiles up", down: "slide all tiles down", left: "slide all tiles left", right: "slide all tiles right" }
+tests:
+  - frame: fixtures/board-a.png
+    expect:
+      tiles: { c1r1: 2, c2r1: 0, c3r1: 0, c4r1: 0, c1r2: 0, c2r2: 4, c3r2: 0, c4r2: 0, c1r3: 0, c2r3: 0, c3r3: 8, c4r3: 2, c1r4: 16, c2r4: 32, c3r4: 64, c4r4: 128 }
+      score: 512
+      over: playing
+    expect_action: { not: [up] }
+    requires_sensor: true
+  - frame: fixtures/board-over.png
+    expect: { over: over }
