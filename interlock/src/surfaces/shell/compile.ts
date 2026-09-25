@@ -48,7 +48,8 @@ const RISKY = [
   /\bdocker\s+(rm|rmi|system\s+prune|volume\s+(rm|prune)|compose\s+down\s+.*-v)\b/,
   /\b(psql|mysql|mongosh?|sqlite3|redis-cli)\b.*\s(-c|-e|--command|--eval|FLUSHALL|flushall)\b/,
   /\b(DROP|TRUNCATE|DELETE\s+FROM|ALTER)\s+(TABLE|DATABASE|SCHEMA|INDEX)?/i,
-  /\b(curl|wget)\b.*(-X\s*(POST|PUT|DELETE|PATCH)|--data|-d\s|\|\s*(ba)?sh\b)/,
+  // `| sudo sh`, `| bash -s`, `| zsh` all count; the live demo caught `| sudo sh` slipping past the older pattern
+  /\b(curl|wget)\b.*(-X\s*(POST|PUT|DELETE|PATCH)|--data|-d\s|\|\s*(sudo\s+(-E\s+)?)?(ba|z|da)?sh\b)/,
   /\b(chmod|chown)\s+-[a-zA-Z]*R/,
   /\b(dd\s+.*of=|mkfs|fdisk|parted|wipefs)\b/,
   /\b(shutdown|reboot|halt|poweroff)\b/,

@@ -99,6 +99,11 @@ async function countdown(seconds: number): Promise<boolean> {
   return !aborted;
 }
 
+/** Say once per process when no model is configured, so rules-only never passes for protection. */
+function warnIfRulesOnly(sensorName: string): void {
+  if (sensorName === "none" && !process.env.INTERLOCK_QUIET) err(dim("interlock: no sensor key configured — rules only. Set OPENROUTER_API_KEY or JEV_API_KEY, or INTERLOCK_QUIET=1 to hide this."));
+}
+
 /** Shared interactive verdict handling for shell and git. Returns the exit code. */
 async function interactive<S>(surface: Surface, g: GateOutput<S>, holdSeconds: number, cap: number): Promise<number> {
   const ev: Evaluation<S> = g.evaluation;
@@ -210,7 +215,9 @@ async function main(): Promise<number> {
     if (!line.trim()) return 0;
     if (!isInteresting(line)) return 0; // ~0 ms: no network for ordinary commands
     const state = compileShellState({ command: line, cwd: process.cwd(), home: homedir(), env: process.env, gitBranch: gitBranch(process.cwd()), kubeContext: kubeContext() });
-    const g = await runGate({ surface: "shell", state, pack: pack("shell"), sensor: sensorFor(settings, flag("--sensor")), l0Flags: state.l0_flags, settings });
+    const sensor = sensorFor(settings, flag("--sensor"));
+    warnIfRulesOnly(sensor.name);
+    const g = await runGate({ surface: "shell", state, pack: pack("shell"), sensor, l0Flags: state.l0_flags, settings });
     if (cmd === "allow") {
       record("shell", g.evaluation, "overridden", { pack: g.pack, sensor: g.sensor, actor: "human", costUsd: g.costUsd, cap: settings.interruptBudgetPerDay }, "interlock allow");
       err(dim("interlock: allowed once (logged)"));
@@ -226,7 +233,9 @@ async function main(): Promise<number> {
     const refs = parsePushStdin(stdin);
     if (!refs.length) return 0;
     const state = compileGitPushState({ remoteName, remoteUrl, refs, cwd: process.cwd() });
-    const g = await runGate({ surface: "git", state, pack: pack("git-push"), sensor: sensorFor(settings, flag("--sensor")), l0Flags: state.l0_flags, settings });
+    const sensor = sensorFor(settings, flag("--sensor"));
+    warnIfRulesOnly(sensor.name);
+    const g = await runGate({ surface: "git", state, pack: pack("git-push"), sensor, l0Flags: state.l0_flags, settings });
     return interactive("git", g, 5, settings.interruptBudgetPerDay);
   }
 
@@ -247,7 +256,9 @@ async function main(): Promise<number> {
     const sep = argv.indexOf("--");
     if (sep < 0 || !argv[sep + 1]) usage();
     const task = flag("--task") ?? process.env.INTERLOCK_TASK;
-    startProxy({ command: argv[sep + 1]!, args: argv.slice(sep + 2), settings, task, pack: pack(flag("--pack") ?? "agent"), sensor: sensorFor(settings, flag("--sensor")), allowOverride: argv.includes("--allow-override") || process.env.INTERLOCK_ALLOW_OVERRIDE === "1" });
+    const sensor = sensorFor(settings, flag("--sensor"));
+    warnIfRulesOnly(sensor.name);
+    startProxy({ command: argv[sep + 1]!, args: argv.slice(sep + 2), settings, task, pack: pack(flag("--pack") ?? "agent"), sensor, allowOverride: argv.includes("--allow-override") || process.env.INTERLOCK_ALLOW_OVERRIDE === "1" });
     return new Promise(() => { /* runs until the server exits */ });
   }
 
