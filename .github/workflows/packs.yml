@@ -1,5 +1,7 @@
 name: packs
-on: [push, pull_request]
+on:
+  push: { branches: [main], paths: ["interlock/**", ".github/workflows/packs.yml"] }
+  pull_request: { paths: ["interlock/**", ".github/workflows/packs.yml"] }
 jobs:
   eval:
     runs-on: ubuntu-latest
