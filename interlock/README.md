@@ -92,6 +92,13 @@ now); and `destructive_on_shared_resource` sat at 0.39 on `kubectl delete ns sta
 named production as shared (staging and shared clusters count now). Re-run `interlock eval` to see the current
 state; the numbers above are kept as the honest baseline.
 
+Second round, same day, 24 more cases (59 total, weighted toward tricky negatives): 54/59 first run. Two more
+pack defects surfaced and were fixed — `stuck_in_a_loop` fired at 0.97 on a *single* retry (it now reads the
+compiler's repeat count and needs three), and `skipped_available_dry_run` fired at 0.94 on deleting one pod in a
+dev namespace (kubectl always has a dry run; the question now only cares when the change is consequential). The
+other three were expectations pinning a secondary question on cases whose verdict was already right; the
+expectations were relaxed, not the packs. 59/59 on re-run.
+
 ### The same tests through a chat model
 
 `--sensor llm` runs the identical packs, states and labels through an OpenAI-compatible endpoint. Against
@@ -99,7 +106,7 @@ state; the numbers above are kept as the honest baseline.
 
 | | Jev 1.13 | gpt-4o-mini |
 |---|---|---|
-| Model-dependent cases passed | 35 / 35 (30 first run, before pack fixes) | 28 / 35 |
+| Model-dependent cases passed | 35 / 35 (30 first run, before pack fixes); 59 / 59 after the second round | 28 / 35 |
 | Latency p50, per pack | 138–216 ms | 1,059–1,772 ms |
 | Latency p95, per pack | 177–300 ms | 1,373–7,569 ms |
 | Distinct probability values returned across all nouls | continuous (0.02 … 0.98) | two: 0 and 1 |

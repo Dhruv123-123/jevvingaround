@@ -38,10 +38,10 @@ questions:
     weight: 1.0
   - id: unrelated_changes_bundled
     type: noul
-    instructions: The push mixes unrelated changes that should be separate (feature + infra + formatting + dependency bumps).
+    instructions: The push mixes unrelated changes that should be separate, e.g. a feature plus a repo-wide reformat, a binary asset, a config change, or a dependency bump in one commit. Large insertions and deletions in equal measure across many files usually mean a reformat.
     criteria:
-      true: Files span several unrelated areas and the commits don't separate them.
-      false: Changes are cohesive or clearly separated by commit.
+      true: Files or hunks span several unrelated kinds of change and the commits don't separate them.
+      false: Changes are cohesive, or clearly separated by commit.
     thresholds: { nudge: 0.6, hold: 0.85 }
     reason: "Unrelated changes are bundled ({p}%)"
     weight: 0.5
@@ -99,4 +99,21 @@ tests:
   - name: CI workflow rewritten under a 'bump deps' subject
     state: { action: git.push, remote: origin, branch: main, protected_branch: true, is_force: false, is_delete: false, is_new_branch: false, commits: ["bump deps"], commit_count: 1, files: ["M .github/workflows/ci.yml", "M package-lock.json"], files_changed: 2, insertions: 60, deletions: 45, facts: { migration_files: [], destructive_migration_ops: [], tests_disabled_lines: [], test_files_deleted: [], ci_config_changed: [".github/workflows/ci.yml"], infra_files_changed: [], lockfile_changed_without_manifest: true, large_files_added: [], subjects_look_like_wip: false }, key_hunks: ["-    - run: npm test", "+    - run: echo skipping tests"], local_time: "Wed 15h", l0_flags: [] }
     expect: { level: [confirm, block], fires: [infra_change_unmentioned, disables_tests_or_checks] }
+    requires_sensor: true
+
+  - name: feature branch with tests added
+    state: { action: git.push, remote: origin, branch: feature/retry-backoff, protected_branch: false, is_force: false, is_delete: false, is_new_branch: true, commits: ["Add exponential backoff to the HTTP client", "Test backoff schedule"], commit_count: 2, files: ["M src/http.ts", "A test/http.test.ts"], files_changed: 2, insertions: 88, deletions: 6, facts: { migration_files: [], destructive_migration_ops: [], tests_disabled_lines: [], test_files_deleted: [], ci_config_changed: [], infra_files_changed: [], lockfile_changed_without_manifest: false, large_files_added: [], subjects_look_like_wip: false }, key_hunks: [], local_time: "Tue 11h", l0_flags: [] }
+    expect: { level: proceed, not_fires: [disables_tests_or_checks, commit_message_contradicts_diff, not_ready_to_share] }
+    requires_sensor: true
+  - name: hotfix to a release branch in working hours
+    state: { action: git.push, remote: origin, branch: release/2.4, protected_branch: true, is_force: false, is_delete: false, is_new_branch: false, commits: ["Hotfix: null check on empty cart (fixes #812)"], commit_count: 1, files: ["M src/cart.ts", "M test/cart.test.ts"], files_changed: 2, insertions: 9, deletions: 2, facts: { migration_files: [], destructive_migration_ops: [], tests_disabled_lines: [], test_files_deleted: [], ci_config_changed: [], infra_files_changed: [], lockfile_changed_without_manifest: false, large_files_added: [], subjects_look_like_wip: false }, key_hunks: [], local_time: "Tue 11h", l0_flags: [] }
+    expect: { level: [proceed, nudge], not_fires: [off_hours_to_protected, destructive_migration] }
+    requires_sensor: true
+  - name: a video and a reformat bundled into 'small fixes' on main
+    state: { action: git.push, remote: origin, branch: main, protected_branch: true, is_force: false, is_delete: false, is_new_branch: false, commits: ["small fixes"], commit_count: 1, files: ["A docs/demo.mp4", "M src/a.ts", "M src/b.ts", "M src/c.ts", "M src/d.ts", "M .prettierrc"], files_changed: 6, insertions: 1400, deletions: 1380, facts: { migration_files: [], destructive_migration_ops: [], tests_disabled_lines: [], test_files_deleted: [], ci_config_changed: [], infra_files_changed: [], lockfile_changed_without_manifest: false, large_files_added: ["docs/demo.mp4"], subjects_look_like_wip: false }, key_hunks: [], local_time: "Wed 15h", l0_flags: [] }
+    expect: { level: [nudge, hold, confirm], fires: [unrelated_changes_bundled] }
+    requires_sensor: true
+  - name: deleting a merged feature branch
+    state: { action: git.push, remote: origin, branch: feature/old-thing, protected_branch: false, is_force: false, is_delete: true, is_new_branch: false, commits: [], commit_count: 0, files: [], files_changed: 0, insertions: 0, deletions: 0, facts: { migration_files: [], destructive_migration_ops: [], tests_disabled_lines: [], test_files_deleted: [], ci_config_changed: [], infra_files_changed: [], lockfile_changed_without_manifest: false, large_files_added: [], subjects_look_like_wip: false }, key_hunks: [], local_time: "Tue 11h", l0_flags: [] }
+    expect: { level: [proceed, nudge], not_fires: [destructive_migration, disables_tests_or_checks] }
     requires_sensor: true

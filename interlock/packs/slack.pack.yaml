@@ -109,3 +109,20 @@ tests:
     state: { action: slack.send, channel: { name: "#random", kind: channel, memberCount: 400, isPrivate: null, isSharedExternal: null, member_count_bucket: "100+" }, message: { text_head: "honestly Mark's review comments are useless, he clearly didn't read the PR", text_chars: 72, broadcast_mentions: [], user_mentions: 0, has_attachment: false, has_code_block: false, external_links: [], has_placeholders: false }, recent: [], sender_context: { local_time: "Thu 18h", draft_age: "<30s", deletions_ratio: 0.3, name: Me }, l0_flags: [] }
     expect: { level: [hold, confirm], fires: [names_person_negatively, screenshot_bait] }
     requires_sensor: true
+
+  - name: DM asking for time off
+    state: { action: slack.send, channel: { name: "Priya", kind: dm, memberCount: 2, isPrivate: null, isSharedExternal: null, member_count_bucket: "2-5" }, message: { text_head: "hey, would it be ok if I took next Friday off? I'll have the release notes done Thursday", text_chars: 86, broadcast_mentions: [], user_mentions: 0, has_attachment: false, has_code_block: false, external_links: [], has_placeholders: false }, recent: [], sender_context: { local_time: "Tue 10h", draft_age: "<30s", deletions_ratio: 0, name: Me }, l0_flags: [] }
+    expect: { level: proceed, not_fires: [wrong_channel, hostile_tone, screenshot_bait] }
+    requires_sensor: true
+  - name: "@here for a coffee run in a 400-person channel"
+    state: { action: slack.send, channel: { name: "#general", kind: channel, memberCount: 412, isPrivate: null, isSharedExternal: null, member_count_bucket: "100+" }, message: { text_head: "@here anyone want anything from the coffee place? going in 5", text_chars: 60, broadcast_mentions: ["@here"], user_mentions: 0, has_attachment: false, has_code_block: false, external_links: [], has_placeholders: false }, recent: [], sender_context: { local_time: "Wed 15h", draft_age: "<30s", deletions_ratio: 0, name: Me }, l0_flags: [broadcast_to_large_channel] }
+    expect: { level: [confirm, block], fires: [broadcast_unneeded] }
+    requires_sensor: true
+  - name: salary numbers in #random
+    state: { action: slack.send, channel: { name: "#random", kind: channel, memberCount: 380, isPrivate: null, isSharedExternal: null, member_count_bucket: "100+" }, message: { text_head: "lol just saw the new grad offers are 145k base, more than half the seniors here make", text_chars: 84, broadcast_mentions: [], user_mentions: 0, has_attachment: false, has_code_block: false, external_links: [], has_placeholders: false }, recent: [], sender_context: { local_time: "Thu 17h", draft_age: "<30s", deletions_ratio: 0, name: Me }, l0_flags: [] }
+    expect: { level: [hold, confirm], fires: [screenshot_bait] }
+    requires_sensor: true
+  - name: placeholder left in a message
+    state: { action: slack.send, channel: { name: "#eng-general", kind: channel, memberCount: 128, isPrivate: null, isSharedExternal: null, member_count_bucket: "100+" }, message: { text_head: "Design review is at 3, doc is here: [link] — come with questions", text_chars: 63, broadcast_mentions: [], user_mentions: 0, has_attachment: false, has_code_block: false, external_links: [], has_placeholders: true }, recent: [], sender_context: { local_time: "Tue 10h", draft_age: "<30s", deletions_ratio: 0, name: Me }, l0_flags: [] }
+    expect: { level: [nudge, confirm], fires: [unfinished] }
+    requires_sensor: true

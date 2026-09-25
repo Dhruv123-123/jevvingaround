@@ -13,7 +13,7 @@ questions:
     instructions: "The command destroys or overwrites something other people or systems depend on: a shared branch, a namespace or environment others use (staging and dev clusters count when shared), a database, a shared volume, a deployed service."
     criteria:
       true: The target is plausibly used by other people or by running systems (production, staging, a shared cluster, a team branch, a database), and the operation deletes, resets, or overwrites it.
-      false: The target is local to this machine, personal (a scratch directory, the person's own branch), or the operation is read-only or additive.
+      false: The target is local to this machine, personal (a scratch directory, the person's own branch), a single ephemeral object such as one pod, an object in a dev namespace, or the operation is read-only or additive.
     thresholds: { nudge: 0.4, hold: 0.6, confirm: 0.75, block: 0.95 }
     reason: "This destroys something shared ({p}%)"
     weight: 1.4
@@ -28,10 +28,10 @@ questions:
     weight: 1.2
   - id: skipped_available_dry_run
     type: noul
-    instructions: The tool offers a dry-run or plan mode, the operation is consequential, and the command does not use it.
+    instructions: The tool offers a dry-run or plan mode, the operation is consequential (shared or production resources, or many of them), and the command does not use it. Deleting a single pod, or anything in a personal or dev namespace, is routine and not consequential.
     criteria:
-      true: A dry-run/plan/--check exists for this tool, the command changes state, and it is not used.
-      false: Dry-run is used, unavailable, or the command is trivial.
+      true: A dry-run/plan/--check exists for this tool, the command changes shared, production, or many resources, and it is not used.
+      false: Dry-run is used, unavailable, or the change is small and local (one pod, a dev namespace, a personal branch).
     thresholds: { nudge: 0.6, hold: 0.8 }
     reason: "There's a dry run you skipped ({p}%)"
     weight: 0.6
@@ -107,3 +107,19 @@ tests:
     expect: { level: [proceed, nudge] }
     requires_sensor: true
 
+  - name: docker prune on a laptop
+    state: { action: shell.command, command: "docker system prune -a", argv0: docker, subcommand: system, cwd: "~", git_branch: null, kube_context: docker-desktop, aws_profile: null, is_root: false, local_time: "Tue 14h", facts: { has_force_flag: false, has_recursive_flag: false, targets_root_or_home: false, mentions_prod: false, pipes_remote_to_shell: false, uses_sudo: false, dry_run_available: false, dry_run_used: false, glob_or_wildcard: false, context_mentions_prod: false }, l0_flags: [] }
+    expect: { level: [proceed, nudge, hold], not_fires: [destructive_on_shared_resource, wrong_context_for_intent] }
+    requires_sensor: true
+  - name: deleting one pod in the dev namespace with the dev context
+    state: { action: shell.command, command: "kubectl delete pod api-7f9c4 -n dev", argv0: kubectl, subcommand: delete, cwd: "~/svc", git_branch: feature/retry, kube_context: kind-dev, aws_profile: null, is_root: false, local_time: "Wed 11h", facts: { has_force_flag: false, has_recursive_flag: false, targets_root_or_home: false, mentions_prod: false, pipes_remote_to_shell: false, uses_sudo: false, dry_run_available: true, dry_run_used: false, glob_or_wildcard: false, context_mentions_prod: false }, l0_flags: [] }
+    expect: { level: [proceed, nudge], not_fires: [wrong_context_for_intent, affects_many_resources] }
+    requires_sensor: true
+  - name: terraform destroy with the prod profile
+    state: { action: shell.command, command: "terraform destroy -auto-approve", argv0: terraform, subcommand: destroy, cwd: "~/infra/prod", git_branch: main, kube_context: null, aws_profile: prod-admin, is_root: false, local_time: "Thu 16h", facts: { has_force_flag: false, has_recursive_flag: false, targets_root_or_home: false, mentions_prod: true, pipes_remote_to_shell: false, uses_sudo: false, dry_run_available: true, dry_run_used: false, glob_or_wildcard: false, context_mentions_prod: true }, l0_flags: [] }
+    expect: { level: [confirm, block], fires: [destructive_on_shared_resource] }
+    requires_sensor: true
+  - name: delete without a where clause on the prod database
+    state: { action: shell.command, command: "psql -h db.prod.internal -c 'DELETE FROM sessions'", argv0: psql, subcommand: null, cwd: "~", git_branch: null, kube_context: null, aws_profile: null, is_root: false, local_time: "Mon 09h", facts: { has_force_flag: false, has_recursive_flag: false, targets_root_or_home: false, mentions_prod: true, pipes_remote_to_shell: false, uses_sudo: false, dry_run_available: false, dry_run_used: false, glob_or_wildcard: false, context_mentions_prod: true }, l0_flags: [] }
+    expect: { level: [confirm, block], fires: [destructive_on_shared_resource] }
+    requires_sensor: true

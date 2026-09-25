@@ -2,6 +2,8 @@
 
 ## 0.2.0 — 2026-09-25
 
+- 59 pack test cases evaluated against Jev 1.13 (via OpenRouter) and against gpt-4o-mini; measured numbers and the defects the eval found are in the README.
+
 - Question Pack format (`packs/*.pack.yaml`, `schema/pack.schema.json`): policy as typed questions with thresholds, L0 rules, `extends`, and required tests.
 - Audit Vector v1 (`schema/audit.schema.json`): one JSON line per decision with pack, sensor, actor, outcome, cost, budget; `regret` records.
 - Sensor interface with `jev`, `llm` (any OpenAI-compatible chat endpoint with JSON output) and `none` implementations.
