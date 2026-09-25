@@ -16,7 +16,7 @@ export interface CaseResult {
   wrongFires: string[];
   nouls: Record<string, number>;
   latencyMs: number;
-  costUsd: number;
+  costUsd: number | null;
 }
 
 export interface CalibrationRow { id: string; buckets: Array<{ lo: number; hi: number; n: number; positives: number }>; labelled: number }
@@ -29,7 +29,8 @@ export interface EvalReport {
   failed: number;
   skipped: number;
   latency: { p50: number; p95: number; max: number };
-  meanCostUsd: number;
+  /** null when the sensor did not report a cost */
+  meanCostUsd: number | null;
   calibration: CalibrationRow[];
 }
 
@@ -42,7 +43,7 @@ export async function evalPack(pack: LoadedPack, sensor: Sensor): Promise<EvalRe
   for (const t of pack.tests) {
     const expected = Array.isArray(t.expect.level) ? t.expect.level : [t.expect.level];
     if (t.requires_sensor && sensor.name === "none") {
-      cases.push({ name: t.name, skipped: true, pass: true, level: "proceed", expected, fired: [], missingFires: [], wrongFires: [], nouls: {}, latencyMs: 0, costUsd: 0 });
+      cases.push({ name: t.name, skipped: true, pass: true, level: "proceed", expected, fired: [], missingFires: [], wrongFires: [], nouls: {}, latencyMs: 0, costUsd: null });
       continue;
     }
     const state = t.state as { l0_flags?: string[] };
@@ -55,7 +56,7 @@ export async function evalPack(pack: LoadedPack, sensor: Sensor): Promise<EvalRe
     for (const [id, a] of Object.entries(r.answers)) if ((a as Answer).type === "noul") nouls[id] = Math.round((a as { noul: number }).noul * 1000) / 1000;
     for (const id of t.expect.fires ?? []) if (id in nouls) push(labels, id, nouls[id]!, true);
     for (const id of t.expect.not_fires ?? []) if (id in nouls) push(labels, id, nouls[id]!, false);
-    cases.push({ name: t.name, skipped: false, pass: expected.includes(v.level) && !missing.length && !wrong.length, level: v.level, expected, fired, missingFires: missing, wrongFires: wrong, nouls, latencyMs: r.latencyMs, costUsd: r.costUsd ?? 0 });
+    cases.push({ name: t.name, skipped: false, pass: expected.includes(v.level) && !missing.length && !wrong.length, level: v.level, expected, fired, missingFires: missing, wrongFires: wrong, nouls, latencyMs: r.latencyMs, costUsd: r.costUsd ?? null });
   }
   const ran = cases.filter((c) => !c.skipped);
   const lat = ran.map((c) => c.latencyMs).sort((a, b) => a - b);
@@ -69,7 +70,7 @@ export async function evalPack(pack: LoadedPack, sensor: Sensor): Promise<EvalRe
     pack: `${pack.name}@${pack.version}`, sensor: sensor.name, cases,
     passed: ran.filter((c) => c.pass).length, failed: ran.filter((c) => !c.pass).length, skipped: cases.length - ran.length,
     latency: { p50: q(0.5), p95: q(0.95), max: lat[lat.length - 1] ?? 0 },
-    meanCostUsd: ran.length ? ran.reduce((s, c) => s + c.costUsd, 0) / ran.length : 0,
+    meanCostUsd: ran.length && ran.every((c) => c.costUsd !== null) ? ran.reduce((s, c) => s + (c.costUsd ?? 0), 0) / ran.length : null,
     calibration,
   };
 }
@@ -90,7 +91,7 @@ export function formatReport(r: EvalReport, opts: { color?: boolean } = {}): str
     if (!k.pass && !k.skipped) lines.push(c("2", `      expected ${k.expected.join("|")}; nouls ${Object.entries(k.nouls).filter(([, v]) => v >= 0.2).map(([id, v]) => `${id}=${v}`).join(" ") || "all < 0.2"}`));
   }
   if (r.sensor !== "none") {
-    lines.push(`  latency p50 ${r.latency.p50} ms  p95 ${r.latency.p95} ms  max ${r.latency.max} ms   mean cost $${r.meanCostUsd.toFixed(6)}/eval`);
+    lines.push(`  latency p50 ${r.latency.p50} ms  p95 ${r.latency.p95} ms  max ${r.latency.max} ms   mean cost ${r.meanCostUsd === null ? "n/a (sensor did not report)" : `$${r.meanCostUsd.toFixed(6)}/eval`}`);
     if (r.calibration.length) {
       lines.push(`  calibration (labelled cases only; bucket = predicted P, cell = true/n)`);
       lines.push(`  ${"noul".padEnd(30)} 0–.2   .2–.4  .4–.6  .6–.8  .8–1`);

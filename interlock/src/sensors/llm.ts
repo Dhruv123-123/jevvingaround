@@ -52,7 +52,7 @@ export function llmSensor(opts: LlmSensorOptions): Sensor {
         res = await fetchImpl(opts.baseUrl.replace(/\/+$/, "") + "/chat/completions", { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${opts.apiKey}` }, body: JSON.stringify(body), signal: ctl.signal });
       } finally { clearTimeout(timer); }
       if (!res.ok) throw new Error(`llm ${res.status}: ${(await res.text().catch(() => "")).slice(0, 200)}`);
-      const json = (await res.json()) as { choices?: Array<{ message?: { content?: string } }>; usage?: { prompt_tokens?: number } };
+      const json = (await res.json()) as { choices?: Array<{ message?: { content?: string } }>; usage?: { prompt_tokens?: number; cost?: number } };
       const text = json.choices?.[0]?.message?.content ?? "{}";
       let parsed: Record<string, unknown>;
       try { parsed = JSON.parse(text.replace(/^```(?:json)?\s*|\s*```$/g, "")); } catch { throw new Error(`llm returned non-JSON: ${text.slice(0, 120)}`); }
@@ -70,7 +70,8 @@ export function llmSensor(opts: LlmSensorOptions): Sensor {
           answers[id] = { type: "score", score: i, legend: Object.fromEntries(levels.map((l, k) => [String(k), l])), probabilities: {}, confidence: 0.5 };
         }
       }
-      return { answers, latencyMs: Math.round(performance.now() - t0), inputTokens: json.usage?.prompt_tokens ?? 0, model: opts.model };
+      // OpenRouter reports usage.cost; a bare OpenAI endpoint does not, and we do not guess a price list
+      return { answers, latencyMs: Math.round(performance.now() - t0), inputTokens: json.usage?.prompt_tokens ?? 0, costUsd: typeof json.usage?.cost === "number" ? json.usage.cost : undefined, model: opts.model };
     },
   };
 }

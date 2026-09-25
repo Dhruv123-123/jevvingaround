@@ -92,6 +92,23 @@ now); and `destructive_on_shared_resource` sat at 0.39 on `kubectl delete ns sta
 named production as shared (staging and shared clusters count now). Re-run `interlock eval` to see the current
 state; the numbers above are kept as the honest baseline.
 
+### The same tests through a chat model
+
+`--sensor llm` runs the identical packs, states and labels through an OpenAI-compatible endpoint. Against
+`openai/gpt-4o-mini` (also via OpenRouter, strict JSON output), same day:
+
+| | Jev 1.13 | gpt-4o-mini |
+|---|---|---|
+| Model-dependent cases passed | 35 / 35 (30 first run, before pack fixes) | 28 / 35 |
+| Latency p50, per pack | 138–216 ms | 1,059–1,772 ms |
+| Latency p95, per pack | 177–300 ms | 1,373–7,569 ms |
+| Distinct probability values returned across all nouls | continuous (0.02 … 0.98) | two: 0 and 1 |
+| Calibration | mislabelled cases sat at 0.3–0.5, i.e. it hedged where it was wrong | every miss was a confident 1.0: `commits_to_terms=1` on "sounds good, see you Monday", `justification_covers_anomaly=1` on a routine retainer |
+
+That last row is the point. A gate needs a number it can put a threshold on and a budget behind. A chat model
+returns a verdict dressed as a probability; the ladder, the hysteresis and the interrupt budget have nothing to
+work with. The latency row is why the gate can sit inside a click or a tool loop at all.
+
 ## What the numbers mean
 
 `interlock eval` prints, per pack: each case's rung and which questions fired; a calibration table per noul
