@@ -1,6 +1,6 @@
 name: packs
 on:
-  push: { branches: [main], paths: ["interlock/**", ".github/workflows/packs.yml"] }
+  push: { branches: [main, "claude/**"], paths: ["interlock/**", ".github/workflows/packs.yml"] }
   pull_request: { paths: ["interlock/**", ".github/workflows/packs.yml"] }
 jobs:
   eval:
