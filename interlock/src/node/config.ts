@@ -18,6 +18,12 @@ export function loadSettings(): Settings {
   const env = process.env;
   const s: Settings = { ...DEFAULT_SETTINGS, ...file };
   if (env.JEV_API_KEY) s.apiKey = env.JEV_API_KEY;
+  else if (env.OPENROUTER_API_KEY) {
+    // Jev through OpenRouter: same request shape, different host and model id
+    s.apiKey = env.OPENROUTER_API_KEY;
+    s.baseUrl = "https://openrouter.ai/api";
+    s.model = "typesafe/jev-1.13";
+  }
   if (env.JEV_BASE_URL) s.baseUrl = env.JEV_BASE_URL;
   if (env.JEV_MODEL) s.model = env.JEV_MODEL;
   if (env.INTERLOCK_FAIL_MODE === "open" || env.INTERLOCK_FAIL_MODE === "closed") s.failMode = env.INTERLOCK_FAIL_MODE;

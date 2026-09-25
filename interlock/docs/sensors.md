@@ -11,11 +11,21 @@ interface Sensor {
 
 | Sensor | Select with | Needs | What you get |
 |---|---|---|---|
-| `jev` | `--sensor jev` or `JEV_API_KEY` set | `JEV_API_KEY`, optionally `JEV_BASE_URL` (TypeSafe direct, `https://openrouter.ai/api`), `JEV_MODEL` | Calibrated probabilities from a non-autoregressive System One model, ~70–500 ms, input-only billing |
+| `jev` | `--sensor jev`, or automatic when a key is set | `JEV_API_KEY` (TypeSafe direct) **or** `OPENROUTER_API_KEY` (routes to `https://openrouter.ai/api`, model `typesafe/jev-1.13`); `JEV_BASE_URL` / `JEV_MODEL` override either | Calibrated probabilities from a non-autoregressive System One model. Measured from a proxied sandbox via OpenRouter: p50 ≈ 150–210 ms, p95 < 300 ms, ≈ $0.00005 per evaluation |
 | `llm` | `--sensor llm` | `LLM_MODEL`, `LLM_BASE_URL` (default OpenAI), `LLM_API_KEY` — any OpenAI-compatible chat endpoint incl. Ollama | The same questions answered as strict JSON by a chat model. The numbers it writes are not calibrated probabilities; the eval's calibration table shows what they are worth, and the latency column shows the gap. |
 | `none` | `--sensor none` | nothing | Every noul is 0. Only L0 rules fire. For CI without a key, and as the floor. |
 
 `interlock eval <pack> --sensor jev` and `--sensor llm` on the same pack is the comparison the project exists to
 make honestly: same states, same questions, same labels.
+
+## OpenRouter, specifically
+
+```bash
+export OPENROUTER_API_KEY=sk-or-…      # nothing else needed
+interlock eval agent --sensor jev
+```
+
+OpenRouter exposes TypeSafe's System One endpoint at `/api/v1/systemone` with the same request and response
+shape as the direct API, reports `usage.cost` per call (the audit log uses it), and needs no waitlist.
 
 To add a sensor: implement the interface in `src/sensors/<name>.ts`, register it in `src/sensors/index.ts`.

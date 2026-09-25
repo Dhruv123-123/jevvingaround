@@ -18,10 +18,10 @@ questions:
     weight: 1.0
   - id: missing_recipient
     type: noul
-    instructions: Someone who was part of the thread, or who the body clearly addresses or depends on, is not a recipient. Use the computed fact thread.participants_not_in_recipients; when it is empty and the body names nobody else, nobody is missing.
+    instructions: Someone who was part of the thread, or who the body clearly addresses or depends on, is not a recipient. Use the computed fact thread.participants_not_in_recipients. When thread is null (a new message, not a reply) or that list is empty, nobody is missing unless the body itself names a person who should receive it.
     criteria:
-      true: thread.participants_not_in_recipients lists someone, or the body names a person as needing this, and the omission looks accidental.
-      false: thread.participants_not_in_recipients is empty and the body names nobody else, or dropped participants are clearly deliberate.
+      true: thread.participants_not_in_recipients lists someone, or the body names a specific person as needing this, and the omission looks accidental.
+      false: thread is null, or thread.participants_not_in_recipients is empty, and the body names nobody else; or dropped participants are clearly deliberate.
     thresholds: { nudge: 0.5, confirm: 0.8 }
     reason: "Someone from the thread was dropped ({p}%)"
     weight: 0.6
@@ -127,14 +127,14 @@ tests:
     requires_sensor: true
   - name: AWS key in the body is blocked by rule
     state: { action: email.send, draft: { subject: "creds", body_head: "here: AKIA…", body_tail: "", body_chars: 30, attachments: [], mentions_attachment_in_text: false, has_placeholders: false, key_sentences: [] }, recipients: [{ addr: "dev@ourco.com", kind: to, external: false, first_time_ever: false, domain_first_time: false, in_original_thread: false }], thread: null, sender_context: { sends_in_last_5_min: 0, local_time: "Tue 10h", draft_age: "<30s", deletions_ratio: 0, external_recipient_count: 0, recipient_count: 1 }, l0_flags: [secret_pattern_in_body] }
-    expect: { level: block }
+    expect: { level: block, not_fires: [missing_recipient] }
   - name: pricing schedule to an external first-time recipient after legal said not to
     state: { action: email.send, draft: { subject: "Re: Q3 pricing", body_head: "Hi Sam, attached is the discount schedule we discussed.", body_tail: "", body_chars: 55, attachments: ["Q3_pricing_FINAL_v3.xlsx"], mentions_attachment_in_text: true, has_placeholders: false, key_sentences: ["attached is the discount schedule we discussed."] }, recipients: [{ addr: "sam@acme.com", kind: to, external: true, first_time_ever: true, domain_first_time: false, in_original_thread: false }, { addr: "cfo@ourco.com", kind: cc, external: false, first_time_ever: false, domain_first_time: false, in_original_thread: true }], thread: { message_count: 1, participants_not_in_recipients: ["legal@ourco.com"], last_msg_from: "legal@ourco.com", last_msg_head: "Please don't share the discount schedule externally until we sign the MSA.", is_reply_all: true, original_recipient_count: 3 }, sender_context: { sends_in_last_5_min: 1, local_time: "Fri 17h", draft_age: "30s-2m", deletions_ratio: 0.1, external_recipient_count: 1, recipient_count: 2 }, l0_flags: [sensitive_attachment_name, external_recipient_present] }
     expect: { level: [confirm, block], fires: [external_leak, contradicts_thread] }
     requires_sensor: true
   - name: says attached, nothing attached
     state: { action: email.send, draft: { subject: "invoice", body_head: "Please find the invoice attached.", body_tail: "", body_chars: 33, attachments: [], mentions_attachment_in_text: true, has_placeholders: false, key_sentences: ["Please find the invoice attached."] }, recipients: [{ addr: "ap@client.com", kind: to, external: true, first_time_ever: false, domain_first_time: false, in_original_thread: false }], thread: null, sender_context: { sends_in_last_5_min: 0, local_time: "Tue 10h", draft_age: "<30s", deletions_ratio: 0, external_recipient_count: 1, recipient_count: 1 }, l0_flags: [external_recipient_present, mentions_attachment_none_attached] }
-    expect: { level: confirm, fires: [missing_attachment] }
+    expect: { level: confirm, fires: [missing_attachment], not_fires: [missing_recipient] }
     requires_sensor: true
   - name: lookalike recipient
     state: { action: email.send, draft: { subject: "Re: contract", body_head: "Sam, the signed copy is attached.", body_tail: "", body_chars: 33, attachments: ["contract-signed.pdf"], mentions_attachment_in_text: true, has_placeholders: false, key_sentences: [] }, recipients: [{ addr: "sam@acme.com", kind: to, external: true, first_time_ever: true, domain_first_time: false, in_original_thread: false, looks_like_a_known_contact: "sam.b@acme.com" }], thread: { message_count: 2, participants_not_in_recipients: ["sam.b@acme.com"], last_msg_from: "sam.b@acme.com", last_msg_head: "Send it over when signed.", is_reply_all: false, original_recipient_count: 2 }, sender_context: { sends_in_last_5_min: 0, local_time: "Tue 10h", draft_age: "<30s", deletions_ratio: 0, external_recipient_count: 1, recipient_count: 1 }, l0_flags: [external_recipient_present, lookalike_recipient] }

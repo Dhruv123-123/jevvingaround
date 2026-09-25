@@ -16,7 +16,10 @@ jobs:
       # L0 and proceed cases run without a key; model-dependent cases only when the secret is present
       - run: node dist/cli.js eval agent shell git-push email slack payment --sensor none
         working-directory: interlock
-      - if: ${{ secrets.JEV_API_KEY != '' }}
+      # add JEV_API_KEY (TypeSafe direct) or OPENROUTER_API_KEY as a repository secret to run the model-dependent cases
+      - if: ${{ secrets.JEV_API_KEY != '' || secrets.OPENROUTER_API_KEY != '' }}
         run: node dist/cli.js eval agent shell git-push email slack payment --sensor jev
         working-directory: interlock
-        env: { JEV_API_KEY: "${{ secrets.JEV_API_KEY }}" }
+        env:
+          JEV_API_KEY: "${{ secrets.JEV_API_KEY }}"
+          OPENROUTER_API_KEY: "${{ secrets.OPENROUTER_API_KEY }}"
