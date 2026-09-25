@@ -1,25 +1,25 @@
 name: packs
 on:
-  push: { branches: [main, "claude/**"], paths: ["interlock/**", ".github/workflows/packs.yml"] }
-  pull_request: { paths: ["interlock/**", ".github/workflows/packs.yml"] }
+  push:
+    branches: [main, "claude/**"]
+    paths: ["interlock/**", ".github/workflows/packs.yml"]
+  pull_request:
+    paths: ["interlock/**", ".github/workflows/packs.yml"]
 jobs:
   eval:
     runs-on: ubuntu-latest
+    defaults: { run: { working-directory: interlock } }
+    env:
+      # secrets are not readable from a step-level `if`; surface them as env and test the env instead
+      JEV_API_KEY: ${{ secrets.JEV_API_KEY }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
       - run: npm ci
-        working-directory: interlock
       - run: npm run typecheck && npm test && npm run build
-        working-directory: interlock
-      # L0 and proceed cases run without a key; model-dependent cases only when the secret is present
+      # rules-only cases run everywhere; model-dependent cases only when a key is configured
       - run: node dist/cli.js eval agent shell git-push email slack payment --sensor none
-        working-directory: interlock
-      # add JEV_API_KEY (TypeSafe direct) or OPENROUTER_API_KEY as a repository secret to run the model-dependent cases
-      - if: ${{ secrets.JEV_API_KEY != '' || secrets.OPENROUTER_API_KEY != '' }}
+      - if: ${{ env.JEV_API_KEY != '' || env.OPENROUTER_API_KEY != '' }}
         run: node dist/cli.js eval agent shell git-push email slack payment --sensor jev
-        working-directory: interlock
-        env:
-          JEV_API_KEY: "${{ secrets.JEV_API_KEY }}"
-          OPENROUTER_API_KEY: "${{ secrets.OPENROUTER_API_KEY }}"
