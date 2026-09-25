@@ -129,6 +129,11 @@ risky command re-run with one token changed, an agent asked three times for the 
 followed by "wrong channel"), writes them as `regret` records, and reports how many of the regrets that passed
 through a gate were at hold or above.
 
+## Publishing
+
+npm, the MCP Registry, CI with the model, and listings: [docs/publishing.md](docs/publishing.md). `server.json` and
+`mcpName` are in place; the registry entry is `io.github.Dhruv123-123/interlock`.
+
 ## Design rules the code follows
 
 1. **The compiler does everything quantitative.** Jev can't count or compare numbers; ratios, ages, set differences, duplicates are computed first and stated as facts.

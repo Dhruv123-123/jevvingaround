@@ -1,6 +1,7 @@
 {
   "name": "interlock-gate",
   "version": "0.2.0",
+  "mcpName": "io.github.Dhruv123-123/interlock",
   "description": "A 100 ms judgment before irreversible actions. Policy as Question Packs, decisions as Audit Vectors, sensor pluggable (TypeSafe Jev, any OpenAI-compatible LLM, or rules only).",
   "license": "MIT",
   "repository": {

@@ -1,0 +1,32 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.Dhruv123-123/interlock",
+  "description": "A 100 ms judgment on every tool call: wraps any MCP server and gates tools/call with a plain-English Question Pack. Confirm asks the agent to justify; block refuses. Sensor: TypeSafe Jev, any OpenAI-compatible LLM, or rules only.",
+  "repository": {
+    "url": "https://github.com/Dhruv123-123/jevvingaround",
+    "source": "github",
+    "subfolder": "interlock"
+  },
+  "websiteUrl": "https://github.com/Dhruv123-123/jevvingaround/tree/main/interlock#readme",
+  "version": "0.2.0",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "interlock-gate",
+      "version": "0.2.0",
+      "runtimeHint": "npx",
+      "transport": { "type": "stdio" },
+      "packageArguments": [
+        { "type": "positional", "value": "mcp", "description": "Run the MCP proxy" },
+        { "type": "named", "name": "--task", "valueHint": "task", "description": "What the agent has been asked to do; outside_task_scope is judged against it", "isRequired": false },
+        { "type": "positional", "value": "--", "description": "Everything after this is the MCP server to wrap" },
+        { "type": "positional", "valueHint": "server_command", "description": "The wrapped MCP server command and its arguments, e.g. npx -y @modelcontextprotocol/server-filesystem .", "isRequired": true, "isRepeated": true }
+      ],
+      "environmentVariables": [
+        { "name": "OPENROUTER_API_KEY", "description": "OpenRouter key; routes to TypeSafe Jev (typesafe/jev-1.13). Either this or JEV_API_KEY.", "isRequired": false, "isSecret": true, "format": "string" },
+        { "name": "JEV_API_KEY", "description": "TypeSafe direct API key. Without any key only the rule-based (L0) checks run.", "isRequired": false, "isSecret": true, "format": "string" },
+        { "name": "INTERLOCK_FAIL_MODE", "description": "open (default): forward calls if the sensor is unreachable; closed: refuse them", "isRequired": false, "isSecret": false, "format": "string" }
+      ]
+    }
+  ]
+}
