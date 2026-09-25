@@ -1,0 +1,23 @@
+name: anygame
+on:
+  push:
+    branches: [main, "claude/**"]
+    paths: ["anygame/**", ".github/workflows/anygame.yml"]
+  pull_request:
+    paths: ["anygame/**", ".github/workflows/anygame.yml"]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: anygame } }
+    env:
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - run: pip install -e . pytest && python -m playwright install --with-deps chromium
+      - run: python -m pytest -q test
+      - run: anygame packs && anygame eval 2048 && anygame eval clash-royale
+      # a real game against the model when the secret exists: 30 ticks, under a tenth of a cent
+      - if: ${{ env.OPENROUTER_API_KEY != '' }}
+        run: anygame eval 2048 --sensor jev && anygame play 2048 --device "web://games/2048.html?seed=3" --max-ticks 30 --no-hud
