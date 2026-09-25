@@ -45,6 +45,8 @@ export interface EvalResult {
   latencyMs: number;
   inputTokens: number;
   model: string;
+  /** USD as reported by the server, when it reports one (OpenRouter does) */
+  costUsd?: number;
 }
 
 // ---- Email surface ----

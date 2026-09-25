@@ -69,6 +69,7 @@ export class JevClient {
         latencyMs: Math.round(performance.now() - t0),
         inputTokens: json.usage?.input_tokens ?? 0,
         model: json.model,
+        costUsd: typeof json.usage?.cost === "number" ? json.usage.cost : undefined,
       };
     }
   }

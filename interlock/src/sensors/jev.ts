@@ -13,7 +13,7 @@ export function jevSensor(opts: JevSensorOptions): Sensor {
     name: `jev:${opts.model}`,
     async evaluate(state: unknown, questions: Record<string, WireQuestion>, signal?: AbortSignal): Promise<SensorResult> {
       const r = await client.evaluate(state, questions, signal);
-      return { answers: r.answers, latencyMs: r.latencyMs, inputTokens: r.inputTokens, costUsd: r.inputTokens * USD_PER_INPUT_TOKEN, model: r.model };
+      return { answers: r.answers, latencyMs: r.latencyMs, inputTokens: r.inputTokens, costUsd: r.costUsd ?? r.inputTokens * USD_PER_INPUT_TOKEN, model: r.model };
     },
   };
 }

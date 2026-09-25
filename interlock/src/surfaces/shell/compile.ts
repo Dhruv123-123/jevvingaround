@@ -89,7 +89,8 @@ export function compileShellState(input: ShellInput): ShellState {
   const isForcePush = /\bgit\s+push\b.*(\s-f\b|--force\b|\+\S+)/.test(raw);
   const branch = input.gitBranch ?? null;
   if (isForcePush && (branch === null || /^(main|master|develop|release\/|prod)/.test(branch))) l0.push("force_push_to_protected");
-  const dryRunAvailable = /\b(kubectl|terraform|helm|rsync|npm\s+publish|aws\s+s3|git\s+clean|git\s+push|ansible-playbook)\b/.test(raw);
+  // git push has --dry-run on paper; nobody uses it, so claiming it would only make the sensor nag
+  const dryRunAvailable = /\b(kubectl|terraform|helm|rsync|npm\s+publish|aws\s+s3|git\s+clean|ansible-playbook)\b/.test(raw);
   const dryRunUsed = /--dry-run|\bplan\b|-n\b(?!\S)|--check\b|--what-if\b/.test(raw);
   const kube = input.kubeContext ?? null;
   return {

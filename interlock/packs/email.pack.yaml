@@ -18,10 +18,10 @@ questions:
     weight: 1.0
   - id: missing_recipient
     type: noul
-    instructions: Someone who was part of the thread, or who the body clearly addresses or depends on, is not a recipient.
+    instructions: Someone who was part of the thread, or who the body clearly addresses or depends on, is not a recipient. Use the computed fact thread.participants_not_in_recipients; when it is empty and the body names nobody else, nobody is missing.
     criteria:
-      true: A thread participant or a person the body names as needing this is absent from the recipients and the omission looks accidental.
-      false: The recipient set looks intentional; dropped participants, if any, are clearly deliberate.
+      true: thread.participants_not_in_recipients lists someone, or the body names a person as needing this, and the omission looks accidental.
+      false: thread.participants_not_in_recipients is empty and the body names nobody else, or dropped participants are clearly deliberate.
     thresholds: { nudge: 0.5, confirm: 0.8 }
     reason: "Someone from the thread was dropped ({p}%)"
     weight: 0.6
@@ -81,10 +81,10 @@ questions:
     weight: 1.1
   - id: unfinished_draft
     type: noul
-    instructions: "The draft is not finished: placeholders, half sentences, missing greeting where one is expected, or a subject line that is empty or a leftover."
+    instructions: "The draft is not finished: placeholders, a sentence that stops mid-thought, or a subject line that is empty or a leftover. A short reply ('Thanks, will do.') is complete; brevity and a missing greeting are not signs of an unfinished draft."
     criteria:
-      true: Placeholders like TODO/TBD/[name], trailing incomplete sentences, or an empty/placeholder subject remain.
-      false: The draft reads as complete.
+      true: Placeholders like TODO/TBD/[name], a trailing incomplete sentence, or an empty/placeholder subject remain.
+      false: The draft reads as complete, however short.
     thresholds: { nudge: 0.5, confirm: 0.8 }
     reason: "This looks unfinished ({p}%)"
     weight: 0.8
