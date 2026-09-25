@@ -2,18 +2,30 @@ name: release
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release (must equal interlock/package.json version), e.g. 0.2.0"
+        required: true
 jobs:
   publish:
     runs-on: ubuntu-latest
-    permissions: { contents: read, id-token: write }
+    permissions: { contents: write, id-token: write }
+    defaults: { run: { working-directory: interlock } }
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: 22, registry-url: https://registry.npmjs.org }
       - run: npm ci
-        working-directory: interlock
       - run: npm run typecheck && npm test && npm run build
-        working-directory: interlock
+      # dispatched runs create the tag themselves (tag pushes are blocked from some environments)
+      - if: ${{ github.event_name == 'workflow_dispatch' }}
+        name: tag v${{ inputs.version }}
+        run: |
+          test "$(node -p "require('./package.json').version")" = "${{ inputs.version }}" || { echo "package.json is not ${{ inputs.version }}"; exit 1; }
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "v${{ inputs.version }}" -m "interlock-gate ${{ inputs.version }}" || echo "tag exists"
+          git push origin "v${{ inputs.version }}" || echo "tag already on origin"
       - run: npm publish --provenance --access public
-        working-directory: interlock
         env: { NODE_AUTH_TOKEN: "${{ secrets.NPM_TOKEN }}" }
