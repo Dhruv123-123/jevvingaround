@@ -110,12 +110,8 @@ def runs_of(src: Any, r: dict[str, Any]) -> list[str]:
             cells[(int(m.group(1)), int(m.group(2)))] = str(v)
     sym, empty, need = str(r["symbol"]), str(r.get("empty", ".")), int(r.get("length", 4))
     rows = max((rc[1] for rc in cells), default=0)
-    out = []
-    for (c, rw), v in sorted(cells.items(), key=lambda kv: (kv[0][1], kv[0][0])):
-        if v != empty:
-            continue
-        if r.get("gravity") == "down" and rw < rows and cells.get((c, rw + 1)) == empty:
-            continue
+
+    def completes(c: int, rw: int) -> bool:
         for dc, dr in ((1, 0), (0, 1), (1, 1), (1, -1)):
             n = 1
             for sgn in (1, -1):
@@ -124,8 +120,24 @@ def runs_of(src: Any, r: dict[str, Any]) -> list[str]:
                     n += 1
                     cc, rr = cc + sgn * dc, rr + sgn * dr
             if n >= need:
+                return True
+        return False
+
+    out = []
+    for (c, rw), v in sorted(cells.items(), key=lambda kv: (kv[0][1], kv[0][0])):
+        if v != empty:
+            continue
+        landing = not (r.get("gravity") == "down" and rw < rows and cells.get((c, rw + 1)) == empty)
+        if r.get("mode") == "hands":
+            # cells where a drop LANDS such that the cell above it completes the line for `symbol`:
+            # play there and you hand the opponent the win on top of your piece
+            if landing and rw > 1 and cells.get((c, rw - 1)) == empty and completes(c, rw - 1):
                 out.append(f"c{c}r{rw}")
-                break
+            continue
+        if r.get("gravity") == "down" and not landing:
+            continue
+        if completes(c, rw):
+            out.append(f"c{c}r{rw}")
     return out
 
 

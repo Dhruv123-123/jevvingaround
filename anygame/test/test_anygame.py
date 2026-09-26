@@ -239,3 +239,15 @@ def test_sensor_timeout_falls_back_to_rules_on_last_answers():
     first, second = ag.step(), ag.step()
     assert first["action"] == "swipe right"
     assert second["sensor"].startswith("error → rules") and second["action"] != "wait" and ag.errors == 1
+
+
+def test_runs_hands_mode_and_avoid_rule_drop_the_losing_column():
+    from anygame.perceive import runs_of
+    board = {f"c{c}r{r}": "." for c in range(1, 8) for r in range(1, 7)}
+    board.update({"c3r3": "Y", "c4r3": "Y", "c5r3": "Y", "c6r6": "R", "c6r5": "Y", "c3r4": "R", "c3r5": "Y", "c3r6": "R",
+                  "c4r4": "R", "c4r5": "R", "c4r6": "Y", "c5r4": "Y", "c5r5": "R", "c5r6": "R"})
+    assert runs_of(board, {"symbol": "Y", "length": 4, "gravity": "down", "mode": "hands"}) == ["c6r4"]
+    pack = load_pack(os.path.join(ROOT, "packs", "connect4"))
+    values = {"status": "our_turn", "y_wins_if_we_drop_at": ["c6r4"]}
+    qs = Agent(pack, FakeDevice([]), None).questions(values)
+    assert "c6" not in qs["drop__cell"]["criteria"] and "c5" in qs["drop__cell"]["criteria"]

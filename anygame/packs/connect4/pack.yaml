@@ -10,6 +10,7 @@ read:
   status: { kind: color, zone: status, options: { our_turn: "#3b82f6", their_turn: "#6b7280", we_won: "#22c55e", we_lost: "#ef4444", draw: "#a855f7" }, max_dist: 90, otherwise: their_turn }
   r_wins_at:  { kind: runs, in: board, symbol: R, length: 4, empty: ".", gravity: down }   # drop here and R has four
   y_wins_at:  { kind: runs, in: board, symbol: Y, length: 4, empty: ".", gravity: down }   # Y drops here and wins: block it
+  y_wins_if_we_drop_at: { kind: runs, in: board, symbol: Y, length: 4, empty: ".", gravity: down, mode: hands }   # our piece there gives Y the win on top
   legal:  { kind: locate, in: board, symbol: ".", many: true, row: 1 }     # columns with an empty top cell
 act:
   - { id: drop, kind: tap, zone: columns, description: "drop a red piece in a column (choose the column cell)" }
@@ -22,7 +23,7 @@ play: >
   vertically or diagonally. `r_wins_at` lists cells where dropping R completes four right now; `y_wins_at`
   lists cells where Y's next drop would complete four. Priorities in order: if r_wins_at is not empty, drop in
   that column (the c part of the cell); else if y_wins_at is not empty, drop in that column to block; else
-  avoid a column whose next-lowest cell is in y_wins_at (your piece would give Y the win on top); else prefer
+  never drop in a cell listed in y_wins_if_we_drop_at (your piece would give Y the win on top); else prefer
   the centre columns and cells that extend your own lines. `legal` lists the columns that still have room
   (as c<n>r1); a column not in `legal` is full and dropping there does nothing.
 questions:
@@ -47,6 +48,7 @@ questions:
     instructions: Which column to drop in? Cells c1..c7 map to columns left to right. Only columns listed in `legal` are possible. Apply the priorities from the play notes.
     criteria: { c1: null, c2: null, c3: null, c4: null, c5: null, c6: null, c7: null }
 rules:
+  - { if: { read: status, equals: our_turn }, avoid: { drop__cell: y_wins_if_we_drop_at } }   # those columns are not even offered
   - { if: { noul: must_block, gte: 0.5 }, set: { drop__cell: threat_column } }
   - { if: { noul: can_win_now, gte: 0.5 }, set: { drop__cell: win_column } }      # later rules win: a win beats a block
 tests:

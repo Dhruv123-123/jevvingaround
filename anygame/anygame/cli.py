@@ -210,14 +210,17 @@ def cmd_render(a):
             r = json.loads(line)
             recs[int(r["tick"])] = r
         src = tempfile.mkdtemp(prefix="anygame-render-")
-        last, cost = {}, 0.0
+        decision, cost = {}, 0.0
         for f in frames:
             tick = int(os.path.splitext(os.path.basename(f))[0])
-            rec = recs.get(tick, last)
+            rec = recs.get(tick, {})
             if "total_cost_usd" in rec:
                 cost = rec["total_cost_usd"]
-            cv2.imwrite(os.path.join(src, os.path.basename(f)), _panel(cv2.imread(f), rec, cost), [cv2.IMWRITE_JPEG_QUALITY, 90])
-            last = rec
+            if rec.get("action_probs") or rec.get("nouls"):
+                decision = rec
+            # a waiting tick keeps showing the last decision's probabilities and beliefs under its own label
+            shown = {**decision, "tick": tick, "action": rec.get("action", ""), "reason": rec.get("reason"), "rules": rec.get("rules") or decision.get("rules")}
+            cv2.imwrite(os.path.join(src, os.path.basename(f)), _panel(cv2.imread(f), shown, cost), [cv2.IMWRITE_JPEG_QUALITY, 90])
     first = int(os.path.splitext(os.path.basename(frames[0]))[0])
     cmd = [ff, "-y", "-loglevel", "error", "-framerate", str(a.fps), "-start_number", str(first), "-i", os.path.join(src, "%05d.jpg"),
            "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "23", a.out]

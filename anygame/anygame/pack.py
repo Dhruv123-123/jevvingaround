@@ -107,8 +107,8 @@ def load_pack(path: str | os.PathLike) -> Pack:
         ok_read = "read" in cond and any(k in cond for k in ("equals", "in", "not", "gte", "lte"))
         if not (ok_noul or ok_read):
             raise PackError(f"{p}: rule needs if: {{noul, gte|lte}} or if: {{read, equals|in|not}}")
-        if not ("exclude" in rl or "set" in rl):
-            raise PackError(f"{p}: rule needs 'exclude: [actions]' or 'set: {{param_question: from_question}}'")
+        if not ("exclude" in rl or "set" in rl or "avoid" in rl):
+            raise PackError(f"{p}: rule needs 'exclude: [actions]', 'set: {{param_question: from_question}}' or 'avoid: {{param_question: read}}'")
     tests = raw.get("tests") or []
     if not tests:
         raise PackError(f"{p}: a pack without tests is refused; add at least one frame under 'tests'")
