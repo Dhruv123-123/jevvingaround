@@ -10,6 +10,7 @@ dependencies = [
   "playwright",
 ]
 [project.optional-dependencies]
+render = ["imageio-ffmpeg>=0.5"]
 vocab = ["ultralytics"]
 [project.scripts]
 anygame = "anygame.cli:main"

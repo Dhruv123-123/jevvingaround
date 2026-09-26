@@ -8,7 +8,7 @@ USD_PER_INPUT_TOKEN = 0.042 / 1e6
 
 
 class Jev:
-    def __init__(self, api_key: str | None = None, base_url: str | None = None, model: str | None = None, timeout: float = 4.0):
+    def __init__(self, api_key: str | None = None, base_url: str | None = None, model: str | None = None, timeout: float | None = None):
         key = api_key or os.environ.get("JEV_API_KEY")
         base = base_url or os.environ.get("JEV_BASE_URL")
         mdl = model or os.environ.get("JEV_MODEL")
@@ -18,7 +18,8 @@ class Jev:
             mdl = mdl or "typesafe/jev-1.13"
         if not key:
             raise RuntimeError("set OPENROUTER_API_KEY (or JEV_API_KEY)")
-        self.key, self.base, self.model, self.timeout = key, (base or "https://api.typesafe.ai").rstrip("/"), mdl or "jev-latest", timeout
+        self.key, self.base, self.model = key, (base or "https://api.typesafe.ai").rstrip("/"), mdl or "jev-latest"
+        self.timeout = timeout if timeout is not None else float(os.environ.get("ANYGAME_JEV_TIMEOUT", "4"))
         self.s = requests.Session()
 
     def ask(self, state, questions: dict) -> dict:

@@ -1,5 +1,6 @@
 # docker compose up  → watch Jev play 2048 at http://localhost:8080 with no hardware at all.
-# For a phone: DEVICE=adb://<phone-ip>:5555 docker compose run --service-ports anygame play clash-royale
+# Another game: PACK=snake DEVICE="web://games/snake.html?tick=700" docker compose up
+# A phone:      DEVICE=adb://<phone-ip>:5555 PACK=clash-royale docker compose run --service-ports anygame
 services:
   anygame:
     build: .

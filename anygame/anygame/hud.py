@@ -26,6 +26,7 @@ class Hud:
     def __init__(self, port: int = 8080):
         self.jpg = b""
         self.state = {"game": "", "tick": 0}
+        self.last_annotated = None
         self.lock = threading.Lock()
         hud = self
 
@@ -59,11 +60,14 @@ class Hud:
             x0, y0, x1, y1 = [int(v) for v in d["rect"]]
             cv2.rectangle(img, (x0, y0), (x1, y1), (80, 220, 120), 2)
             cv2.putText(img, f"{d['label']} {d.get('conf', 0):.2f}", (x0, max(12, y0 - 4)), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (80, 220, 120), 1)
-        cv2.putText(img, str(rec.get("action", "")), (10, h - 12), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+        label = f"{rec.get('action', '')}   jev {rec.get('jev_ms', '-')} ms   ${rec.get('total_cost_usd', 0):.4f}"
+        cv2.rectangle(img, (0, h - 30), (w, h), (0, 0, 0), -1)
+        cv2.putText(img, label, (10, h - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
         ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 80])
         with self.lock:
             self.jpg = buf.tobytes()
             self.state = {**rec, "game": pack.name}
+            self.last_annotated = img
 
     def close(self):
         self.server.shutdown()

@@ -7,7 +7,7 @@ from typing import Any
 import yaml
 from .geometry import Rect, Zone
 
-READ_KINDS = {"bar", "templates", "ocr", "vocab", "blobs", "color"}
+READ_KINDS = {"bar", "templates", "ocr", "vocab", "blobs", "color", "locate", "runs", "around"}
 QUESTION_TYPES = {"noul", "choice", "score"}
 
 
@@ -34,6 +34,7 @@ class Pack:
     tick_hz: float
     play: str
     questions: list[dict[str, Any]]
+    rules: list[dict[str, Any]]
     tests: list[dict[str, Any]]
     raw: dict[str, Any]
 
@@ -74,7 +75,16 @@ def load_pack(path: str | os.PathLike) -> Pack:
             raise PackError(f"{p}: read '{rid}': kind must be one of {sorted(READ_KINDS)}")
         if "zone" in r and r["zone"] not in zones:
             raise PackError(f"{p}: read '{rid}': unknown zone '{r['zone']}'")
-        if "zone" not in r and "rect" not in r:
+        if r.get("kind") == "locate":
+            if r.get("in") not in reads or "symbol" not in r:
+                raise PackError(f"{p}: read '{rid}': locate needs 'in' (a grid read id) and 'symbol'")
+        elif r.get("kind") == "runs":
+            if r.get("in") not in reads or "symbol" not in r:
+                raise PackError(f"{p}: read '{rid}': runs needs 'in' (a grid read id), 'symbol' and optionally length/empty/gravity")
+        elif r.get("kind") == "around":
+            if r.get("of") not in reads or r.get("in") not in reads:
+                raise PackError(f"{p}: read '{rid}': around needs 'of' (a locate read id) and 'in' (a grid read id)")
+        elif "zone" not in r and "rect" not in r:
             raise PackError(f"{p}: read '{rid}': needs zone or rect")
     actions: list[Action] = []
     for a in raw.get("act") or []:
@@ -88,6 +98,17 @@ def load_pack(path: str | os.PathLike) -> Pack:
     for q in questions:
         if q.get("type") not in QUESTION_TYPES or "id" not in q or "instructions" not in q:
             raise PackError(f"{p}: question {q.get('id')}: needs id, type (noul|choice|score), instructions")
+    if raw.get("settle") not in (None, "screen_change"):
+        raise PackError(f"{p}: settle must be 'screen_change' (wait for the screen to change after an action before deciding again)")
+    rules = raw.get("rules") or []
+    for rl in rules:
+        cond = rl.get("if") or {}
+        ok_noul = "noul" in cond and any(k in cond for k in ("gte", "lte"))
+        ok_read = "read" in cond and any(k in cond for k in ("equals", "in", "not", "gte", "lte"))
+        if not (ok_noul or ok_read):
+            raise PackError(f"{p}: rule needs if: {{noul, gte|lte}} or if: {{read, equals|in|not}}")
+        if not ("exclude" in rl or "set" in rl):
+            raise PackError(f"{p}: rule needs 'exclude: [actions]' or 'set: {{param_question: from_question}}'")
     tests = raw.get("tests") or []
     if not tests:
         raise PackError(f"{p}: a pack without tests is refused; add at least one frame under 'tests'")
@@ -99,5 +120,5 @@ def load_pack(path: str | os.PathLike) -> Pack:
     return Pack(
         name=raw["game"], path=p, orientation=screen.get("orientation", "portrait"), size=(int(size[0]), int(size[1])),
         zones=zones, reads=reads, actions=actions, tick_hz=float(raw.get("tick_hz", 3)), play=(raw.get("play") or "").strip(),
-        questions=questions, tests=tests, raw=raw,
+        questions=questions, rules=rules, tests=tests, raw=raw,
     )

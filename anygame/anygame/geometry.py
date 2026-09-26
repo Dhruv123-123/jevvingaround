@@ -33,7 +33,7 @@ class Zone:
     grid: tuple[int, int] | None = None  # (cols, rows)
 
     def cells(self) -> dict[str, Rect]:
-        """Named sub-rects. A 1-D grid names cells 1..n; a 2-D grid names them c<col>r<row> (1-based)."""
+        """Named sub-rects: c<col>r<row> for a 2-D grid, c<n> for a single row, r<n> for a single column (1-based)."""
         if not self.grid:
             return {self.name: self.rect}
         cols, rows = self.grid
@@ -42,7 +42,7 @@ class Zone:
         out: dict[str, Rect] = {}
         for r in range(rows):
             for c in range(cols):
-                key = f"{self.name}.{c + 1}" if rows == 1 else (f"{self.name}.{r + 1}" if cols == 1 else f"{self.name}.c{c + 1}r{r + 1}")
+                key = f"{self.name}.c{c + 1}" if rows == 1 else (f"{self.name}.r{r + 1}" if cols == 1 else f"{self.name}.c{c + 1}r{r + 1}")
                 out[key] = Rect(self.rect.x0 + c * cw, self.rect.y0 + r * rh, self.rect.x0 + (c + 1) * cw, self.rect.y0 + (r + 1) * rh)
         return out
 

@@ -6,7 +6,7 @@ COPY pyproject.toml README.md ./
 COPY anygame ./anygame
 COPY packs ./packs
 COPY games ./games
-RUN pip install --no-cache-dir . && python -c "import rapidocr_onnxruntime"   # warms the OCR model download
+RUN pip install --no-cache-dir ".[render]" && python -c "import rapidocr_onnxruntime"   # warms the OCR model download
 ENV HUD_PORT=8080 PYTHONUNBUFFERED=1
 EXPOSE 8080
 ENTRYPOINT ["anygame"]

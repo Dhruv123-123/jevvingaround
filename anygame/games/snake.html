@@ -1,0 +1,23 @@
+<!doctype html><html><head><meta charset="utf-8"><title>snake</title>
+<style>html,body{margin:0;background:#0f172a;touch-action:none;-webkit-user-select:none;user-select:none}
+#bar{height:40px;display:flex;align-items:center;justify-content:space-between;padding:0 14px;color:#e2e8f0;font:700 22px/1 -apple-system,Segoe UI,Roboto,sans-serif}
+#status{width:120px;height:26px;border-radius:6px;background:#3b82f6}
+#g{display:grid;grid-template-columns:repeat(12,40px);grid-template-rows:repeat(12,40px);gap:2px;width:502px;margin:8px auto;background:#0f172a}
+.c{background:#1f2937;border-radius:4px}.s{background:#4ade80}.h{background:#16a34a}.f{background:#ef4444}</style></head>
+<body><div id="bar"><span>snake · <span id="score">0</span></span><div id="status"></div></div><div id="g"></div>
+<script>(()=>{
+const q=new URLSearchParams(location.search);let seed=Number(q.get("seed")||1);const tick=Number(q.get("tick")||500);
+const rnd=()=>{seed=(seed*1664525+1013904223)%4294967296;return seed/4294967296};
+const N=12,g=document.getElementById("g"),cells=[];for(let i=0;i<N*N;i++){const d=document.createElement("div");d.className="c";g.appendChild(d);cells.push(d)}
+let snake=[[5,6],[4,6],[3,6]],dir=[1,0],pending=null,food=null,score=0,over=false,won=false;
+const place=()=>{const free=[];for(let y=0;y<N;y++)for(let x=0;x<N;x++)if(!snake.some(s=>s[0]===x&&s[1]===y))free.push([x,y]);if(!free.length){won=true;return}food=free[Math.floor(rnd()*free.length)]};
+const render=()=>{cells.forEach(c=>c.className="c");snake.forEach(([x,y],i)=>cells[y*N+x].className=i?"c s":"c h");if(food)cells[food[1]*N+food[0]].className="c f";
+document.getElementById("score").textContent=String(score);document.getElementById("status").style.background=over?"#ef4444":won?"#22c55e":"#3b82f6"};
+const step=()=>{if(over||won)return;if(pending&&!(pending[0]===-dir[0]&&pending[1]===-dir[1]))dir=pending;pending=null;
+const h=[snake[0][0]+dir[0],snake[0][1]+dir[1]];if(h[0]<0||h[1]<0||h[0]>=N||h[1]>=N||snake.some(s=>s[0]===h[0]&&s[1]===h[1])){over=true;render();return}
+snake.unshift(h);if(food&&h[0]===food[0]&&h[1]===food[1]){score+=10;place()}else snake.pop();render()};
+const setDir=(d)=>{pending={up:[0,-1],down:[0,1],left:[-1,0],right:[1,0]}[d]};
+window.__state=()=>({snake:snake.map(s=>[...s]),food,score,over,won,dir});window.__dir=setDir;
+document.addEventListener("keydown",e=>{const m={ArrowUp:"up",ArrowDown:"down",ArrowLeft:"left",ArrowRight:"right"}[e.key];if(m){e.preventDefault();setDir(m)}});
+let st=null;document.addEventListener("mousedown",e=>st=[e.clientX,e.clientY]);document.addEventListener("mouseup",e=>{if(!st)return;const dx=e.clientX-st[0],dy=e.clientY-st[1];st=null;if(Math.max(Math.abs(dx),Math.abs(dy))<15)return;setDir(Math.abs(dx)>Math.abs(dy)?(dx>0?"right":"left"):(dy>0?"down":"up"))});
+place();render();setInterval(step,tick);})();</script></body></html>

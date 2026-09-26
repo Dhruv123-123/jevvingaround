@@ -1,0 +1,25 @@
+<!doctype html><html><head><meta charset="utf-8"><title>connect four</title>
+<style>html,body{margin:0;background:#f8fafc;-webkit-user-select:none;user-select:none;font:700 20px/1 -apple-system,Segoe UI,Roboto,sans-serif;color:#0f172a}
+#bar{height:44px;display:flex;align-items:center;justify-content:space-between;padding:0 14px}#status{width:150px;height:28px;border-radius:6px;background:#3b82f6}
+#b{width:518px;margin:6px auto;background:#1d4ed8;border-radius:10px;padding:8px;display:grid;grid-template-columns:repeat(7,70px);grid-template-rows:repeat(6,70px);gap:2px}
+.s{width:62px;height:62px;margin:4px;border-radius:50%;background:#f1f5f9}.r{background:#ef4444}.y{background:#facc15}</style></head>
+<body><div id="bar"><span id="msg">your move (red)</span><div id="status"></div></div><div id="b"></div>
+<script>(()=>{
+const q=new URLSearchParams(location.search);let seed=Number(q.get("seed")||1);const rnd=()=>{seed=(seed*1664525+1013904223)%4294967296;return seed/4294967296};
+const W=7,H=6,b=document.getElementById("b"),slots=[];for(let i=0;i<W*H;i++){const d=document.createElement("div");d.className="s";b.appendChild(d);slots.push(d)}
+let grid=Array(W*H).fill(0),turn=1,over=0;
+const preset=q.get("grid");if(preset)grid=preset.split("").map(ch=>ch==="R"?1:ch==="Y"?2:0); // 1 red (us), 2 yellow (them); over: 0 playing, 1 red won, 2 yellow won, 3 draw
+const at=(x,y)=>grid[y*W+x];const drop=(x,p)=>{for(let y=H-1;y>=0;y--)if(!at(x,y)){grid[y*W+x]=p;return y}return -1};
+const wins=(p)=>{const d=[[1,0],[0,1],[1,1],[1,-1]];for(let y=0;y<H;y++)for(let x=0;x<W;x++)for(const[dx,dy]of d){let k=0;for(;k<4;k++){const X=x+dx*k,Y=y+dy*k;if(X<0||Y<0||X>=W||Y>=H||at(X,Y)!==p)break}if(k===4)return true}return false};
+const legal=()=>[...Array(W).keys()].filter(x=>!at(x,0));
+const render=()=>{grid.forEach((v,i)=>slots[i].className="s"+(v===1?" r":v===2?" y":""));const s=document.getElementById("status");
+s.style.background=over===1?"#22c55e":over===2?"#ef4444":over===3?"#a855f7":turn===1?"#3b82f6":"#6b7280";
+document.getElementById("msg").textContent=over===1?"red wins":over===2?"yellow wins":over===3?"draw":turn===1?"your move (red)":"thinking…"};
+const finish=()=>{if(wins(1))over=1;else if(wins(2))over=2;else if(!legal().length)over=3};
+// opponent: win if possible, block if needed, else prefer the centre with a little noise
+const ai=()=>{const L=legal();for(const p of[2,1]){for(const x of L){const y=drop(x,p);const w=wins(p);grid[y*W+x]=0;if(w){drop(x,2);return}}}
+const pref=[3,2,4,1,5,0,6].filter(x=>L.includes(x));drop(rnd()<0.8?pref[0]:pref[Math.floor(rnd()*pref.length)],2)};
+window.__play=(x)=>{if(over||turn!==1||at(x,0))return false;drop(x,1);finish();turn=2;render();if(!over)setTimeout(()=>{ai();finish();turn=1;render()},350);return true};
+window.__state=()=>({grid:[...grid],turn,over});
+b.addEventListener("click",e=>{const r=b.getBoundingClientRect();const x=Math.floor((e.clientX-r.left-8)/72);if(x>=0&&x<W)window.__play(x)});
+render();})();</script></body></html>
