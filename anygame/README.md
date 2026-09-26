@@ -97,7 +97,7 @@ the game; a sensor error costs one tick, not the run.
 
 | Game | Runs | Result | Cost |
 |---|---|---|---|
-| Connect Four vs the page's built-in opponent | 4 seeds | 4 wins, every move legal, threats blocked | ~$0.0007 / game |
+| Connect Four vs the page's built-in opponent | 6 seeds | 5 wins, 1 draw, 0 losses; every move legal, every threat blocked | ~$0.0007 / game |
 | Snake, 12x12, 700 ms per step | 4 seeds | alive at the 600-tick cap on 3 of 4, scores 1880–2000 (~37 food, ~40-long snake); one death at tick 460 by self-trapping | ~$0.0085 / 600 ticks |
 | 2048 | 2 seeds | 64 and 128 tiles, corner strategy held, never swipes up unless forced | ~$0.005 / 150 ticks |
 
@@ -106,8 +106,10 @@ the game; a sensor error costs one tick, not the run.
   270–280 ms p50 and ~370 ms p95 after the frame. When Jev is slower than the pack's `sensor_timeout_s`, the
   rules replay its last answers so a safe move still goes out (it fired 3 times in 2400 Snake ticks).
 - A tick is ~$0.00003. A whole Connect Four game costs a tenth of a cent; a 600-tick Snake game under a cent.
-- **Connect Four** is the clean demo: the state compiler lists winning and threatened cells, Jev turns that
-  and the paragraph into a legal move every time, and the rules make a block or a win a certainty.
+- **Connect Four** is the clean demo: the state compiler lists winning, threatened and poisoned cells, Jev
+  turns that and the paragraph into a legal move every time, and the rules make a block or a win a certainty
+  and a poisoned column impossible. Before the `hands` read it lost 1 of 6 by giving Y a win on top of its
+  own piece; after it, none.
 - **Snake** is the real-time one. The game steps every 700 ms; the loop makes one decision per step. The rules
   make walls, the body and pockets impossible and Jev steers toward the food. Deaths are self-trapping late in
   a long snake, and the occasional late answer at a corner.
