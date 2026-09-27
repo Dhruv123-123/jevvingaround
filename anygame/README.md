@@ -176,10 +176,19 @@ compiler checks the stack is exactly what the chosen landing predicted. One deci
 frame, and a `reachable` filter that shrinks the list when a decision comes late, so a 200 ms model plays a
 60 fps game without being frame perfect.
 
-Measured (real Jev through OpenRouter, level 1, seed 7, 150-piece cap): 147 pieces placed, 49 lines, 146 of 146
-placement checks matched the prediction, Jev 200 ms p50 / 280 ms p95, about a cent for the run. The random
-sensor picking among the same six options dies in about 30 pieces with no lines, so the ranking alone is not the
-player; the choice is.
+Measured, real Jev through OpenRouter, seed 7, 150-piece cap, one run per level:
+
+| Level (gravity) | Pieces | Lines | Placements verified | Jev p50 / p95 | Cost |
+|---|---|---|---|---|---|
+| 1 (800 ms/row) | 147, alive | 49 | 146 / 146 | 200 / 280 ms | $0.009 |
+| 5 (520 ms/row) | 150, alive | 49 | 149 / 149 | 202 / 282 ms | $0.010 |
+| 9 (240 ms/row) | 150, alive | 55 | 149 / 149 | 195 / 269 ms | $0.010 |
+| random sensor, level 1, 3 seeds | 29 on average, dead | 0 | | | $0 |
+
+The random sensor picks among the same six computed options and dies in thirty pieces with no lines, so the
+ranking is not the player; the choice is. At level 9 a piece falls a row every 240 ms and the loop still
+decides once per piece, because the decision lands before the piece has fallen far and `reachable` keeps the
+list honest when it has not.
 
 This is the general pattern for any game with a small action set and a cheap world model, and it is the part
 of this repo that is actually new: **candidate enumeration with compiled consequences, then a typed choice.**
