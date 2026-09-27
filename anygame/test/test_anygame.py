@@ -311,3 +311,26 @@ def test_pyboy_device_boots_the_rom_and_takes_the_pad():
         assert d.frame().shape == (432, 480, 3)
     finally:
         d.close()
+
+
+# ---------- sensors ----------
+
+def test_random_sensor_and_llm_answer_parsing(monkeypatch):
+    from anygame.sensors import open_sensor, LLMSensor
+    qs = {"action": {"type": "choice", "instructions": "?", "criteria": {"a": None, "b": None}}, "risk": {"type": "noul", "instructions": "?", "criteria": {}}}
+    r = open_sensor("random:1").ask({}, qs)
+    assert r["answers"]["action"]["choice"] in ("a", "b") and r["answers"]["risk"]["noul"] == 0.5 and r["cost_usd"] == 0
+
+    class Resp:
+        status_code = 200
+        text = ""
+        def json(self):
+            return {"choices": [{"message": {"content": 'Sure: {"action": "b", "risk": 0.9}'}}], "usage": {"prompt_tokens": 50, "cost": 0.00001}}
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "x")
+    llm = LLMSensor("some/model")
+    monkeypatch.setattr(llm.s, "post", lambda *a, **k: Resp())
+    out = llm.ask({"screen": {}}, qs)
+    assert out["answers"]["action"]["choice"] == "b" and out["answers"]["action"]["probabilities"] == {"a": 0.0, "b": 1.0}
+    assert out["answers"]["risk"]["noul"] == 0.9 and out["cost_usd"] == 0.00001
+    assert open_sensor("none") is None

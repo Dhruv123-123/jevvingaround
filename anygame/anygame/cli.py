@@ -44,7 +44,8 @@ def cmd_play(a):
     from .pack import load_pack
     pack = load_pack(find_pack(a.pack))
     device = open_device(a.device, pack.size)
-    jev = None if a.sensor == "none" else Jev(timeout=float(pack.raw.get("sensor_timeout_s", os.environ.get("ANYGAME_JEV_TIMEOUT", "4"))))
+    from .sensors import open_sensor
+    jev = open_sensor(a.sensor, timeout=float(pack.raw.get("sensor_timeout_s", os.environ.get("ANYGAME_JEV_TIMEOUT", "4"))))
     hud = Hud(a.hud) if a.hud else None
     if hud:
         print(f"HUD on http://localhost:{a.hud}", file=sys.stderr)
@@ -125,22 +126,90 @@ def cmd_eval(a):
     sys.exit(1 if failed else 0)
 
 
-def cmd_play_inline(pack_dir, device_url: str, ticks: int, log_path: str | None = None) -> dict:
-    """Play a pack for N ticks with Jev and return the summary (used by `author --play-ticks`)."""
+def cmd_play_inline(pack_dir, device_url: str, ticks: int, log_path: str | None = None, sensor: str = "jev") -> dict:
+    """Play a pack for N ticks and return the summary (used by `author --play-ticks` and `bench`)."""
     from .device import open_device
-    from .jev import Jev
     from .loop import Agent
     from .pack import load_pack
+    from .sensors import open_sensor
     pack = load_pack(pack_dir)
     device = open_device(device_url, pack.size)
-    jev = Jev(timeout=float(pack.raw.get("sensor_timeout_s", os.environ.get("ANYGAME_JEV_TIMEOUT", "4"))))
+    jev = open_sensor(sensor, timeout=float(pack.raw.get("sensor_timeout_s", os.environ.get("ANYGAME_JEV_TIMEOUT", "4"))))
     agent = Agent(pack, device, jev, None, log_path=log_path, max_ticks=ticks)
     try:
         last = agent.run()
     finally:
         device.close()
-    return {"game": pack.name, "ticks": agent.tick, "last": last.get("action"), "reason": last.get("reason"), "sensor_errors": agent.errors,
-            "total_cost_usd": round(agent.total_cost, 6), "final_screen": {k: v for k, v in (last.get("screen") or {}).items() if not isinstance(v, dict)}}
+    recs = [json.loads(l) for l in open(log_path)] if log_path else []
+    dec = [r for r in recs if "jev_ms" in r]
+    q = lambda a, p: sorted(a)[min(len(a) - 1, int(p * len(a)))] if a else None  # noqa: E731
+    return {"game": pack.name, "ticks": agent.tick, "decisions": len(dec), "last": last.get("action"), "reason": last.get("reason"), "sensor_errors": agent.errors,
+            "total_cost_usd": round(agent.total_cost, 6), "sensor_ms_p50": q([r["jev_ms"] for r in dec], .5), "sensor_ms_p95": q([r["jev_ms"] for r in dec], .95),
+            "final_screen": {k: v for k, v in (last.get("screen") or {}).items() if not isinstance(v, dict)}}
+
+
+def cmd_battle(a):
+    """Two packs, one screen, alternating: each agent acts only when its own act_when holds."""
+    from .device import open_device
+    from .loop import Agent
+    from .pack import load_pack
+    from .sensors import open_sensor
+    packs = [load_pack(find_pack(a.pack_a)), load_pack(find_pack(a.pack_b))]
+    device = open_device(a.device, packs[0].size)
+    sensors = [open_sensor(a.sensor_a or a.sensor), open_sensor(a.sensor_b or a.sensor)]
+    logs = [a.log and a.log.replace(".jsonl", f"-{i}.jsonl") for i in (1, 2)]
+    agents = [Agent(p, device, s, None, log_path=l, max_ticks=None) for p, s, l in zip(packs, sensors, logs)]
+    period = 1.0 / max(p.tick_hz for p in packs)
+    result = {"a": packs[0].name, "b": packs[1].name, "ticks": 0}
+    try:
+        for tick in range(a.max_ticks):
+            t = time.perf_counter()
+            stops = [ag.step().get("action") == "stop" for ag in agents]
+            result["ticks"] = tick + 1
+            if any(stops):
+                break
+            dt = time.perf_counter() - t
+            if dt < period:
+                time.sleep(period - dt)
+        final = device.frame()
+    finally:
+        for ag in agents:
+            ag.close()
+        device.close()
+    from .perceive import read_all
+    for key, ag in zip(("a", "b"), agents):
+        vals = ag._present(read_all(ag.pack, final)[0])       # both sides read the final screen through their own pack
+        stop = ag.pack.raw.get("stop_when")
+        result[key + "_status"] = vals.get(stop["read"]) if stop else None
+        result[key + "_cost_usd"] = round(ag.total_cost, 6)
+        result[key + "_moves"] = sum(1 for h in ag.history if h["action"] not in ("wait", "stop"))
+        if key == "a":
+            result["final"] = {k: v for k, v in vals.items() if isinstance(v, list) and v and isinstance(v[0], str) and len(v) <= 12}
+    print(json.dumps(result, indent=1))
+
+
+def cmd_bench(a):
+    """The same pack, several seeds, one sensor: score, outcome, latency and cost per run, then a summary row."""
+    rows = []
+    for seed in a.seeds.split(","):
+        url = a.device.replace("{seed}", seed)
+        log = os.path.join(a.out, f"{a.pack}-{a.sensor.replace(':', '_').replace('/', '_')}-{seed}.jsonl")
+        Path(a.out).mkdir(parents=True, exist_ok=True)
+        s = cmd_play_inline(find_pack(a.pack), url, a.max_ticks, log_path=log, sensor=a.sensor)
+        row = {"seed": seed, "ticks": s["ticks"], "decisions": s["decisions"], "outcome": s["reason"], "score": s["final_screen"].get(a.score_read) if a.score_read else None,
+               "cost_usd": s["total_cost_usd"], "sensor_ms_p50": s["sensor_ms_p50"], "sensor_ms_p95": s["sensor_ms_p95"], "errors": s["sensor_errors"]}
+        rows.append(row)
+        print(json.dumps(row), file=sys.stderr)
+    summary = {"pack": a.pack, "sensor": a.sensor, "runs": len(rows),
+               "wins": sum(1 for r in rows if r["outcome"] and "we_won" in str(r["outcome"])),
+               "losses": sum(1 for r in rows if r["outcome"] and "we_lost" in str(r["outcome"])),
+               "mean_score": (sum((r["score"] or 0) for r in rows) / len(rows)) if a.score_read else None,
+               "mean_ticks": sum(r["ticks"] for r in rows) / len(rows), "total_cost_usd": round(sum(r["cost_usd"] for r in rows), 6),
+               "sensor_ms_p50": sorted(r["sensor_ms_p50"] or 0 for r in rows)[len(rows) // 2], "rows": rows}
+    print(json.dumps(summary, indent=1))
+    if a.append:
+        with open(a.append, "a") as f:
+            f.write(json.dumps({k: v for k, v in summary.items() if k != "rows"}) + "\n")
 
 
 def cmd_author(a):
@@ -282,13 +351,22 @@ def main(argv=None):
     pl.add_argument("--max-ticks", type=int); pl.add_argument("--hold", action="store_true", help="keep the HUD up after the game ends")
     pl.add_argument("--record", help="save annotated frames here (then `anygame render`)"); pl.set_defaults(fn=cmd_play)
     rd = sub.add_parser("render"); rd.add_argument("dir"); rd.add_argument("--out", default="demo.mp4"); rd.add_argument("--fps", type=float, default=4); rd.add_argument("--log", default=None, help="the run's --log file: draws a side panel per tick"); rd.set_defaults(fn=cmd_render)
-    ev = sub.add_parser("eval"); ev.add_argument("pack"); ev.add_argument("--sensor", default="none", choices=["jev", "none"]); ev.set_defaults(fn=cmd_eval)
+    ev = sub.add_parser("eval"); ev.add_argument("pack"); ev.add_argument("--sensor", default="none", help="jev | none | random | llm:<model>"); ev.set_defaults(fn=cmd_eval)
     au = sub.add_parser("author", help="a slow model writes the pack from probe frames; the runtime checks it")
     au.add_argument("--device", required=True); au.add_argument("--game", required=True); au.add_argument("--out", required=True)
     au.add_argument("--play", default=None, help="how you want it played, one paragraph (optional)")
     au.add_argument("--rounds", type=int, default=3); au.add_argument("--frames", type=int, default=4); au.add_argument("--size", default="540x560")
     au.add_argument("--model", default=None, help="OpenRouter model id; default anthropic/claude-sonnet-5 or $ANYGAME_AUTHOR_MODEL")
     au.add_argument("--play-ticks", type=int, default=0, help="after the pack passes, play it with Jev for N ticks"); au.set_defaults(fn=cmd_author)
+    bt = sub.add_parser("battle", help="two packs on one screen, alternating turns")
+    bt.add_argument("pack_a"); bt.add_argument("pack_b"); bt.add_argument("--device", required=True); bt.add_argument("--sensor", default="jev")
+    bt.add_argument("--sensor-a", default=None); bt.add_argument("--sensor-b", default=None); bt.add_argument("--max-ticks", type=int, default=200); bt.add_argument("--log", default=None)
+    bt.set_defaults(fn=cmd_battle)
+    bn = sub.add_parser("bench", help="one pack, several seeds, one sensor: outcomes, latency and cost")
+    bn.add_argument("pack"); bn.add_argument("--device", required=True, help="use {seed} where the seed goes"); bn.add_argument("--sensor", default="jev")
+    bn.add_argument("--seeds", default="1,2,3"); bn.add_argument("--max-ticks", type=int, default=200); bn.add_argument("--score-read", default=None)
+    bn.add_argument("--out", default="bench"); bn.add_argument("--append", default=None, help="append the summary row to this jsonl")
+    bn.set_defaults(fn=cmd_bench)
     rc = sub.add_parser("record"); rc.add_argument("--device", required=True); rc.add_argument("--out", required=True); rc.add_argument("--seconds", type=int, default=20); rc.add_argument("--hz", type=float, default=2); rc.add_argument("--pack"); rc.set_defaults(fn=cmd_record)
     a = p.parse_args(argv)
     a.fn(a)

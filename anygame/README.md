@@ -156,6 +156,23 @@ The tic-tac-toe pack in this repo came out of that loop's checker in one round: 
 cells `empty` lists) were the two things the format needed for it. Two games against the page's own
 win-block-centre opponent: two draws, which is the right result.
 
+## Battles and benchmarks
+
+```bash
+anygame battle connect4 connect4-yellow --device "web://games/connect4.html?ai=0" --sensor-a jev --sensor-b llm:openai/gpt-4o-mini
+anygame bench connect4 --device "web://games/connect4.html?seed={seed}" --sensor jev --seeds 1,2,3,4,5,6 --append results.jsonl
+anygame bench snake --device "web://games/snake.html?seed={seed}&tick=700" --sensor random --score-read score
+```
+
+A **battle** is two packs on one screen, each acting only when its own `act_when` holds; the yellow pack is
+the red one with the symbols swapped, so the only thing that differs between two players is what they were
+told. Write two paragraphs, let them fight for a tenth of a cent.
+
+A **bench** is one pack over several seeds with one sensor, and a sensor is anything that answers the pack's
+questions: `jev`, `random` (the floor: uniform choices, every belief 0.5), or `llm:<model>` (any chat model
+on OpenRouter, answering the same questions in JSON with probabilities of 1.0 on its choice). Because the
+packs strip the counting out, the numbers compare judgment, latency and cost, nothing else.
+
 ## Packs
 
 | Pack | Device | Status |
@@ -165,6 +182,7 @@ win-block-centre opponent: two draws, which is the right result.
 | `2048` | `web://games/2048.html` | plays end to end; fixtures and tests |
 | `tictactoe` | `web://games/tictactoe.html` | the authoring target; draws against the page's opponent; `accent` read, `only` rule |
 | `2048gb` | `pyboy://roms/2048gb/2048.gb` | the Game Boy 2048 in an emulator; OCR board read; fixture and test |
+| `connect4-yellow` | `web://games/connect4.html?ai=0` | the red pack from yellow's side, for battles |
 | `clash-royale` | `adb://<phone>` | zones, reads, actions, questions and the play paragraph are written; needs your frames for the card templates and the test fixtures (`anygame record`) |
 
 The three web games are single self-contained HTML files under `games/` with a `?seed=` for reproducible runs,
@@ -179,6 +197,8 @@ anygame eval <pack> [--sensor jev]        # perception tests on the pack's frame
 anygame record --device adb://<ip>:5555 --out packs/<pack>/fixtures --seconds 30   # frames for authoring
 anygame render <recorded-dir> --log run.jsonl --out demo.mp4                         # video with the decision panel
 anygame author --device <url> --game "<name>" --out packs/<name> [--play "…"] [--rounds 3] [--model …]
+anygame battle <pack-a> <pack-b> --device <url> [--sensor-a …] [--sensor-b …]
+anygame bench <pack> --device "<url with {seed}>" --sensor jev|random|llm:<model> --seeds 1,2,3 [--score-read score]
 ```
 
 `--sensor none` runs perception and the HUD with no model, for authoring a pack against a live screen.

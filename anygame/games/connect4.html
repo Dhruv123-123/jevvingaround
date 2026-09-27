@@ -14,12 +14,14 @@ const wins=(p)=>{const d=[[1,0],[0,1],[1,1],[1,-1]];for(let y=0;y<H;y++)for(let 
 const legal=()=>[...Array(W).keys()].filter(x=>!at(x,0));
 const render=()=>{grid.forEach((v,i)=>slots[i].className="s"+(v===1?" r":v===2?" y":""));const s=document.getElementById("status");
 s.style.background=over===1?"#22c55e":over===2?"#ef4444":over===3?"#a855f7":turn===1?"#3b82f6":"#6b7280";
-document.getElementById("msg").textContent=over===1?"red wins":over===2?"yellow wins":over===3?"draw":turn===1?"your move (red)":"thinking…"};
+document.getElementById("msg").textContent=over===1?"red wins":over===2?"yellow wins":over===3?"draw":turn===1?"your move (red)":(twoP?"your move (yellow)":"thinking…")};
 const finish=()=>{if(wins(1))over=1;else if(wins(2))over=2;else if(!legal().length)over=3};
 // opponent: win if possible, block if needed, else prefer the centre with a little noise
 const ai=()=>{const L=legal();for(const p of[2,1]){for(const x of L){const y=drop(x,p);const w=wins(p);grid[y*W+x]=0;if(w){drop(x,2);return}}}
 const pref=[3,2,4,1,5,0,6].filter(x=>L.includes(x));drop(rnd()<0.8?pref[0]:pref[Math.floor(rnd()*pref.length)],2)};
-window.__play=(x)=>{if(over||turn!==1||at(x,0))return false;drop(x,1);finish();turn=2;render();if(!over)setTimeout(()=>{ai();finish();turn=1;render()},350);return true};
+const twoP=q.get("ai")==="0";
+window.__play=(x)=>{if(over||at(x,0))return false;if(twoP){drop(x,turn);finish();turn=turn===1?2:1;render();return true}
+ if(turn!==1)return false;drop(x,1);finish();turn=2;render();if(!over)setTimeout(()=>{ai();finish();turn=1;render()},350);return true};
 window.__state=()=>({grid:[...grid],turn,over});
 b.addEventListener("click",e=>{const r=b.getBoundingClientRect();const x=Math.floor((e.clientX-r.left-8)/72);if(x>=0&&x<W)window.__play(x)});
 render();})();</script></body></html>

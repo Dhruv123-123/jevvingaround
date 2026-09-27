@@ -1,0 +1,57 @@
+game: connect4-yellow
+# The Connect Four pack seen from yellow's side, for `anygame battle` on games/connect4.html?ai=0.
+screen: { orientation: portrait, size: [540, 520] }
+zones:
+  board:   { rect: [0.0204, 0.1115, 0.9537, 0.9385], grid: [7, 6] }   # 72px cells from (11,58) on 540x520, measured from the page
+  columns: { rect: [0.0204, 0.1115, 0.9537, 0.9385], grid: [7, 1] }
+  status:  { rect: [0.696, 0.015, 0.974, 0.069] }
+read:
+  board:  { kind: color, zone: board, inset: 0.3, max_dist: 70, otherwise: ".", as: matrix,
+            options: { ".": "#f1f5f9", "R": "#ef4444", "Y": "#facc15" } }
+  status: { kind: color, zone: status, options: { our_turn: "#6b7280", their_turn: "#3b82f6", we_won: "#ef4444", we_lost: "#22c55e", draw: "#a855f7" }, max_dist: 90, otherwise: their_turn }
+  y_wins_at:  { kind: runs, in: board, symbol: Y, length: 4, empty: ".", gravity: down }   # drop here and Y has four
+  r_wins_at:  { kind: runs, in: board, symbol: R, length: 4, empty: ".", gravity: down }   # R drops here and wins: block it
+  r_wins_if_we_drop_at: { kind: runs, in: board, symbol: R, length: 4, empty: ".", gravity: down, mode: hands }   # our piece there gives R the win on top
+  legal:  { kind: locate, in: board, symbol: ".", many: true, row: 1 }     # columns with an empty top cell
+act:
+  - { id: drop, kind: tap, zone: columns, description: "drop a red piece in a column (choose the column cell)" }
+tick_hz: 3
+act_when: { read: status, equals: our_turn }
+stop_when: { read: status, in: [we_won, we_lost, draw] }
+play: >
+  Connect Four. We are Y (yellow), the opponent is R (red). Rows go top to bottom; pieces fall to the lowest
+  empty cell of a column. Columns are c1 (left) to c7 (right). Win by making four in a row horizontally,
+  vertically or diagonally. `y_wins_at` lists cells where dropping Y completes four right now; `r_wins_at`
+  lists cells where R's next drop would complete four. Priorities in order: if y_wins_at is not empty, drop in
+  that column (the c part of the cell); else if r_wins_at is not empty, drop in that column to block; else
+  never drop in a cell listed in r_wins_if_we_drop_at (your piece would give R the win on top); else prefer
+  the centre columns and cells that extend your own lines. `legal` lists the columns that still have room
+  (as c<n>r1); a column not in `legal` is full and dropping there does nothing.
+questions:
+  - id: can_win_now
+    type: noul
+    instructions: Is y_wins_at non-empty (a cell is listed), meaning a Y drop completes four right now?
+    criteria: { true: "A single Y drop makes four in a line.", false: "No immediate win." }
+  - id: must_block
+    type: noul
+    instructions: Is r_wins_at non-empty (a cell is listed), meaning R wins with its next drop unless we fill that column?
+    criteria: { true: "R threatens an immediate four somewhere.", false: "No immediate R threat." }
+  - id: win_column
+    type: choice
+    instructions: The column (c part) of the first cell in y_wins_at, or none if y_wins_at is empty.
+    criteria: { none: null, c1: null, c2: null, c3: null, c4: null, c5: null, c6: null, c7: null }
+  - id: threat_column
+    type: choice
+    instructions: The column (c part) of the first cell in r_wins_at, or none if r_wins_at is empty.
+    criteria: { none: null, c1: null, c2: null, c3: null, c4: null, c5: null, c6: null, c7: null }
+  - id: drop__cell
+    type: choice
+    instructions: Which column to drop in? Cells c1..c7 map to columns left to right. Only columns listed in `legal` are possible. Apply the priorities from the play notes.
+    criteria: { c1: null, c2: null, c3: null, c4: null, c5: null, c6: null, c7: null }
+rules:
+  - { if: { read: status, equals: our_turn }, avoid: { drop__cell: r_wins_if_we_drop_at } }   # those columns are not even offered
+  - { if: { noul: must_block, gte: 0.5 }, set: { drop__cell: threat_column } }
+  - { if: { noul: can_win_now, gte: 0.5 }, set: { drop__cell: win_column } }      # later rules win: a win beats a block
+tests:
+  - frame: fixtures/start.png
+    expect: { status: their_turn }
