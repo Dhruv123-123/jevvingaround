@@ -10,8 +10,9 @@ def _one(img, r):
     if inset:
         m = int(inset * min(img.shape[:2]))
         img = img[m:img.shape[0] - m, m:img.shape[1] - m]
-    stat = median_color if r.get("stat", "median") == "median" else mean_color
-    name, dist = nearest_named(stat(img), {str(k): v for k, v in r["options"].items()})
+    st = r.get("stat", "median")
+    sample = accent_color(img, float(r.get("min_share", 0.03))) if st == "accent" else (median_color(img) if st == "median" else mean_color(img))
+    name, dist = nearest_named(sample, {str(k): v for k, v in r["options"].items()})
     val = name if dist <= float(r.get("max_dist", 120)) else r.get("otherwise", "unknown")
     if r.get("parse") == "int":
         try:
@@ -19,6 +20,22 @@ def _one(img, r):
         except (TypeError, ValueError):
             return r.get("empty", 0)
     return val
+
+
+def accent_color(img, min_share: float = 0.03, tol: int = 40):
+    """The colour of the thing drawn on a flat background: median of the pixels that differ from the cell's
+    median colour. When fewer than min_share of the pixels differ, the cell is empty and its background is
+    returned. Glyphs (X, O, a chess piece), icons and markers become colour reads this way."""
+    import numpy as np
+    import cv2
+    px = img.reshape(-1, 3)
+    bg = np.median(px, axis=0)
+    lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB).astype(np.int16).reshape(-1, 3)
+    lab_bg = cv2.cvtColor(np.uint8([[bg]]), cv2.COLOR_BGR2LAB)[0, 0].astype(np.int16)
+    mask = np.abs(lab - lab_bg).sum(axis=1) > tol * 3 // 2
+    if mask.mean() < min_share:
+        return tuple(int(v) for v in bg)
+    return tuple(int(v) for v in np.median(px[mask], axis=0))
 
 
 def _grid(frame, zone, r):
@@ -37,7 +54,8 @@ def _grid(frame, zone, r):
             m = int(inset * min(img.shape[:2]))
             img = img[m:img.shape[0] - m, m:img.shape[1] - m]
         px = img.reshape(-1, 3)
-        samples.append(np.median(px, axis=0) if r.get("stat", "median") == "median" else px.mean(axis=0))
+        st = r.get("stat", "median")
+        samples.append(accent_color(img, float(r.get("min_share", 0.03))) if st == "accent" else (np.median(px, axis=0) if st == "median" else px.mean(axis=0)))
         names.append(name.split(".", 1)[1])
     if not names:
         return {}

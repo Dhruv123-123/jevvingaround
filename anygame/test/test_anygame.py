@@ -251,3 +251,40 @@ def test_runs_hands_mode_and_avoid_rule_drop_the_losing_column():
     values = {"status": "our_turn", "y_wins_if_we_drop_at": ["c6r4"]}
     qs = Agent(pack, FakeDevice([]), None).questions(values)
     assert "c6" not in qs["drop__cell"]["criteria"] and "c5" in qs["drop__cell"]["criteria"]
+
+
+# ---------- authoring: the slow model writes, the runtime checks ----------
+
+def test_accent_colour_reads_glyphs_on_flat_cells():
+    from anygame.perceive.color import accent_color
+    img = np.full((160, 160, 3), (55, 41, 31), np.uint8)          # #1f2937 cell background (BGR)
+    assert accent_color(img) == (55, 41, 31)                      # empty cell → background
+    cv2.putText(img, "X", (25, 125), cv2.FONT_HERSHEY_SIMPLEX, 4.5, (113, 113, 248), 14)   # #f87171 glyph
+    assert accent_color(img) == (113, 113, 248)
+
+
+def test_tictactoe_pack_reads_board_threats_and_only_offers_empty_cells():
+    pack = load_pack(os.path.join(ROOT, "packs", "tictactoe"))
+    frame = cv2.imread(os.path.join(ROOT, "packs", "tictactoe", "fixtures", "probe-4.png"))
+    ag = Agent(pack, FakeDevice([frame]), None)
+    values, _, _ = read_all(pack, frame)
+    values = ag._present(values)
+    assert values["board"] == [".X.", "XXO", "OO."] and values["o_wins_at"] == ["c3r3"]
+    qs = ag.questions(values)
+    assert set(qs["mark__cell"]["criteria"]) == {"c1r1", "c3r1", "c3r3"}       # `only` rule: just the empty cells
+    assert pack.zone("board").rect.x0 == 20 / 540                                # rect_px normalised at load
+
+
+def test_author_helpers_grid_palette_yaml_and_check():
+    from pathlib import Path
+    from anygame.author import palette, grid_overlay, extract_yaml, check_pack
+    frame = cv2.imread(os.path.join(ROOT, "packs", "tictactoe", "fixtures", "probe-2.png"))
+    pal = palette(frame)
+    assert pal[0]["hex"] == "#1f2937" and any(p["hex"] in ("#f36f6f", "#f87171") or p["hex"].startswith("#f") for p in pal)
+    assert grid_overlay(frame).shape == frame.shape
+    assert extract_yaml("text\n```yaml\ngame: x\n```\nnote") == "game: x\n" and extract_yaml("no block") is None
+    ok, report = check_pack(Path(ROOT, "packs", "tictactoe"), [Path(ROOT, "packs", "tictactoe", "fixtures", "probe-2.png")])
+    assert ok and "TEST fixtures/probe-2.png: ok" in report
+    bad = Path(ROOT, "packs", "tictactoe")
+    ok2, report2 = check_pack(Path("/nonexistent"), [])
+    assert not ok2 and "PACK ERROR" in report2

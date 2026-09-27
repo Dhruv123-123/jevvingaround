@@ -1,0 +1,309 @@
+"""`anygame author`: a slow model writes the pack, the runtime checks it, the fast model plays it.
+
+The slow model (any vision model on OpenRouter; Claude by default) gets probe frames with a pixel grid, the
+dominant colours with their hex codes, the pack format and three real packs, and writes a pack.yaml with
+tests over the probe frames. The runtime then loads the pack, runs its reads on every frame and hands the
+model exactly what its reads produced, so it can correct colours, rects and expectations. A few rounds of
+that and the pack passes `anygame eval` without anyone opening an image editor.
+"""
+from __future__ import annotations
+import base64
+import json
+import os
+import re
+import time
+from pathlib import Path
+from typing import Any
+
+import cv2
+import numpy as np
+
+HERE = Path(__file__).resolve().parent
+EXAMPLE_PACKS = ("2048", "connect4", "snake")
+
+FORMAT = """
+# Pack format (YAML). Everything the runtime needs to play a game from its screen.
+game: <name>
+screen: { orientation: portrait, size: [W, H] }          # the frame size the rects below are measured on
+zones:                                                    # named rectangles; rect_px is pixels on that frame,
+  board: { rect_px: [x0, y0, x1, y1], grid: [cols, rows] }   # rect is normalized 0..1. grid names cells c<col>r<row>
+  status: { rect_px: [x0, y0, x1, y1] }                   # (1-based); a 1-row grid names c1..cN, a 1-col grid r1..rN
+read:                                                     # each read is one key of the state the model sees
+  <id>: { kind: color, zone: <zone>, options: { <label>: "#hex", ... }, max_dist: 60, otherwise: <label>, inset: 0.25, as: matrix, parse: int }
+        # nearest named colour of the region's MEDIAN colour (per cell when the zone has a grid). max_dist is
+        # Lab distance (40 strict, 90 loose). inset trims the cell border fraction. as: matrix shows a grid
+        # as row strings (top row first). parse: int turns labels into numbers. stat: accent reads the colour
+        # of whatever is DRAWN on the cell (a glyph, an icon, a piece) instead of the background: use it when
+        # the symbols are letters or shapes on a flat cell, with the background colour as the empty option.
+  <id>: { kind: ocr, zone: <zone>, parse: int, every: 4 }   # text/number by OCR; slow, so refresh every N ticks
+  <id>: { kind: bar, zone: <zone>, color: "#hex", scale: 10 }   # fraction of a bar filled with a colour, times scale
+  <id>: { kind: locate, in: <grid read id>, symbol: <label>, many: true, row: 1 }   # cell(s) holding a label
+  <id>: { kind: runs, in: <grid read id>, symbol: <label>, length: 4, empty: ".", gravity: down, mode: hands }
+        # empty cells that would complete `length` in a line for `symbol`; gravity: down keeps only landing
+        # cells; mode: hands = landing cells whose cell above completes the line (drop there and you lose)
+  <id>: { kind: around, of: <locate read id>, in: <grid read id>, free: [".", F] }
+        # {up,down,left,right,ahead} neighbours plus <dir>_free (open cells that way) and <dir>_space (flood fill)
+  <id>: { ..., history: 1 }        # also exposes <id>_prev; for a located cell <id>_moving and <id>_reverse
+act:                                                      # typed actions; the model chooses one per tick
+  - { id: <name>, kind: tap, zone: <grid zone>, description: "..." }   # the runtime also asks which cell: <id>__cell
+  - { id: <name>, kind: tap, zone: <zone> }                            # tap the zone centre
+  - { id: <name>, kind: swipe, zone: <zone>, dir: up|down|left|right, ms: 60 }
+  - { id: <name>, kind: key, key: ArrowUp }                            # keyboard (web devices)
+  - { id: keep, kind: wait, description: "do nothing this tick" }
+tick_hz: 4                                                # decisions per second, at most
+act_when:  { read: <id>, equals: <value> }                # only act when this holds (our turn)
+stop_when: { read: <id>, in: [<value>, ...] }             # end the run
+settle: screen_change                                     # after an action wait for the screen to change before deciding again (real-time games)
+play: >                                                   # the paragraph: how to play, in terms of the read ids above
+  ...
+questions:                                                # asked every tick, all in one call; the model sees the reads
+  - { id: <belief>, type: noul, instructions: "...?", criteria: { true: "...", false: "..." } }
+  - { id: <name>, type: choice, instructions: "...", criteria: { a: "...", b: "..." } }
+  # an `action` choice question whose criteria are the action ids is optional; without it the runtime builds one from `act`
+rules:                                                    # policy the runtime enforces in the same tick
+  - { if: { noul: <belief>, gte: 0.6 }, exclude: [<action>, $<read>] }      # $read = that read's value
+  - { if: { read: <id>.<path>, in: [s, wall] }, exclude: [<action>] }       # equals|in|not|gte|lte
+  - { if: { noul: <belief>, gte: 0.5 }, set: { <action>__cell: <choice question id> } }
+  - { if: { read: <id>, equals: our_turn }, avoid: { <action>__cell: <read listing cells> } }   # drop those cells
+  - { if: { read: <id>, equals: our_turn }, only:  { <action>__cell: <read listing cells> } }   # offer only those cells
+tests:                                                    # required: perception checks on the frames provided
+  - { frame: fixtures/probe-1.png, expect: { <read id>: <exact value>, ... } }
+  # expect values must be exactly what the read returns: a label, a number, a cell name, a list of cells,
+  # or for a grid read a {cell: value} map (partial is fine) or, with as: matrix, a list of row strings.
+"""
+
+SYSTEM = """You write anygame packs: a YAML file that lets a fast judgment model (TypeSafe Jev) play a game from
+its screen. Jev sees only the compiled reads (labels, numbers, cells), never pixels, and it cannot count or
+compare numbers reliably, so anything arithmetic (which cell completes a line, what is next to the head) must
+be a derived read (locate, runs, around), and anything fatal must be a rule, not advice.
+
+Write colour reads from the palette hex codes given (they are measured medians), rects from the pixel grid
+drawn on the frames, and tests whose expectations are exactly what the frames show. Prefer colour reads over
+OCR for anything that has its own colour. Keep the play paragraph short and in terms of the read ids.
+Answer with ONE fenced ```yaml block containing the whole pack.yaml, then a short note."""
+
+
+def grid_overlay(frame: np.ndarray, step: int = 50) -> np.ndarray:
+    """The frame with a labelled pixel grid so the model can read rects off it."""
+    img = frame.copy()
+    h, w = img.shape[:2]
+    for x in range(0, w, step):
+        cv2.line(img, (x, 0), (x, h), (255, 255, 255), 1, cv2.LINE_AA)
+        cv2.putText(img, str(x), (x + 2, 12), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (0, 255, 255), 1, cv2.LINE_AA)
+    for y in range(0, h, step):
+        cv2.line(img, (0, y), (w, y), (255, 255, 255), 1, cv2.LINE_AA)
+        cv2.putText(img, str(y), (2, y - 2 if y else 12), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (0, 255, 255), 1, cv2.LINE_AA)
+    return cv2.addWeighted(frame, 0.35, img, 0.65, 0)
+
+
+def palette(frame: np.ndarray, k: int = 14) -> list[dict[str, Any]]:
+    """Dominant colours as hex with share and bounding box, from k-means on a downsampled frame."""
+    small = cv2.resize(frame, (0, 0), fx=0.25, fy=0.25, interpolation=cv2.INTER_AREA)
+    px = small.reshape(-1, 3).astype(np.float32)
+    crit = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 20, 1.0)
+    _, labels, centres = cv2.kmeans(px, k, None, crit, 3, cv2.KMEANS_PP_CENTERS)
+    labels = labels.reshape(small.shape[:2])
+    out = []
+    for i, c in enumerate(centres):
+        mask = labels == i
+        share = float(mask.mean())
+        if share < 0.002:
+            continue
+        ys, xs = np.where(mask)
+        b, g, r = [int(v) for v in c]
+        out.append({"hex": f"#{r:02x}{g:02x}{b:02x}", "share": round(share, 3),
+                    "bbox_px": [int(xs.min() * 4), int(ys.min() * 4), int(xs.max() * 4) + 4, int(ys.max() * 4) + 4]})
+    return sorted(out, key=lambda d: -d["share"])
+
+
+def probe(device, out_dir: Path, n: int = 4, keys: bool = True) -> list[Path]:
+    """Frames from a short exploration: the start, then after taps and keys, keeping only frames that differ."""
+    from .loop import stable_hash
+    out_dir.mkdir(parents=True, exist_ok=True)
+    w, h = device.size()
+    frames: list[Path] = []
+    seen: set[str] = set()
+
+    def keep():
+        f = device.frame()
+        hsh = stable_hash(cv2.resize(f, (64, 64)).tolist())
+        if hsh in seen or len(frames) >= n:
+            return
+        seen.add(hsh)
+        p = out_dir / f"probe-{len(frames) + 1}.png"
+        cv2.imwrite(str(p), f)
+        frames.append(p)
+
+    time.sleep(0.5)
+    keep()
+    moves = [("tap", w // 2, h // 2), ("tap", w // 4, h // 2), ("tap", 3 * w // 4, h // 2), ("tap", w // 2, h // 4), ("tap", w // 2, 3 * h // 4)]
+    for m in moves:
+        if len(frames) >= n:
+            break
+        try:
+            device.tap(m[1], m[2])
+        except Exception:  # noqa: BLE001
+            break
+        time.sleep(0.7)
+        keep()
+    if keys:
+        for k in ("ArrowLeft", "ArrowUp", "ArrowRight", "ArrowDown", "Space"):
+            if len(frames) >= n:
+                break
+            try:
+                device.key(k)
+            except Exception:  # noqa: BLE001
+                break
+            time.sleep(0.7)
+            keep()
+    return frames
+
+
+def _b64(img: np.ndarray) -> str:
+    ok, buf = cv2.imencode(".png", img)
+    return "data:image/png;base64," + base64.b64encode(buf.tobytes()).decode()
+
+
+class Author:
+    def __init__(self, model: str | None = None, api_key: str | None = None, base_url: str | None = None):
+        import requests
+        self.model = model or os.environ.get("ANYGAME_AUTHOR_MODEL", "anthropic/claude-sonnet-5")
+        self.key = api_key or os.environ.get("OPENROUTER_API_KEY") or os.environ.get("ANYGAME_AUTHOR_KEY")
+        if not self.key:
+            raise SystemExit("anygame author needs OPENROUTER_API_KEY (any vision model on OpenRouter) or ANYGAME_AUTHOR_KEY")
+        self.base = (base_url or os.environ.get("ANYGAME_AUTHOR_BASE", "https://openrouter.ai/api/v1")).rstrip("/")
+        self.s = requests.Session()
+        self.cost = 0.0
+        self.messages: list[dict[str, Any]] = [{"role": "system", "content": SYSTEM}]
+
+    def ask(self, parts: list[dict[str, Any]]) -> str:
+        self.messages.append({"role": "user", "content": parts})
+        body = {"model": self.model, "messages": self.messages, "max_tokens": 4000, "temperature": 0.2, "usage": {"include": True}}
+        for attempt in range(4):
+            r = self.s.post(self.base + "/chat/completions", json=body, headers={"authorization": f"Bearer {self.key}"}, timeout=240)
+            if r.status_code == 429 and attempt < 3:
+                time.sleep(8 * (attempt + 1))     # free models are rate limited; a paid one is not
+                continue
+            if r.status_code == 402:
+                msg = (r.json().get("error") or {}).get("message", "")
+                raise SystemExit(f"OpenRouter refused the authoring call (402): {msg}\nThe author needs a model that can write ~3000 tokens with 4 images: "
+                                 "a few cents on Sonnet. Add credits at https://openrouter.ai/credits or pick a cheaper --model.")
+            r.raise_for_status()
+            break
+        j = r.json()
+        if "error" in j and not j.get("choices"):
+            raise SystemExit(f"authoring model error: {j['error']}")
+        text = j["choices"][0]["message"]["content"]
+        self.cost += float((j.get("usage") or {}).get("cost") or 0)
+        self.messages.append({"role": "assistant", "content": text})
+        return text
+
+
+def extract_yaml(text: str) -> str | None:
+    m = re.search(r"```ya?ml\s*\n(.*?)```", text, re.S)
+    return m.group(1) if m else None
+
+
+def examples_text() -> str:
+    from .cli import find_pack
+    out = []
+    for name in EXAMPLE_PACKS:
+        try:
+            p = find_pack(name)
+        except SystemExit:
+            continue
+        out.append(f"### example pack: {name}\n```yaml\n{Path(p).read_text()}\n```")
+    return "\n\n".join(out)
+
+
+def check_pack(pack_dir: Path, frames: list[Path]) -> tuple[bool, str]:
+    """Load the pack, run every test, and dump what every read sees on every probe frame."""
+    from .loop import Agent
+    from .pack import PackError, load_pack
+    from .perceive import read_all
+    from .cli import _Dummy, _match
+    try:
+        pack = load_pack(pack_dir)
+    except PackError as e:
+        return False, f"PACK ERROR: {e}"
+    lines = []
+    ok = True
+    ag = Agent(pack, device=_Dummy(pack.size), jev=None)
+    for f in frames:
+        frame = cv2.imread(str(f))
+        try:
+            values, _, timings = read_all(pack, frame)
+            values = ag._present(values)
+        except Exception as e:  # noqa: BLE001
+            ok = False
+            lines.append(f"{f.name}: READ ERROR {type(e).__name__}: {e}")
+            continue
+        shown = json.dumps(values, default=str)
+        lines.append(f"{f.name}: reads → {shown[:1800]}")
+    for t in pack.tests:
+        frame = cv2.imread(str(pack.path.parent / t["frame"]))
+        if frame is None:
+            ok = False
+            lines.append(f"TEST {t['frame']}: frame not found")
+            continue
+        values, _, _ = read_all(pack, frame, only=set(t["expect"].keys()))
+        values = ag._present(values)
+        misses = {k: (v, values.get(k)) for k, v in t["expect"].items() if not _match(v, values.get(k))}
+        if misses:
+            ok = False
+            lines.append(f"TEST {t['frame']}: MISMATCH " + "; ".join(f"{k}: expected {e!r} got {g!r}" for k, (e, g) in misses.items()))
+        else:
+            lines.append(f"TEST {t['frame']}: ok")
+    return ok, "\n".join(lines)
+
+
+def author(device_url: str, game: str, out: Path, play: str | None = None, rounds: int = 3, model: str | None = None,
+           frames_n: int = 4, size: tuple[int, int] = (540, 560), play_ticks: int = 0, log=print) -> tuple[bool, Path]:
+    from .device import open_device
+    out.mkdir(parents=True, exist_ok=True)
+    fixtures = out / "fixtures"
+    dev = open_device(device_url, size)
+    try:
+        frames = probe(dev, fixtures, n=frames_n, keys=device_url.startswith("web://"))
+    finally:
+        dev.close()
+    log(f"probed {len(frames)} distinct frames into {fixtures}")
+    w, h = size
+    au = Author(model=model)
+    parts: list[dict[str, Any]] = [{"type": "text", "text":
+        f"Game: {game}\nDevice: {device_url}\nFrame size: {w}x{h} pixels (write rect_px in these pixels).\n"
+        + (f"How the user wants it played: {play}\n" if play else "")
+        + f"\nProbe frames are fixtures/probe-1.png … fixtures/probe-{len(frames)}.png, in order: the start screen, then after "
+          "taps at the centre / left / right / top / bottom and arrow keys. Each is shown twice: raw, then with a 50 px grid.\n"
+        + FORMAT + "\n\n" + examples_text()}]
+    for i, f in enumerate(frames, 1):
+        img = cv2.imread(str(f))
+        pal = palette(img)
+        parts.append({"type": "text", "text": f"--- fixtures/probe-{i}.png raw, then with grid. Dominant colours (median hex, share, bbox px): {json.dumps(pal)}"})
+        parts.append({"type": "image_url", "image_url": {"url": _b64(img)}})
+        parts.append({"type": "image_url", "image_url": {"url": _b64(grid_overlay(img))}})
+    parts.append({"type": "text", "text": "Write the complete pack.yaml now, with a test for every probe frame."})
+    ok = False
+    for rnd in range(1, rounds + 1):
+        log(f"round {rnd}: asking {au.model} …")
+        text = au.ask(parts)
+        y = extract_yaml(text)
+        if not y:
+            parts = [{"type": "text", "text": "I could not find a ```yaml block. Send the whole pack.yaml in one fenced yaml block."}]
+            continue
+        (out / "pack.yaml").write_text(y)
+        ok, report = check_pack(out, frames)
+        log(report)
+        log(f"round {rnd}: {'PASS' if ok else 'FAIL'}  (author spend so far ${au.cost:.4f})")
+        if ok:
+            break
+        parts = [{"type": "text", "text":
+            "Here is what your pack does on the probe frames. Fix the pack so every test passes: correct colours "
+            "(use the median hex values), rects, grid sizes, max_dist, and the expectations themselves where the read is "
+            "right and the expectation was wrong. Return the whole corrected pack.yaml in one fenced yaml block.\n\n" + report}]
+    if ok and play_ticks:
+        from .cli import cmd_play_inline
+        summary = cmd_play_inline(out, device_url, play_ticks)
+        log(json.dumps(summary, indent=1))
+    log(f"author spend: ${au.cost:.4f} on {au.model}")
+    return ok, out

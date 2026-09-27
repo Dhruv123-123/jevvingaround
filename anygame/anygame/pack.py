@@ -66,11 +66,25 @@ def load_pack(path: str | os.PathLike) -> Pack:
     screen = raw.get("screen", {}) or {}
     size = tuple(screen.get("size", [540, 960]))
     zones: dict[str, Zone] = {}
+
+    def _px(d: dict, what: str) -> None:
+        # rect_px: [x0, y0, x1, y1] in pixels of screen.size → rect normalized 0..1 (authoring convenience)
+        if "rect_px" in d and "rect" not in d:
+            try:
+                x0, y0, x1, y1 = [float(v) for v in d["rect_px"]]
+            except Exception as e:  # noqa: BLE001
+                raise PackError(f"{p}: {what}: rect_px must be [x0, y0, x1, y1] pixels") from e
+            d["rect"] = [x0 / size[0], y0 / size[1], x1 / size[0], y1 / size[1]]
+
     for name, z in (raw.get("zones") or {}).items():
+        _px(z, f"zone '{name}'")
+        if "rect" not in z:
+            raise PackError(f"{p}: zone '{name}': needs rect or rect_px")
         grid = tuple(z["grid"]) if z.get("grid") else None
         zones[name] = Zone(name, Rect.parse(z["rect"]), grid)
     reads = raw.get("read") or {}
     for rid, r in reads.items():
+        _px(r, f"read '{rid}'")
         if r.get("kind") not in READ_KINDS:
             raise PackError(f"{p}: read '{rid}': kind must be one of {sorted(READ_KINDS)}")
         if "zone" in r and r["zone"] not in zones:
@@ -107,8 +121,8 @@ def load_pack(path: str | os.PathLike) -> Pack:
         ok_read = "read" in cond and any(k in cond for k in ("equals", "in", "not", "gte", "lte"))
         if not (ok_noul or ok_read):
             raise PackError(f"{p}: rule needs if: {{noul, gte|lte}} or if: {{read, equals|in|not}}")
-        if not ("exclude" in rl or "set" in rl or "avoid" in rl):
-            raise PackError(f"{p}: rule needs 'exclude: [actions]', 'set: {{param_question: from_question}}' or 'avoid: {{param_question: read}}'")
+        if not any(k in rl for k in ("exclude", "set", "avoid", "only")):
+            raise PackError(f"{p}: rule needs 'exclude: [actions]', 'set: {{param_question: from_question}}', 'avoid: {{param_question: read}}' or 'only: {{param_question: read}}'")
     tests = raw.get("tests") or []
     if not tests:
         raise PackError(f"{p}: a pack without tests is refused; add at least one frame under 'tests'")

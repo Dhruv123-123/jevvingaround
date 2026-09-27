@@ -72,6 +72,7 @@ on:
 
 | read | gives | used by |
 |---|---|---|
+| `color` with `stat: accent` | the colour of whatever is drawn on a cell instead of its background | tic-tac-toe X/O, pieces, icons |
 | `locate` | the cell(s) holding a symbol in a grid read (`row`/`col` filters, `many`) | snake head/food, legal columns |
 | `runs` | empty cells that would complete N-in-a-line of a symbol (optionally under gravity) | Connect Four wins and threats; tic-tac-toe, gomoku |
 | `around` | what is next to a located cell in each direction, straight `ahead`, `<dir>_free` (open cells that way), `<dir>_space` (flood-fill room that way) | snake |
@@ -82,7 +83,8 @@ runtime asks Jev for the slot and the cell in the same call as the action, so a 
 
 **Rules turn beliefs into policy in the same tick.** `if: { noul: q, gte: p }` or `if: { read: id.path,
 equals|in|not|gte|lte: v }`, then `exclude: [actions]` (the choice becomes the best remaining action by
-probability; `$read` means that read's value, e.g. `$head_reverse`) or `set: { param_question: source_question }`.
+probability; `$read` means that read's value, e.g. `$head_reverse`), `set: { param_question: source_question }`,
+`avoid: { param_question: read }` (drop the cells a read lists) or `only: { param_question: read }` (offer just them).
 Snake's rules say "never move into a wall, a body cell or a pocket smaller than the snake"; Jev picks among what
 is left, toward the food.
 
@@ -120,6 +122,27 @@ Every game here has a demo video: `anygame play … --record dir --log run.jsonl
 `anygame render dir --log run.jsonl --out demo.mp4` draws the action, its probabilities, the beliefs, the
 rules that fired, latency and cost next to every frame.
 
+## Let a slow model write the pack
+
+```bash
+anygame author --device "web://games/tictactoe.html" --game "Tic-tac-toe, we are X" --out packs/tictactoe --play-ticks 30
+```
+
+The runtime probes the game (start screen, then after taps and arrow keys), hands the frames to a vision
+model (Claude Sonnet through OpenRouter by default, `--model` for any other) with a 50 px pixel grid drawn on
+them, the dominant colours as measured hex codes, the pack format and three real packs, and asks for a
+pack.yaml with tests over those frames. Then it loads the pack, runs every read on every frame, and sends the
+model exactly what its reads saw next to the images, so it corrects colours, rects and expectations. Up to
+`--rounds` of that; the pack is done when `anygame eval` passes, and `--play-ticks` plays it with Jev.
+
+The layering is the point: the slow model authors once, the state compiler counts every tick, the fast model
+judges every tick, rules guard every tick, fixtures prove perception before a dollar is spent.
+
+The tic-tac-toe pack in this repo came out of that loop's checker in one round: the `accent` colour stat
+(the colour of whatever is drawn on a cell, so X and O are colour reads) and the `only` rule (offer just the
+cells `empty` lists) were the two things the format needed for it. Two games against the page's own
+win-block-centre opponent: two draws, which is the right result.
+
 ## Packs
 
 | Pack | Device | Status |
@@ -127,6 +150,7 @@ rules that fired, latency and cost next to every frame.
 | `connect4` | `web://games/connect4.html` | plays and wins against the page's own opponent; fixtures, tests, rules |
 | `snake` | `web://games/snake.html?tick=700` | plays in real time; `around` read, rules, settle, sensor-timeout fallback |
 | `2048` | `web://games/2048.html` | plays end to end; fixtures and tests |
+| `tictactoe` | `web://games/tictactoe.html` | the authoring target; draws against the page's opponent; `accent` read, `only` rule |
 | `clash-royale` | `adb://<phone>` | zones, reads, actions, questions and the play paragraph are written; needs your frames for the card templates and the test fixtures (`anygame record`) |
 
 The three web games are single self-contained HTML files under `games/` with a `?seed=` for reproducible runs,
@@ -140,6 +164,7 @@ anygame play <pack> --device web://…|adb://…|replay://<dir> [--hud 8080] [--
 anygame eval <pack> [--sensor jev]        # perception tests on the pack's frames; action checks with a sensor
 anygame record --device adb://<ip>:5555 --out packs/<pack>/fixtures --seconds 30   # frames for authoring
 anygame render <recorded-dir> --log run.jsonl --out demo.mp4                         # video with the decision panel
+anygame author --device <url> --game "<name>" --out packs/<name> [--play "…"] [--rounds 3] [--model …]
 ```
 
 `--sensor none` runs perception and the HUD with no model, for authoring a pack against a live screen.

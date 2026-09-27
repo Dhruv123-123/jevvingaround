@@ -125,6 +125,33 @@ def cmd_eval(a):
     sys.exit(1 if failed else 0)
 
 
+def cmd_play_inline(pack_dir, device_url: str, ticks: int, log_path: str | None = None) -> dict:
+    """Play a pack for N ticks with Jev and return the summary (used by `author --play-ticks`)."""
+    from .device import open_device
+    from .jev import Jev
+    from .loop import Agent
+    from .pack import load_pack
+    pack = load_pack(pack_dir)
+    device = open_device(device_url, pack.size)
+    jev = Jev(timeout=float(pack.raw.get("sensor_timeout_s", os.environ.get("ANYGAME_JEV_TIMEOUT", "4"))))
+    agent = Agent(pack, device, jev, None, log_path=log_path, max_ticks=ticks)
+    try:
+        last = agent.run()
+    finally:
+        device.close()
+    return {"game": pack.name, "ticks": agent.tick, "last": last.get("action"), "reason": last.get("reason"), "sensor_errors": agent.errors,
+            "total_cost_usd": round(agent.total_cost, 6), "final_screen": {k: v for k, v in (last.get("screen") or {}).items() if not isinstance(v, dict)}}
+
+
+def cmd_author(a):
+    from .author import author
+    size = tuple(int(v) for v in a.size.split("x"))
+    ok, out = author(a.device, a.game, Path(a.out), play=a.play, rounds=a.rounds, model=a.model, frames_n=a.frames, size=size,
+                     play_ticks=a.play_ticks, log=lambda m: print(m, file=sys.stderr))
+    print(json.dumps({"pack": str(out / "pack.yaml"), "passes_eval": ok}))
+    sys.exit(0 if ok else 1)
+
+
 class _Dummy:
     def __init__(self, size):
         self._s = size
@@ -256,6 +283,12 @@ def main(argv=None):
     pl.add_argument("--record", help="save annotated frames here (then `anygame render`)"); pl.set_defaults(fn=cmd_play)
     rd = sub.add_parser("render"); rd.add_argument("dir"); rd.add_argument("--out", default="demo.mp4"); rd.add_argument("--fps", type=float, default=4); rd.add_argument("--log", default=None, help="the run's --log file: draws a side panel per tick"); rd.set_defaults(fn=cmd_render)
     ev = sub.add_parser("eval"); ev.add_argument("pack"); ev.add_argument("--sensor", default="none", choices=["jev", "none"]); ev.set_defaults(fn=cmd_eval)
+    au = sub.add_parser("author", help="a slow model writes the pack from probe frames; the runtime checks it")
+    au.add_argument("--device", required=True); au.add_argument("--game", required=True); au.add_argument("--out", required=True)
+    au.add_argument("--play", default=None, help="how you want it played, one paragraph (optional)")
+    au.add_argument("--rounds", type=int, default=3); au.add_argument("--frames", type=int, default=4); au.add_argument("--size", default="540x560")
+    au.add_argument("--model", default=None, help="OpenRouter model id; default anthropic/claude-sonnet-5 or $ANYGAME_AUTHOR_MODEL")
+    au.add_argument("--play-ticks", type=int, default=0, help="after the pack passes, play it with Jev for N ticks"); au.set_defaults(fn=cmd_author)
     rc = sub.add_parser("record"); rc.add_argument("--device", required=True); rc.add_argument("--out", required=True); rc.add_argument("--seconds", type=int, default=20); rc.add_argument("--hz", type=float, default=2); rc.add_argument("--pack"); rc.set_defaults(fn=cmd_record)
     a = p.parse_args(argv)
     a.fn(a)

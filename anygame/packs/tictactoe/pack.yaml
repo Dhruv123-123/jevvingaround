@@ -1,0 +1,58 @@
+game: tictactoe
+screen: { orientation: portrait, size: [540, 560] }
+zones:
+  board:  { rect_px: [20, 52, 520, 552], grid: [3, 3] }
+  status: { rect_px: [404, 12, 524, 36] }
+read:
+  board:  { kind: color, zone: board, stat: accent, inset: 0.2, max_dist: 60, otherwise: ".", as: matrix,
+            options: { ".": "#1f2937", X: "#f87171", O: "#60a5fa" } }
+  status: { kind: color, zone: status, max_dist: 80, otherwise: our_turn,
+            options: { our_turn: "#3b82f6", their_turn: "#eab308", we_won: "#22c55e", we_lost: "#ef4444", draw: "#9ca3af" } }
+  x_wins_at: { kind: runs, in: board, symbol: X, length: 3, empty: "." }   # mark here and X has three in a line
+  o_wins_at: { kind: runs, in: board, symbol: O, length: 3, empty: "." }   # O marks here and wins: block it
+  empty:     { kind: locate, in: board, symbol: ".", many: true }
+act:
+  - { id: mark, kind: tap, zone: board, description: "put an X in a cell" }
+tick_hz: 3
+act_when:  { read: status, equals: our_turn }
+stop_when: { read: status, in: [we_won, we_lost, draw] }
+play: >
+  Tic-tac-toe on a 3x3 grid, cells c1r1 (top-left) to c3r3 (bottom-right). We are X, the page is O. `board`
+  shows the rows top to bottom. Priorities: if x_wins_at lists a cell, mark it; else if o_wins_at lists a
+  cell, mark it to block; else take the centre c2r2 if empty; else a corner that lines up with your own X;
+  else any cell in `empty`.
+questions:
+  - id: can_win_now
+    type: noul
+    instructions: Is x_wins_at non-empty (a cell is listed)?
+    criteria: { true: "A cell is listed in x_wins_at.", false: "x_wins_at is empty." }
+  - id: must_block
+    type: noul
+    instructions: Is o_wins_at non-empty (a cell is listed)?
+    criteria: { true: "A cell is listed in o_wins_at.", false: "o_wins_at is empty." }
+  - id: win_cell
+    type: choice
+    instructions: The first cell in x_wins_at, or none if it is empty.
+    criteria: { none: null, c1r1: null, c2r1: null, c3r1: null, c1r2: null, c2r2: null, c3r2: null, c1r3: null, c2r3: null, c3r3: null }
+  - id: block_cell
+    type: choice
+    instructions: The first cell in o_wins_at, or none if it is empty.
+    criteria: { none: null, c1r1: null, c2r1: null, c3r1: null, c1r2: null, c2r2: null, c3r2: null, c1r3: null, c2r3: null, c3r3: null }
+  - id: mark__cell
+    type: choice
+    instructions: Which empty cell to mark, following the priorities in the play notes.
+    criteria: { c1r1: null, c2r1: null, c3r1: null, c1r2: null, c2r2: null, c3r2: null, c1r3: null, c2r3: null, c3r3: null }
+rules:
+  - { if: { read: status, equals: our_turn }, only: { mark__cell: empty } }
+  - { if: { noul: must_block, gte: 0.5 }, set: { mark__cell: block_cell } }
+  - { if: { noul: can_win_now, gte: 0.5 }, set: { mark__cell: win_cell } }
+tests:
+  - frame: fixtures/probe-1.png
+    expect: { board: ["...", "...", "..."], status: our_turn }
+  - frame: fixtures/probe-2.png
+    expect: { board: ["...", ".X.", "O.."], status: our_turn, empty: [c1r1, c2r1, c3r1, c1r2, c3r2, c2r3, c3r3] }
+  - frame: fixtures/probe-4.png
+    expect: { board: [".X.", "XXO", "OO."], o_wins_at: [c3r3], x_wins_at: [] }
+    expect_action: { is: mark }
+    expect_cell: c3r3
+    requires_sensor: true

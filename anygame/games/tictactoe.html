@@ -1,0 +1,30 @@
+<!doctype html><html><head><meta charset="utf-8"><title>tic-tac-toe</title>
+<style>
+body{margin:0;background:#111827;font-family:system-ui,sans-serif;color:#e5e7eb;width:540px;height:560px;overflow:hidden}
+h1{margin:0;padding:12px 16px;font-size:22px;display:flex;justify-content:space-between;align-items:center}
+#status{width:120px;height:26px;border-radius:6px;background:#3b82f6}
+#board{display:grid;grid-template-columns:repeat(3,160px);grid-template-rows:repeat(3,160px);gap:10px;margin:10px auto 0;width:500px}
+.cell{background:#1f2937;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:110px;font-weight:700;cursor:pointer;user-select:none}
+.x{color:#f87171}.o{color:#60a5fa}
+</style></head><body>
+<h1><span id="title">tic-tac-toe · <span id="n">0</span></span><div id="status"></div></h1>
+<div id="board"></div>
+<script>
+// You are X and move first; the page plays O: win, block, centre, corner, else random (seeded).
+const q=new URLSearchParams(location.search);let seed=Number(q.get("seed")||1);
+const rnd=()=>{seed=(seed*1103515245+12345)&0x7fffffff;return seed/0x7fffffff};
+const el=document.getElementById("board"),st=document.getElementById("status"),nEl=document.getElementById("n");
+let b=Array(9).fill(""),turn="X",over=false,games=0;
+const preset=q.get("board");if(preset&&preset.length===9){b=[...preset].map(c=>c==="."?"":c);}
+const L=[[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]];
+const winner=()=>{for(const [a,c,d] of L)if(b[a]&&b[a]===b[c]&&b[a]===b[d])return b[a];return b.every(x=>x)?"draw":null;};
+const render=()=>{el.innerHTML="";b.forEach((v,i)=>{const d=document.createElement("div");d.className="cell "+(v==="X"?"x":v==="O"?"o":"");d.textContent=v;d.onclick=()=>play(i);el.appendChild(d)});
+ const w=winner();st.style.background=w==="X"?"#22c55e":w==="O"?"#ef4444":w==="draw"?"#9ca3af":turn==="X"?"#3b82f6":"#eab308";};
+const findLine=(p)=>{for(const [a,c,d] of L){const line=[b[a],b[c],b[d]];if(line.filter(x=>x===p).length===2&&line.includes("")){return [a,c,d][line.indexOf("")]}}return -1};
+const ai=()=>{let m=findLine("O");if(m<0)m=findLine("X");if(m<0&&!b[4])m=4;if(m<0){const cs=[0,2,6,8].filter(i=>!b[i]);if(cs.length)m=cs[Math.floor(rnd()*cs.length)]}
+ if(m<0){const es=b.map((v,i)=>v?-1:i).filter(i=>i>=0);m=es[Math.floor(rnd()*es.length)]}b[m]="O";turn="X";};
+const play=(i)=>{if(over||turn!=="X"||b[i])return;b[i]="X";turn="O";render();if(winner()){over=true;render();return}
+ setTimeout(()=>{ai();render();if(winner())over=true;render();},350);};
+window.__state=()=>({board:b.join(""),turn,over,winner:winner()});
+render();
+</script></body></html>

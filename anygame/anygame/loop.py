@@ -113,6 +113,13 @@ class Agent:
                 cells = self.pack.zone(a.params["zone"]).cells()
                 qs[f"{a.id}__cell"] = {"type": "choice", "instructions": f"If the action is {a.id}, which cell of {a.params['zone']}?", "criteria": {k.split('.', 1)[1]: None for k in list(cells)[:255]}}
         for rl in self.pack.rules:
+            for pq, read in (rl.get("only") or {}).items():
+                cells = _get(values, read) or []
+                cells = cells if isinstance(cells, list) else [cells]
+                if pq in qs:
+                    keep = {k: v for k, v in qs[pq]["criteria"].items() if any(str(x) == k or str(x).startswith(k + "r") for x in cells)}
+                    if keep:
+                        qs[pq] = {**qs[pq], "criteria": keep}
             for pq, read in (rl.get("avoid") or {}).items():
                 cells = _get(values, read) or []
                 cells = cells if isinstance(cells, list) else [cells]
