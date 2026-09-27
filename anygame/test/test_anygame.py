@@ -288,3 +288,26 @@ def test_author_helpers_grid_palette_yaml_and_check():
     bad = Path(ROOT, "packs", "tictactoe")
     ok2, report2 = check_pack(Path("/nonexistent"), [])
     assert not ok2 and "PACK ERROR" in report2
+
+
+# ---------- emulator device ----------
+
+def test_2048gb_pack_reads_the_game_boy_board_by_ocr():
+    pack = load_pack(os.path.join(ROOT, "packs", "2048gb"))
+    frame = cv2.imread(os.path.join(ROOT, "packs", "2048gb", "fixtures", "board-a.png"))
+    values, _, _ = read_all(pack, frame, only={"tiles"})
+    assert values["tiles"]["c1r3"] == 4 and values["tiles"]["c1r4"] == 4 and values["tiles"]["c2r4"] == 2 and values["tiles"]["c4r1"] == 0
+
+
+def test_pyboy_device_boots_the_rom_and_takes_the_pad():
+    pytest.importorskip("pyboy")
+    from anygame.device import open_device
+    d = open_device("pyboy://" + os.path.join(ROOT, "roms", "2048gb", "2048.gb") + "?boot=60", None)
+    try:
+        assert d.size() == (480, 432)
+        f = d.frame()
+        assert f.shape == (432, 480, 3)
+        d.key("start"); d.key("ArrowLeft"); d.swipe(100, 100, 100, 300); d.tap(1, 1)   # every input kind maps to a button
+        assert d.frame().shape == (432, 480, 3)
+    finally:
+        d.close()

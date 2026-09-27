@@ -1,0 +1,38 @@
+# The same game as packs/2048, on a Game Boy: Sanqui's 2048gb (Zlib licence, roms/2048gb) in the PyBoy emulator.
+# Different device, different perception (pixel-font digits → OCR instead of tile colours), the same paragraph.
+game: 2048gb
+screen: { orientation: landscape, size: [480, 432] }        # the 160x144 Game Boy screen at 3x
+zones:
+  board: { rect_px: [48, 24, 432, 408], grid: [4, 4] }      # 4 tiles of 96 px
+  score: { rect_px: [72, 408, 210, 432] }
+read:
+  tiles: { kind: ocr, zone: board, parse: int, empty: 0 }   # one OCR pass over the grid, ~0.7 s; the game waits for us
+  score: { kind: ocr, zone: score, parse: int, every: 6 }
+act:
+  - { id: up,    kind: key, key: up }
+  - { id: down,  kind: key, key: down }
+  - { id: left,  kind: key, key: left }
+  - { id: right, kind: key, key: right }
+tick_hz: 2
+play: >
+  2048 on a 4x4 grid. A move slides every tile as far as it goes in that direction; two tiles with the
+  same number that collide merge into one with double the number. Keep the largest tile in one corner
+  (bottom-left), build a monotone chain along the bottom row, and avoid the move that lifts the big
+  tile out of its corner. Prefer moves that merge; among merges prefer ones that keep the bottom row
+  full. Never move up unless nothing else changes the board.
+questions:
+  - id: corner_at_risk
+    type: noul
+    instructions: Would the most natural merging move lift the largest tile out of the bottom-left corner?
+    criteria: { true: "The best-looking merge requires moving the largest tile away from its corner.", false: "The largest tile stays anchored whatever the good moves are." }
+  - id: action
+    type: choice
+    instructions: Which move now? Consider merges available in each direction and the corner strategy in the play notes.
+    criteria: { up: "slide all tiles up", down: "slide all tiles down", left: "slide all tiles left", right: "slide all tiles right" }
+tests:
+  - frame: fixtures/board-a.png
+    expect:
+      tiles: { c1r3: 4, c1r4: 4, c2r4: 2, c4r4: 0, c1r1: 0 }
+      score: 4
+    expect_action: { not: [up] }
+    requires_sensor: true

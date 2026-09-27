@@ -11,6 +11,7 @@ dependencies = [
 ]
 [project.optional-dependencies]
 render = ["imageio-ffmpeg>=0.5"]
+emulator = ["pyboy>=2.0"]
 vocab = ["ultralytics"]
 [project.scripts]
 anygame = "anygame.cli:main"

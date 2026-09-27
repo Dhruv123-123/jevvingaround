@@ -15,9 +15,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: { python-version: "3.11" }
-      - run: pip install -e . pytest && python -m playwright install --with-deps chromium
+      - run: pip install -e ".[emulator]" pytest && python -m playwright install --with-deps chromium
       - run: python -m pytest -q test
-      - run: anygame packs && anygame eval 2048 && anygame eval snake && anygame eval connect4 && anygame eval tictactoe && anygame eval clash-royale
+      - run: anygame packs && anygame eval 2048 && anygame eval snake && anygame eval connect4 && anygame eval tictactoe && anygame eval 2048gb && anygame eval clash-royale
       # a real game against the model when the secret exists: 30 ticks, under a tenth of a cent
       - if: ${{ env.OPENROUTER_API_KEY != '' }}
         run: |

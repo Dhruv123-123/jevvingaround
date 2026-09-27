@@ -122,6 +122,19 @@ Every game here has a demo video: `anygame play … --record dir --log run.jsonl
 `anygame render dir --log run.jsonl --out demo.mp4` draws the action, its probabilities, the beliefs, the
 rules that fired, latency and cost next to every frame.
 
+## Game Boy: same paragraph, different machine
+
+```bash
+anygame play 2048gb --device pyboy://roms/2048gb/2048.gb        # Sanqui's 2048gb (Zlib) in the PyBoy emulator
+```
+
+`pyboy://<rom.gb>` is a device like any other: frames are the 160x144 screen scaled up, keys are the pad,
+swipes map to the d-pad and taps to A, so a pack written for a touch screen plays unchanged. The emulator
+advances by wall-clock time only when the loop asks for a frame, so no game time passes between a frame and
+the action decided on it. The `2048gb` pack is the web 2048 pack with the perception swapped (pixel-font
+digits are an OCR read instead of tile colours) and the corner moved; the paragraph is the same. Any homebrew
+or your own dumped ROM works the same way; only the Zlib-licensed one ships in the repo.
+
 ## Let a slow model write the pack
 
 ```bash
@@ -151,6 +164,7 @@ win-block-centre opponent: two draws, which is the right result.
 | `snake` | `web://games/snake.html?tick=700` | plays in real time; `around` read, rules, settle, sensor-timeout fallback |
 | `2048` | `web://games/2048.html` | plays end to end; fixtures and tests |
 | `tictactoe` | `web://games/tictactoe.html` | the authoring target; draws against the page's opponent; `accent` read, `only` rule |
+| `2048gb` | `pyboy://roms/2048gb/2048.gb` | the Game Boy 2048 in an emulator; OCR board read; fixture and test |
 | `clash-royale` | `adb://<phone>` | zones, reads, actions, questions and the play paragraph are written; needs your frames for the card templates and the test fixtures (`anygame record`) |
 
 The three web games are single self-contained HTML files under `games/` with a `?seed=` for reproducible runs,
@@ -160,7 +174,7 @@ so every pack is testable in CI with no hardware and no account beyond the model
 
 ```bash
 anygame packs
-anygame play <pack> --device web://…|adb://…|replay://<dir> [--hud 8080] [--max-ticks N] [--sensor none]
+anygame play <pack> --device web://…|pyboy://<rom>|adb://…|replay://<dir> [--hud 8080] [--max-ticks N] [--sensor none]
 anygame eval <pack> [--sensor jev]        # perception tests on the pack's frames; action checks with a sensor
 anygame record --device adb://<ip>:5555 --out packs/<pack>/fixtures --seconds 30   # frames for authoring
 anygame render <recorded-dir> --log run.jsonl --out demo.mp4                         # video with the decision panel
