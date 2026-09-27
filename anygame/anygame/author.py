@@ -165,36 +165,21 @@ def _b64(img: np.ndarray) -> str:
 
 
 class Author:
+    """The authoring model: any vision-capable chat model, routed by ANYGAME_LLM_* (Azure or OpenAI-compatible)."""
+
     def __init__(self, model: str | None = None, api_key: str | None = None, base_url: str | None = None):
-        import requests
-        self.model = model or os.environ.get("ANYGAME_AUTHOR_MODEL", "anthropic/claude-sonnet-5")
-        self.key = api_key or os.environ.get("OPENROUTER_API_KEY") or os.environ.get("ANYGAME_AUTHOR_KEY")
-        if not self.key:
-            raise SystemExit("anygame author needs OPENROUTER_API_KEY (any vision model on OpenRouter) or ANYGAME_AUTHOR_KEY")
-        self.base = (base_url or os.environ.get("ANYGAME_AUTHOR_BASE", "https://openrouter.ai/api/v1")).rstrip("/")
-        self.s = requests.Session()
-        self.cost = 0.0
+        from .chat import Chat
+        self.chat = Chat(model=model or os.environ.get("ANYGAME_AUTHOR_MODEL"), api_key=api_key, base_url=base_url)
+        self.model = self.chat.model
         self.messages: list[dict[str, Any]] = [{"role": "system", "content": SYSTEM}]
+
+    @property
+    def cost(self) -> float:
+        return self.chat.cost
 
     def ask(self, parts: list[dict[str, Any]]) -> str:
         self.messages.append({"role": "user", "content": parts})
-        body = {"model": self.model, "messages": self.messages, "max_tokens": 4000, "temperature": 0.2, "usage": {"include": True}}
-        for attempt in range(4):
-            r = self.s.post(self.base + "/chat/completions", json=body, headers={"authorization": f"Bearer {self.key}"}, timeout=240)
-            if r.status_code == 429 and attempt < 3:
-                time.sleep(8 * (attempt + 1))     # free models are rate limited; a paid one is not
-                continue
-            if r.status_code == 402:
-                msg = (r.json().get("error") or {}).get("message", "")
-                raise SystemExit(f"OpenRouter refused the authoring call (402): {msg}\nThe author needs a model that can write ~3000 tokens with 4 images: "
-                                 "a few cents on Sonnet. Add credits at https://openrouter.ai/credits or pick a cheaper --model.")
-            r.raise_for_status()
-            break
-        j = r.json()
-        if "error" in j and not j.get("choices"):
-            raise SystemExit(f"authoring model error: {j['error']}")
-        text = j["choices"][0]["message"]["content"]
-        self.cost += float((j.get("usage") or {}).get("cost") or 0)
+        text, _usage, _ms = self.chat.complete(self.messages, max_tokens=4000, temperature=0.2)
         self.messages.append({"role": "assistant", "content": text})
         return text
 
@@ -257,8 +242,47 @@ def check_pack(pack_dir: Path, frames: list[Path]) -> tuple[bool, str]:
     return ok, "\n".join(lines)
 
 
+def play_digest(summary: dict[str, Any], log_path: Path, max_lines: int = 12) -> str:
+    """What happened when the pack was played, compressed for the authoring model: outcome, what the actions did,
+    how often the screen failed to change, which rules fired, sensor timing, and a few sampled ticks."""
+    recs = [json.loads(l) for l in open(log_path)] if log_path.exists() else []
+    dec = [r for r in recs if "jev_ms" in r]
+    from collections import Counter
+    acts = Counter(r["action"].split(" (")[0] for r in dec)
+    noop = sum(1 for r in recs if r.get("reason") == "screen unchanged")
+    rules = Counter(x.split(" → ")[0] for r in dec for x in (r.get("rules") or []))
+    lines = [f"OUTCOME: {summary.get('reason') or 'tick cap reached (' + str(summary.get('ticks')) + ' ticks)'}",
+             f"ticks {summary.get('ticks')}, decisions {len(dec)}, screen-unchanged waits {noop}, sensor errors {summary.get('sensor_errors')}, "
+             f"sensor p50 {summary.get('sensor_ms_p50')} ms, cost ${summary.get('total_cost_usd')}",
+             f"actions taken: {dict(acts.most_common())}",
+             f"rules fired: {dict(rules.most_common())}",
+             f"final screen: {json.dumps(summary.get('final_screen'), default=str)[:600]}"]
+    step = max(1, len(dec) // max_lines)
+    for r in dec[::step][:max_lines]:
+        scr = {k: v for k, v in r["screen"].items() if not str(k).endswith("_prev")}
+        lines.append(f"tick {r['tick']}: screen={json.dumps(scr, default=str)[:400]} → {r['action']} probs={r.get('action_probs')} beliefs={r.get('nouls')} rules={r.get('rules')}")
+    return "\n".join(lines)
+
+
+def _better(a: dict[str, Any] | None, b: dict[str, Any], score_read: str | None) -> bool:
+    """Is play summary b better than a? won > not lost > longer > higher score."""
+    if a is None:
+        return True
+    def key(s):
+        reason = str(s.get("reason") or "")
+        won = "we_won" in reason or "won" in reason
+        lost = "we_lost" in reason or "dead" in reason or "over" in reason
+        score = (s.get("final_screen") or {}).get(score_read or "score")
+        return (1 if won else 0, 0 if lost else 1, s.get("ticks", 0) if lost else 0, float(score) if isinstance(score, (int, float)) else 0.0)
+    return key(b) > key(a)
+
+
 def author(device_url: str, game: str, out: Path, play: str | None = None, rounds: int = 3, model: str | None = None,
-           frames_n: int = 4, size: tuple[int, int] = (540, 560), play_ticks: int = 0, log=print) -> tuple[bool, Path]:
+           frames_n: int = 4, size: tuple[int, int] = (540, 560), play_ticks: int = 0, tune: int = 0, sensor: str = "jev",
+           score_read: str | None = None, log=print) -> tuple[bool, Path]:
+    """Write a pack for the game behind device_url. rounds: perception rounds until eval passes. tune: after that,
+    play `play_ticks` ticks, hand the model a digest of the run, and let it revise the paragraph, questions and
+    rules; the best-playing pack is kept."""
     from .device import open_device
     out.mkdir(parents=True, exist_ok=True)
     fixtures = out / "fixtures"
@@ -303,7 +327,34 @@ def author(device_url: str, game: str, out: Path, play: str | None = None, round
             "right and the expectation was wrong. Return the whole corrected pack.yaml in one fenced yaml block.\n\n" + report}]
     if ok and play_ticks:
         from .cli import cmd_play_inline
-        summary = cmd_play_inline(out, device_url, play_ticks)
-        log(json.dumps(summary, indent=1))
+        best: dict[str, Any] | None = None
+        best_yaml = (out / "pack.yaml").read_text()
+        for t in range(0, tune + 1):
+            log_path = out / f"play-{t}.jsonl"
+            summary = cmd_play_inline(out, device_url, play_ticks, log_path=str(log_path), sensor=sensor)
+            digest = play_digest(summary, log_path)
+            log(f"play {t}: {summary.get('reason') or 'tick cap'} after {summary.get('ticks')} ticks, ${summary.get('total_cost_usd')}")
+            if _better(best, summary, score_read):
+                best, best_yaml = summary, (out / "pack.yaml").read_text()
+            if t == tune:
+                break
+            log(f"tune {t + 1}: asking {au.model} …")
+            text = au.ask([{"type": "text", "text":
+                "The pack passes its perception tests. Here is how it PLAYED. Revise the pack so it plays better: the play "
+                "paragraph, the questions, the rules (move any counting into derived reads: runs, around, locate; make "
+                "fatal or wasted moves impossible with exclude/avoid/only rules; add act_when/settle/stop_when if the "
+                "log shows waits or missed turns). Keep the zones, reads and tests that pass unless the log shows a read "
+                "is wrong. Return the whole pack.yaml in one fenced yaml block.\n\n" + digest}])
+            y = extract_yaml(text)
+            if not y:
+                break
+            (out / "pack.yaml").write_text(y)
+            ok2, report = check_pack(out, frames)
+            if not ok2:
+                log("tuned pack broke perception; keeping the previous one\n" + report)
+                (out / "pack.yaml").write_text(best_yaml)
+                break
+        (out / "pack.yaml").write_text(best_yaml)
+        log(f"kept the best-playing pack: {best.get('reason') or 'tick cap'} after {best.get('ticks')} ticks" if best else "no play result")
     log(f"author spend: ${au.cost:.4f} on {au.model}")
     return ok, out

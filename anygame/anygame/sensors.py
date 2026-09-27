@@ -61,17 +61,13 @@ QUESTIONS:
 
 
 class LLMSensor:
-    """Any chat model as a sensor. Same questions, JSON answers, probabilities = 1.0 on the chosen option."""
+    """Any chat model as a sensor. Same questions, JSON answers, probabilities = 1.0 on the chosen option.
+    Routed by ANYGAME_LLM_* (Azure or any OpenAI-compatible endpoint); Jev is never routed here."""
 
     def __init__(self, model: str, api_key: str | None = None, base_url: str | None = None, timeout: float | None = None):
-        import requests
-        self.model = model
-        self.key = api_key or os.environ.get("OPENROUTER_API_KEY") or os.environ.get("OPENAI_API_KEY")
-        if not self.key:
-            raise SystemExit("llm sensor needs OPENROUTER_API_KEY (or OPENAI_API_KEY with ANYGAME_LLM_BASE)")
-        self.base = (base_url or os.environ.get("ANYGAME_LLM_BASE", "https://openrouter.ai/api/v1")).rstrip("/")
-        self.timeout = timeout or 30.0
-        self.s = requests.Session()
+        from .chat import Chat
+        self.chat = Chat(model=model, api_key=api_key, base_url=base_url, timeout=timeout or 30.0)
+        self.model = self.chat.model
 
     def ask(self, state, questions: dict) -> dict:
         qtext = []
@@ -82,16 +78,13 @@ class LLMSensor:
                 qtext.append(f"- {k} (probability true): {q['instructions']}")
             else:
                 qtext.append(f"- {k} (integer score): {q['instructions']}")
-        body = {"model": self.model, "messages": [{"role": "user", "content": PROMPT % (json.dumps(state, default=str), "\n".join(qtext))}],
-                "max_tokens": 400, "temperature": 0, "usage": {"include": True}}
-        t0 = time.perf_counter()
-        r = self.s.post(self.base + "/chat/completions", json=body, headers={"authorization": f"Bearer {self.key}"}, timeout=self.timeout)
-        if r.status_code != 200:
-            raise RuntimeError(f"llm {r.status_code}: {r.text[:200]}")
-        j = r.json()
-        text = j["choices"][0]["message"]["content"] or ""
+        before = self.chat.cost
+        text, usage, ms = self.chat.complete([{"role": "user", "content": PROMPT % (json.dumps(state, default=str), "\n".join(qtext))}], max_tokens=400, temperature=0)
         m = re.search(r"\{.*\}", text, re.S)
-        raw = json.loads(m.group(0)) if m else {}
+        try:
+            raw = json.loads(m.group(0)) if m else {}
+        except json.JSONDecodeError:
+            raw = {}
         answers: dict[str, Any] = {}
         for k, q in questions.items():
             v = raw.get(k)
@@ -110,6 +103,5 @@ class LLMSensor:
                     answers[k] = {"type": "score", "score": int(v)}
                 except (TypeError, ValueError):
                     answers[k] = {"type": "score", "score": 0}
-        usage = j.get("usage") or {}
-        return {"answers": answers, "latency_ms": int((time.perf_counter() - t0) * 1000), "input_tokens": usage.get("prompt_tokens", 0),
-                "cost_usd": float(usage.get("cost") or 0.0), "model": self.model}
+        return {"answers": answers, "latency_ms": ms, "input_tokens": usage.get("prompt_tokens", 0),
+                "cost_usd": self.chat.cost - before, "model": self.model}

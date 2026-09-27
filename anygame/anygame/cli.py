@@ -212,11 +212,47 @@ def cmd_bench(a):
             f.write(json.dumps({k: v for k, v in summary.items() if k != "rows"}) + "\n")
 
 
+def cmd_go(a):
+    """The one command: a device URL in, a playing game with a HUD out. Packs are cached per game under --packs."""
+    import hashlib
+    import re as _re
+    from .author import author
+    from .device import open_device
+    from .hud import Hud
+    from .loop import Agent
+    from .pack import load_pack
+    from .sensors import open_sensor
+    base = a.device.split("?", 1)[0]
+    name = a.game or _re.sub(r"[^a-z0-9]+", "-", os.path.splitext(os.path.basename(base.rstrip("/")))[0].lower()).strip("-") or "game"
+    slug = _re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")[:40] + "-" + hashlib.sha1(base.encode()).hexdigest()[:6]
+    pack_dir = Path(a.packs) / slug
+    known = Path(find_pack(a.pack)).parent if a.pack else (pack_dir if (pack_dir / "pack.yaml").exists() and not a.fresh else None)
+    if known is None:
+        print(f"no pack for {base}: authoring one into {pack_dir} …", file=sys.stderr)
+        size = tuple(int(v) for v in a.size.split("x"))
+        ok, _ = author(a.device, a.game or name, pack_dir, play=a.play, model=a.model, size=size, play_ticks=a.play_ticks, tune=a.tune,
+                       sensor=a.sensor, log=lambda m: print(m, file=sys.stderr))
+        if not ok:
+            sys.exit(f"could not write a pack that passes its own tests; see {pack_dir}")
+        known = pack_dir
+    pack = load_pack(known)
+    device = open_device(a.device, pack.size)
+    hud = Hud(a.hud) if a.hud else None
+    if hud:
+        print(f"playing {pack.name} from {known}  HUD on http://localhost:{a.hud}", file=sys.stderr)
+    agent = Agent(pack, device, open_sensor(a.sensor), hud, max_ticks=a.max_ticks)
+    try:
+        last = agent.run()
+    finally:
+        device.close()
+    print(json.dumps({"pack": str(known), "ticks": agent.tick, "reason": last.get("reason"), "total_cost_usd": round(agent.total_cost, 6)}, indent=1))
+
+
 def cmd_author(a):
     from .author import author
     size = tuple(int(v) for v in a.size.split("x"))
     ok, out = author(a.device, a.game, Path(a.out), play=a.play, rounds=a.rounds, model=a.model, frames_n=a.frames, size=size,
-                     play_ticks=a.play_ticks, log=lambda m: print(m, file=sys.stderr))
+                     play_ticks=a.play_ticks, tune=a.tune, sensor=a.sensor, score_read=a.score_read, log=lambda m: print(m, file=sys.stderr))
     print(json.dumps({"pack": str(out / "pack.yaml"), "passes_eval": ok}))
     sys.exit(0 if ok else 1)
 
@@ -356,8 +392,18 @@ def main(argv=None):
     au.add_argument("--device", required=True); au.add_argument("--game", required=True); au.add_argument("--out", required=True)
     au.add_argument("--play", default=None, help="how you want it played, one paragraph (optional)")
     au.add_argument("--rounds", type=int, default=3); au.add_argument("--frames", type=int, default=4); au.add_argument("--size", default="540x560")
-    au.add_argument("--model", default=None, help="OpenRouter model id; default anthropic/claude-sonnet-5 or $ANYGAME_AUTHOR_MODEL")
-    au.add_argument("--play-ticks", type=int, default=0, help="after the pack passes, play it with Jev for N ticks"); au.set_defaults(fn=cmd_author)
+    au.add_argument("--model", default=None, help="authoring model (deployment name on Azure); default $ANYGAME_LLM_MODEL, routed by $ANYGAME_LLM_BASE")
+    au.add_argument("--play-ticks", type=int, default=0, help="after the pack passes, play it for N ticks")
+    au.add_argument("--tune", type=int, default=0, help="rounds of play → digest → revised paragraph/questions/rules (needs --play-ticks)")
+    au.add_argument("--sensor", default="jev", help="sensor used for the play rounds: jev | random | llm:<model>")
+    au.add_argument("--score-read", default=None, help="read id that measures progress, for keeping the best pack"); au.set_defaults(fn=cmd_author)
+    go = sub.add_parser("go", help="point it at a game: author a pack if none exists, then play with the HUD")
+    go.add_argument("device", help="web://<url or file>, pyboy://<rom>, adb://<host:port>"); go.add_argument("--game", default=None, help="the game's name and anything the model should know")
+    go.add_argument("--play", default=None, help="how you want it played"); go.add_argument("--packs", default=os.environ.get("ANYGAME_HOME", os.path.expanduser("~/.anygame/packs")))
+    go.add_argument("--hud", type=int, default=int(os.environ.get("HUD_PORT", "8080"))); go.add_argument("--max-ticks", type=int, default=None); go.add_argument("--size", default="540x560")
+    go.add_argument("--model", default=None); go.add_argument("--tune", type=int, default=1); go.add_argument("--play-ticks", type=int, default=40); go.add_argument("--sensor", default="jev")
+    go.add_argument("--fresh", action="store_true", help="ignore a cached pack for this game"); go.add_argument("--pack", default=None, help="use this bundled pack instead of authoring")
+    go.set_defaults(fn=cmd_go)
     bt = sub.add_parser("battle", help="two packs on one screen, alternating turns")
     bt.add_argument("pack_a"); bt.add_argument("pack_b"); bt.add_argument("--device", required=True); bt.add_argument("--sensor", default="jev")
     bt.add_argument("--sensor-a", default=None); bt.add_argument("--sensor-b", default=None); bt.add_argument("--max-ticks", type=int, default=200); bt.add_argument("--log", default=None)

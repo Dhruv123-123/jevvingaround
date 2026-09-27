@@ -329,8 +329,47 @@ def test_random_sensor_and_llm_answer_parsing(monkeypatch):
 
     monkeypatch.setenv("OPENROUTER_API_KEY", "x")
     llm = LLMSensor("some/model")
-    monkeypatch.setattr(llm.s, "post", lambda *a, **k: Resp())
+    monkeypatch.setattr(llm.chat.s, "post", lambda *a, **k: Resp())
     out = llm.ask({"screen": {}}, qs)
     assert out["answers"]["action"]["choice"] == "b" and out["answers"]["action"]["probabilities"] == {"a": 0.0, "b": 1.0}
     assert out["answers"]["risk"]["noul"] == 0.9 and out["cost_usd"] == 0.00001
     assert open_sensor("none") is None
+
+
+# ---------- authoring with tuning: the model is stubbed, the runtime is real ----------
+
+def test_author_tune_loop_plays_digests_and_keeps_a_passing_pack(monkeypatch, tmp_path):
+    from anygame import author as A
+    yaml_text = open(os.path.join(ROOT, "packs", "tictactoe", "pack.yaml")).read()
+    calls = []
+
+    def fake_ask(self, parts):
+        calls.append([p["text"][:80] for p in parts if p.get("type") == "text"])
+        body = yaml_text.split("\ntests:")[0].replace("game: tictactoe", "game: ttt-authored")
+        body += "\ntests:\n  - { frame: fixtures/probe-1.png, expect: { status: our_turn, board: ['...', '...', '...'] } }\n"
+        return "here you go\n```yaml\n" + body + "```\n"
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "x")
+    monkeypatch.setattr(A.Author, "ask", fake_ask)
+    out = tmp_path / "ttt"
+    ok, path = A.author("web://" + os.path.join(ROOT, "games", "tictactoe.html?seed=2"), "Tic-tac-toe", out,
+                        rounds=2, play_ticks=12, tune=1, sensor="random:3", log=lambda m: None)
+    assert ok and (out / "pack.yaml").exists() and "ttt-authored" in (out / "pack.yaml").read_text()
+    assert (out / "play-0.jsonl").exists() and (out / "play-1.jsonl").exists()
+    assert len(calls) == 2 and "PLAYED" in " ".join(calls[1])          # round 1 wrote it, tune 1 saw the play digest
+    digest = A.play_digest({"reason": "status is we_lost", "ticks": 7, "final_screen": {}}, out / "play-0.jsonl")
+    assert digest.startswith("OUTCOME: status is we_lost") and "actions taken" in digest
+    assert A._better(None, {"reason": "x"}, None) and A._better({"reason": "status is we_lost", "ticks": 5}, {"reason": "status is draw", "ticks": 9}, None)
+
+
+def test_chat_routes_azure_and_openai_compatible(monkeypatch):
+    from anygame.chat import Chat
+    monkeypatch.setenv("ANYGAME_LLM_KEY", "k")
+    az = Chat(model="gpt-4o", base_url="https://myres.openai.azure.com")
+    assert az.api == "azure" and az.url().startswith("https://myres.openai.azure.com/openai/deployments/gpt-4o/chat/completions?api-version=") and az.headers()["api-key"] == "k"
+    v1 = Chat(model="gpt-4o", base_url="https://myres.openai.azure.com/openai/v1", api="azure")
+    assert v1.url() == "https://myres.openai.azure.com/openai/v1/chat/completions"
+    fo = Chat(model="Llama-3.3-70B", base_url="https://myres.services.ai.azure.com")
+    assert fo.api == "azure-models" and "/models/chat/completions" in fo.url()
+    orr = Chat(model="anthropic/claude-sonnet-5", base_url="https://openrouter.ai/api/v1")
+    assert orr.api == "openai" and orr.headers()["authorization"] == "Bearer k"

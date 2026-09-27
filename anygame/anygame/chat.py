@@ -1,0 +1,75 @@
+"""One chat-completion client for every model that is not Jev: the authoring model and the `llm:` sensor.
+
+Jev always goes to OpenRouter (or JEV_BASE_URL). Everything else goes wherever ANYGAME_LLM_BASE points:
+
+  OpenRouter / any OpenAI-compatible server (default):
+    ANYGAME_LLM_BASE=https://openrouter.ai/api/v1   ANYGAME_LLM_KEY=…   (falls back to OPENROUTER_API_KEY)
+  Azure OpenAI (model = your deployment name):
+    ANYGAME_LLM_API=azure  ANYGAME_LLM_BASE=https://<resource>.openai.azure.com  ANYGAME_LLM_KEY=<api key>
+    ANYGAME_LLM_API_VERSION=2024-10-21 (optional)
+  Azure AI Foundry "models" endpoint (serverless, model = the model name):
+    ANYGAME_LLM_API=azure-models  ANYGAME_LLM_BASE=https://<resource>.services.ai.azure.com  ANYGAME_LLM_KEY=…
+"""
+from __future__ import annotations
+import os
+import time
+from typing import Any
+
+import requests
+
+
+class Chat:
+    def __init__(self, model: str | None = None, api_key: str | None = None, base_url: str | None = None, api: str | None = None, timeout: float = 240):
+        self.base = (base_url or os.environ.get("ANYGAME_LLM_BASE") or "https://openrouter.ai/api/v1").rstrip("/")
+        self.api = (api or os.environ.get("ANYGAME_LLM_API") or ("azure" if ".openai.azure.com" in self.base else "azure-models" if ".services.ai.azure.com" in self.base else "openai")).lower()
+        self.model = model or os.environ.get("ANYGAME_LLM_MODEL") or ("anthropic/claude-sonnet-5" if "openrouter" in self.base else None)
+        if not self.model:
+            raise SystemExit("set ANYGAME_LLM_MODEL (on Azure: the deployment name) or pass --model")
+        self.key = api_key or os.environ.get("ANYGAME_LLM_KEY") or os.environ.get("AZURE_OPENAI_API_KEY") or (os.environ.get("OPENROUTER_API_KEY") if "openrouter" in self.base else None)
+        if not self.key:
+            raise SystemExit(f"no key for {self.base}: set ANYGAME_LLM_KEY")
+        self.version = os.environ.get("ANYGAME_LLM_API_VERSION", "2024-10-21")
+        self.timeout = timeout
+        self.s = requests.Session()
+        self.cost = 0.0
+
+    def url(self) -> str:
+        if self.api == "azure":
+            if self.base.endswith("/openai/v1"):
+                return f"{self.base}/chat/completions"
+            return f"{self.base}/openai/deployments/{self.model}/chat/completions?api-version={self.version}"
+        if self.api == "azure-models":
+            return f"{self.base}/models/chat/completions?api-version={os.environ.get('ANYGAME_LLM_API_VERSION', '2024-05-01-preview')}"
+        return f"{self.base}/chat/completions"
+
+    def headers(self) -> dict[str, str]:
+        if self.api.startswith("azure"):
+            return {"api-key": self.key, "content-type": "application/json"}
+        return {"authorization": f"Bearer {self.key}", "content-type": "application/json"}
+
+    def complete(self, messages: list[dict[str, Any]], max_tokens: int = 1000, temperature: float = 0.0) -> tuple[str, dict[str, Any], int]:
+        """Returns (text, usage, latency_ms). Adds to self.cost when the server reports a cost (OpenRouter does)."""
+        body: dict[str, Any] = {"messages": messages, "max_tokens": max_tokens, "temperature": temperature}
+        if self.api == "azure-models" or self.api == "openai":
+            body["model"] = self.model
+        if "openrouter" in self.base:
+            body["usage"] = {"include": True}
+        t0 = time.perf_counter()
+        for attempt in range(4):
+            r = self.s.post(self.url(), json=body, headers=self.headers(), timeout=self.timeout)
+            if r.status_code == 429 and attempt < 3:
+                time.sleep(8 * (attempt + 1))
+                continue
+            if r.status_code == 402:
+                msg = (r.json().get("error") or {}).get("message", "")
+                raise SystemExit(f"{self.base} refused the call (402): {msg}\nAdd credits, or point ANYGAME_LLM_BASE at another endpoint (see anygame/chat.py).")
+            if r.status_code != 200:
+                raise RuntimeError(f"{self.api} {r.status_code}: {r.text[:300]}")
+            break
+        j = r.json()
+        if "error" in j and not j.get("choices"):
+            raise RuntimeError(f"model error: {j['error']}")
+        text = j["choices"][0]["message"].get("content") or ""
+        usage = j.get("usage") or {}
+        self.cost += float(usage.get("cost") or 0.0)
+        return text, usage, int((time.perf_counter() - t0) * 1000)

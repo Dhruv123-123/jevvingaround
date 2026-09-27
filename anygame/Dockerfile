@@ -8,7 +8,8 @@ COPY packs ./packs
 COPY games ./games
 COPY roms ./roms
 RUN pip install --no-cache-dir ".[render,emulator]" && python -c "import rapidocr_onnxruntime"   # warms the OCR model download
-ENV HUD_PORT=8080 PYTHONUNBUFFERED=1
+ENV HUD_PORT=8080 PYTHONUNBUFFERED=1 ANYGAME_HOME=/packs
+VOLUME /packs                                        # authored packs persist here: docker run -v anygame-packs:/packs …
 EXPOSE 8080
 ENTRYPOINT ["anygame"]
 CMD ["play", "2048", "--device", "web://games/2048.html", "--hold"]

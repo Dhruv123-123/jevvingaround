@@ -9,6 +9,34 @@ device ──frames──▶ perception (colours, bars, templates, OCR, open-voc
 HUD ◀── frame + boxes + belief bars + action + latency + cost ◀── Jev (one call, all questions) ──▶ tap / swipe
 ```
 
+## Point it at a game
+
+```bash
+pip install anygame                                   # or: docker run -p 8080:8080 -e OPENROUTER_API_KEY ghcr.io/dhruv123-123/anygame go …
+OPENROUTER_API_KEY=… anygame go "web://https://example.com/some-game" --game "Snake, arrow keys"
+```
+
+`go` probes the game, has a vision model write the pack, checks the pack against the frames until its
+tests pass, plays a short game and lets the model tune the paragraph and rules from the log, caches the pack
+under `~/.anygame/packs`, and then plays with the HUD at http://localhost:8080. The second time it skips
+straight to playing. `--pack 2048` uses a bundled pack instead of authoring one.
+
+### Which model goes where
+
+Jev always goes to OpenRouter (`OPENROUTER_API_KEY`) or `JEV_BASE_URL`. Every other model call, the authoring
+model and any `llm:` sensor, goes wherever `ANYGAME_LLM_BASE` points:
+
+```bash
+# default: OpenRouter, any model id
+ANYGAME_LLM_MODEL=anthropic/claude-sonnet-5
+# Azure OpenAI: the model is your deployment name
+ANYGAME_LLM_BASE=https://<resource>.openai.azure.com  ANYGAME_LLM_KEY=<api key>  ANYGAME_LLM_MODEL=<deployment>  ANYGAME_LLM_API_VERSION=2024-10-21
+# Azure AI Foundry serverless models endpoint
+ANYGAME_LLM_BASE=https://<resource>.services.ai.azure.com  ANYGAME_LLM_KEY=<key>  ANYGAME_LLM_MODEL=<model name>
+```
+
+The API shape is picked from the host (`ANYGAME_LLM_API=azure|azure-models|openai` overrides it).
+
 ## Watch it in one command
 
 ```bash
@@ -146,7 +174,11 @@ model (Claude Sonnet through OpenRouter by default, `--model` for any other) wit
 them, the dominant colours as measured hex codes, the pack format and three real packs, and asks for a
 pack.yaml with tests over those frames. Then it loads the pack, runs every read on every frame, and sends the
 model exactly what its reads saw next to the images, so it corrects colours, rects and expectations. Up to
-`--rounds` of that; the pack is done when `anygame eval` passes, and `--play-ticks` plays it with Jev.
+`--rounds` of that; the pack is done when `anygame eval` passes. Then `--play-ticks N --tune K` plays it, hands
+the model a digest of the run (outcome, what each action did, screen-unchanged waits, which rules fired, sampled
+ticks with the state, probabilities and beliefs) and lets it revise the paragraph, questions and rules K times;
+the best-playing pack that still passes its tests is kept. That closes the second loop: a pack can be
+perceptually right and play badly, and now the model sees that too.
 
 The layering is the point: the slow model authors once, the state compiler counts every tick, the fast model
 judges every tick, rules guard every tick, fixtures prove perception before a dollar is spent.
@@ -196,7 +228,8 @@ anygame play <pack> --device web://…|pyboy://<rom>|adb://…|replay://<dir> [-
 anygame eval <pack> [--sensor jev]        # perception tests on the pack's frames; action checks with a sensor
 anygame record --device adb://<ip>:5555 --out packs/<pack>/fixtures --seconds 30   # frames for authoring
 anygame render <recorded-dir> --log run.jsonl --out demo.mp4                         # video with the decision panel
-anygame author --device <url> --game "<name>" --out packs/<name> [--play "…"] [--rounds 3] [--model …]
+anygame go <device> [--game "…"] [--play "…"] [--pack <bundled>]        # author if needed, cache, play with HUD
+anygame author --device <url> --game "<name>" --out packs/<name> [--play "…"] [--rounds 3] [--play-ticks 40 --tune 2] [--model …]
 anygame battle <pack-a> <pack-b> --device <url> [--sensor-a …] [--sensor-b …]
 anygame bench <pack> --device "<url with {seed}>" --sensor jev|random|llm:<model> --seeds 1,2,3 [--score-read score]
 ```
