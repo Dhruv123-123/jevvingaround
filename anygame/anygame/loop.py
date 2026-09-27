@@ -57,6 +57,7 @@ class Agent:
         self.log = open(log_path, "w") if log_path else None
         self.settling = 0
         self.last_answers: dict[str, Any] | None = None
+        self.trackers: dict[str, Any] = {}
         # slow reads (OCR, detectors) run in a forked worker process: a thread starves next to onnxruntime and
         # the browser, a process does not, and the loop only ever waits on the first value
         import multiprocessing
@@ -89,7 +90,7 @@ class Agent:
             if "→" not in n:
                 continue
             aid, val = n.split("→", 1)
-            for pq in (f"{aid}__cell", f"{aid}__target", f"{aid}__slot"):
+            for pq in (f"{aid}__cell", f"{aid}__target", f"{aid}__slot", f"{aid}__option"):
                 if pq in qs:
                     c = {k: v for k, v in qs[pq]["criteria"].items() if k != val}
                     if c:
@@ -109,6 +110,12 @@ class Agent:
                     cells = self.pack.zone(target_zone).cells()
                     qs[f"{a.id}__target"] = {"type": "choice", "instructions": f"If the action is {a.id}, which cell of {target_zone} to target? Cells are c<col>r<row>; row 1 is the top of the zone.",
                                              "criteria": {k.split('.', 1)[1]: None for k in list(cells)[:255]}}
+            if a.kind == "macro":
+                opts = _get(values, a.params["options"]) or {}
+                landings = opts.get("landings") if isinstance(opts, dict) else None
+                if landings:
+                    qs[f"{a.id}__option"] = {"type": "choice", "instructions": f"If the action is {a.id}, which option? Each is a computed landing with its consequences.",
+                                             "criteria": dict(landings)}
             if a.kind == "tap" and a.params.get("zone") and self.pack.zone(a.params["zone"]).grid and f"{a.id}__cell" not in qs:
                 cells = self.pack.zone(a.params["zone"]).cells()
                 qs[f"{a.id}__cell"] = {"type": "choice", "instructions": f"If the action is {a.id}, which cell of {a.params['zone']}?", "criteria": {k.split('.', 1)[1]: None for k in list(cells)[:255]}}
@@ -148,6 +155,17 @@ class Agent:
         if a.kind == "key":
             self.device.key(p["key"])
             return f"key {p['key']}"
+        if a.kind == "macro":
+            label = answers.get(f"{a.id}__option", {}).get("choice")
+            tracker = self.trackers.get(p["options"].split(".")[0])
+            keys = tracker.macros.get(label) if (tracker and label) else None
+            if not keys:
+                return f"{a.id} (no option)"
+            for k in keys:
+                self.device.key(k)
+                time.sleep(float(p.get("key_ms", 40)) / 1000)
+            tracker.predict(label)
+            return f"{a.id} {label}: {' '.join(keys)}"
         if a.kind == "tap":
             cell = answers.get(f"{a.id}__cell", {}).get("choice") if f"{a.id}__cell" in answers else None
             x, y = self._center(f"{p['zone']}.{cell}" if cell else p.get("zone") or p["at"]) if (cell or "zone" in p) else (int(p["at"][0] * w), int(p["at"][1] * h))
@@ -179,17 +197,12 @@ class Agent:
             return f"play {slot} → {target}"
         return f"unknown kind {a.kind}"
 
-    # ---- one tick --------------------------------------------------------------------------------
-    def step(self) -> dict[str, Any]:
-        self.tick += 1
-        t0 = time.perf_counter()
-        frame = self.device.frame()
+    def observe(self, frame) -> tuple[dict[str, Any], list, dict[str, float]]:
+        """Frame → the state the model sees: the pack's reads, presented, plus history (<id>_prev/_moving/_reverse)
+        and the derived reads computed here because they need per-run state (around, tetris)."""
         values, dets, timings = read_all(self.pack, frame, tick=self.tick, previous=self.last_values, pool=self.pool, pending=self.pending)
-        t_perc = (time.perf_counter() - t0) * 1000
         raw_values = values
         values = self._present(values)
-        # `history: 1` on a read exposes the last DISTINCT value as <id>_prev (two ticks can see the same frame),
-        # and a tracked `locate` read also gets <id>_moving: up/down/left/right from the cell names
         for rid, r in self.pack.reads.items():
             if not r.get("history"):
                 continue
@@ -204,6 +217,27 @@ class Agent:
         for rid, r in self.pack.reads.items():
             if r.get("kind") == "around":
                 values[rid] = around_of(values.get(r["of"]), raw_values.get(r["in"]), values.get(f"{r['of']}_moving"), r)
+            elif r.get("kind") == "tetris":
+                if rid not in self.trackers:
+                    from .perceive.tetris import TetrisTracker
+                    self.trackers[rid] = TetrisTracker(r)
+                values[rid] = self.trackers[rid].read(raw_values.get(r["in"]), raw_values.get(r["next_in"]) if r.get("next_in") else None)
+        return values, dets, timings
+
+    # ---- one tick --------------------------------------------------------------------------------
+    def step(self) -> dict[str, Any]:
+        self.tick += 1
+        t0 = time.perf_counter()
+        if self.hud is not None and hasattr(self.hud, "take_edits"):
+            edit = self.hud.take_edits()
+            if edit:
+                # the paragraph is the weights: swap it live, no restart
+                self.pack.play = edit["play"] or self.pack.play
+                self.pack.rules = edit["rules"]
+                self.last_answers = None
+        frame = self.device.frame()
+        values, dets, timings = self.observe(frame)
+        t_perc = (time.perf_counter() - t0) * 1000
         h = stable_hash({k: v for k, v in values.items() if not k.endswith("_prev")})
         changed = h != self.last_hash
         if changed:
@@ -219,13 +253,13 @@ class Agent:
         stop = self.pack.raw.get("stop_when")
         if stop and self._cond(stop, values):
             rec["action"] = "stop"
-            rec["reason"] = f"{stop['read']} is {values.get(stop['read'])}"
+            rec["reason"] = f"{stop['read']} is {_get(values, stop['read'])}"
             self._emit(rec, frame, dets, None)
             return rec
         gate = self.pack.raw.get("act_when")
         if gate and not self._cond(gate, values):
             rec["action"] = "wait"
-            rec["reason"] = f"{gate['read']} is {values.get(gate['read'])}"
+            rec["reason"] = f"{gate['read']} is {_get(values, gate['read'])}"
             self.last_hash = h
             self._emit(rec, frame, dets, None)
             return rec
@@ -282,7 +316,7 @@ class Agent:
                     "choices": {k: v.get("choice") for k, v in answers.items() if v.get("type") == "choice" and k != "action"},
                     "jev_ms": res["latency_ms"], "tokens": res["input_tokens"], "cost_usd": round(res["cost_usd"], 7), "total_cost_usd": round(self.total_cost, 6)})
         self.last_hash = h
-        param = next((answers[k]["choice"] for k in (f"{choice}__cell", f"{choice}__target", f"{choice}__slot") if k in answers), None)
+        param = next((answers[k]["choice"] for k in (f"{choice}__cell", f"{choice}__target", f"{choice}__slot", f"{choice}__option") if k in answers), None)
         self.history.append({"tick": self.tick, "action": done, "choice": choice, "key": f"{choice}→{param}" if param else choice})
         self._emit(rec, frame, dets, answers)
         return rec

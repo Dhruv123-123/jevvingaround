@@ -104,10 +104,12 @@ on:
 | `locate` | the cell(s) holding a symbol in a grid read (`row`/`col` filters, `many`) | snake head/food, legal columns |
 | `runs` | empty cells that would complete N-in-a-line of a symbol (optionally under gravity) | Connect Four wins and threats; tic-tac-toe, gomoku |
 | `around` | what is next to a located cell in each direction, straight `ahead`, `<dir>_free` (open cells that way), `<dir>_space` (flood-fill room that way) | snake |
+| `tetris` | the falling piece, the stack's features, and the reachable landings with computed consequences as a typed choice; a `macro` action plays the choice as keys and the next spawn verifies it | tetris |
 | `history: 1` | `<id>_prev` (last distinct value), and for a located cell `<id>_moving` / `<id>_reverse` | direction of travel |
 
 Actions are typed. `swipe`, `tap` and `key` are direct; `play` means "pick a slot, then a target cell", and the
-runtime asks Jev for the slot and the cell in the same call as the action, so a Clash Royale tick is one request.
+runtime asks Jev for the slot and the cell in the same call as the action, so a Clash Royale tick is one request;
+`macro` means "pick one of the options a read computed" and plays it as a key sequence.
 
 **Rules turn beliefs into policy in the same tick.** `if: { noul: q, gte: p }` or `if: { read: id.path,
 equals|in|not|gte|lte: v }`, then `exclude: [actions]` (the choice becomes the best remaining action by
@@ -149,6 +151,40 @@ the game; a sensor error costs one tick, not the run.
 Every game here has a demo video: `anygame play … --record dir --log run.jsonl`, then
 `anygame render dir --log run.jsonl --out demo.mp4` draws the action, its probabilities, the beliefs, the
 rules that fired, latency and cost next to every frame.
+
+## Tetris: the compiler enumerates, Jev chooses
+
+```bash
+anygame play tetris --device "web://games/tetris.html?level=5"
+```
+
+A frame of Tetris never reaches the model as a frame. The `tetris` read turns the board grid into the falling
+piece (shape, rotation, column, matched against the 19 tetromino orientations), the stack's features (heights,
+holes, bumpiness, the well), and **every reachable landing of that piece, dropped in simulation, with its
+consequences computed**: lines cleared, holes made, height afterwards, whether the well stays open. The top six
+become a typed choice:
+
+```
+landings:
+  a: "rot2 col4: clears 2, holes +0, height 0, bumpiness 0, keeps well"
+  b: "rot1 col4: clears 1, holes +0, height 2, bumpiness 4, keeps well"
+  …
+```
+
+Jev picks a letter. The `macro` action turns it into keys (rotate, move, hard drop), and on the next spawn the
+compiler checks the stack is exactly what the chosen landing predicted. One decision per piece instead of per
+frame, and a `reachable` filter that shrinks the list when a decision comes late, so a 200 ms model plays a
+60 fps game without being frame perfect.
+
+Measured (real Jev through OpenRouter, level 1, seed 7, 150-piece cap): 147 pieces placed, 49 lines, 146 of 146
+placement checks matched the prediction, Jev 200 ms p50 / 280 ms p95, about a cent for the run. The random
+sensor picking among the same six options dies in about 30 pieces with no lines, so the ranking alone is not the
+player; the choice is.
+
+This is the general pattern for any game with a small action set and a cheap world model, and it is the part
+of this repo that is actually new: **candidate enumeration with compiled consequences, then a typed choice.**
+`runs` in Connect Four is the one-line version; `tetris` is the full one. Puyo, Dr. Mario, 2048 (simulate all
+four swipes) and card placements in Clash Royale are the same read with a different simulator.
 
 ## Game Boy: same paragraph, different machine
 
@@ -213,6 +249,7 @@ packs strip the counting out, the numbers compare judgment, latency and cost, no
 | `snake` | `web://games/snake.html?tick=700` | plays in real time; `around` read, rules, settle, sensor-timeout fallback |
 | `2048` | `web://games/2048.html` | plays end to end; fixtures and tests |
 | `tictactoe` | `web://games/tictactoe.html` | the authoring target; draws against the page's opponent; `accent` read, `only` rule |
+| `tetris` | `web://games/tetris.html?level=N` | compiled landings, macro actions, post-check; fixtures and tests |
 | `2048gb` | `pyboy://roms/2048gb/2048.gb` | the Game Boy 2048 in an emulator; OCR board read; fixture and test |
 | `connect4-yellow` | `web://games/connect4.html?ai=0` | the red pack from yellow's side, for battles |
 | `clash-royale` | `adb://<phone>` | zones, reads, actions, questions and the play paragraph are written; needs your frames for the card templates and the test fixtures (`anygame record`) |

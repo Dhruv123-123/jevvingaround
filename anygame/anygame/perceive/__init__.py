@@ -61,8 +61,8 @@ def read_all(pack: Pack, frame: np.ndarray, only: set[str] | None = None, tick: 
             values[rid] = cells if r.get("many") else (cells[0] if cells else None)
             timings[rid] = 0.0
             continue
-        if kind == "around":
-            continue  # derived in the loop once <of>_moving is known
+        if kind in ("around", "tetris"):
+            continue  # derived in the loop (needs direction / per-run tracker state)
         if kind == "runs":
             values[rid] = runs_of(values.get(r["in"], {}), r)
             timings[rid] = 0.0

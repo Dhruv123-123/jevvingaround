@@ -373,3 +373,76 @@ def test_chat_routes_azure_and_openai_compatible(monkeypatch):
     assert fo.api == "azure-models" and "/models/chat/completions" in fo.url()
     orr = Chat(model="anthropic/claude-sonnet-5", base_url="https://openrouter.ai/api/v1")
     assert orr.api == "openai" and orr.headers()["authorization"] == "Bearer k"
+
+
+# ---------- the Tetris compiler: candidates enumerated, consequences computed, a typed choice ----------
+
+def test_tetris_identify_drop_settle_and_features():
+    from anygame.perceive.tetris import identify, drop, settle, features, SHAPES
+    assert identify({(3, 1), (4, 1), (5, 1), (4, 0)}) == ("T", 0, 3, 0)
+    assert identify({(3, 1), (4, 1), (5, 1), (6, 1)})[0] == "I" and identify({(0, 0), (1, 0), (2, 0)}) is None
+    stack = {(c, 19) for c in range(10) if c != 4} | {(c, 18) for c in range(10) if c not in (3, 4, 5)}
+    cells, y = drop(stack, "T", 2, 3, 10, 20)
+    assert cells == {(3, 18), (4, 18), (5, 18), (4, 19)}
+    new, lines = settle(stack, cells, 10, 20)
+    assert lines == 2 and new == set()
+    f = features({(0, 19), (0, 17), (2, 19)}, 10, 20)
+    assert f["heights"][0] == 3 and f["holes"] == 1 and f["max_height"] == 3 and f["well_col"] == 2
+
+
+def test_tetris_tracker_ranks_landings_and_builds_macros():
+    from anygame.perceive.tetris import TetrisTracker
+    board = ["." * 10 for _ in range(20)]
+    board[0], board[1] = "...T......", "..TTT....."
+    board[18], board[19] = "###...####", "####.#####"
+    t = TetrisTracker({"in": "board", "top_k": 4})
+    v = t.read(board, None)
+    assert v["phase"] == "spawned" and v["shape"] == "T" and v["col"] == 3 and v["stack"]["max_height"] == 2
+    best = v["landings"]["a"]
+    assert best.startswith("rot2 col4: clears 2") and t.macros["a"] == ["ArrowUp", "ArrowUp", "ArrowRight", "Space"]
+    t.predict("a")
+    # after the placement the tracker expects an empty stack; a new piece touching nothing is identified from history
+    nxt = ["." * 10 for _ in range(20)]
+    nxt[1] = "...IIII..."
+    v2 = t.read(nxt, None)
+    assert v2["last_placement"] == "ok" and v2["shape"] == "I" and v2["phase"] == "spawned" and v2["stack"]["max_height"] == 0
+    # same piece one row lower is 'falling', not a new spawn
+    fall = ["." * 10 for _ in range(20)]
+    fall[2] = "...IIII..."
+    assert t.read(fall, None)["phase"] == "falling"
+
+
+def test_tetris_pack_reads_piece_next_and_landings_from_fixture():
+    pack = load_pack(os.path.join(ROOT, "packs", "tetris"))
+    frame = cv2.imread(os.path.join(ROOT, "packs", "tetris", "fixtures", "spawn.png"))
+    ag = Agent(pack, FakeDevice([frame]), None)
+    values, _, _ = ag.observe(frame)
+    p = values["piece"]
+    assert p["shape"] == "Z" and p["next"] == "O" and p["phase"] == "spawned" and len(p["landings"]) == 6
+    qs = ag.questions(values)
+    assert set(qs["place__option"]["criteria"]) == set(p["landings"]) and "wait" in qs["action"]["criteria"]
+
+
+# ---------- the HUD edits the paragraph live ----------
+
+def test_hud_paragraph_edit_applies_on_the_next_tick():
+    import json as _json
+    import urllib.request
+    from anygame.hud import Hud
+    pack = load_pack(os.path.join(ROOT, "packs", "tictactoe"))
+    frame = cv2.imread(os.path.join(ROOT, "packs", "tictactoe", "fixtures", "probe-1.png"))
+    hud = Hud(18765)
+    try:
+        ag = Agent(pack, FakeDevice([frame, frame, frame]), None, hud)
+        ag.step()
+        got = _json.loads(urllib.request.urlopen("http://127.0.0.1:18765/pack.json").read())
+        assert "Tic-tac-toe" in got["play"] and "only:" in got["rules"]
+        body = _json.dumps({"play": "Always take a corner.", "rules": "- { if: { read: status, equals: our_turn }, only: { mark__cell: empty } }\n"}).encode()
+        req = urllib.request.Request("http://127.0.0.1:18765/pack.json", data=body, headers={"content-type": "application/json"}, method="POST")
+        assert _json.loads(urllib.request.urlopen(req).read())["ok"]
+        ag.step()
+        assert ag.pack.play == "Always take a corner." and len(ag.pack.rules) == 1
+        bad = urllib.request.Request("http://127.0.0.1:18765/pack.json", data=b'{"play": "x", "rules": "not: a: list"}', headers={"content-type": "application/json"}, method="POST")
+        assert not _json.loads(urllib.request.urlopen(bad).read())["ok"]
+    finally:
+        hud.close()

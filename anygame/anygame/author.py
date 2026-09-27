@@ -44,11 +44,16 @@ read:                                                     # each read is one key
   <id>: { kind: around, of: <locate read id>, in: <grid read id>, free: [".", F] }
         # {up,down,left,right,ahead} neighbours plus <dir>_free (open cells that way) and <dir>_space (flood fill)
   <id>: { ..., history: 1 }        # also exposes <id>_prev; for a located cell <id>_moving and <id>_reverse
+  <id>: { kind: tetris, in: <board grid read>, next_in: <preview grid read>, empty: ".", top_k: 6, moves_per_row: 3,
+          keys: { rotate: ArrowUp, left: ArrowLeft, right: ArrowRight, drop: Space } }
+        # falling-block games: the piece, the stack's features, and the reachable landings with computed
+        # consequences as options a..f; pair it with a macro action
 act:                                                      # typed actions; the model chooses one per tick
   - { id: <name>, kind: tap, zone: <grid zone>, description: "..." }   # the runtime also asks which cell: <id>__cell
   - { id: <name>, kind: tap, zone: <zone> }                            # tap the zone centre
   - { id: <name>, kind: swipe, zone: <zone>, dir: up|down|left|right, ms: 60 }
   - { id: <name>, kind: key, key: ArrowUp }                            # keyboard (web devices)
+  - { id: place, kind: macro, options: <tetris read id>, key_ms: 40 }   # the runtime asks <id>__option among the read's landings and plays the keys
   - { id: keep, kind: wait, description: "do nothing this tick" }
 tick_hz: 4                                                # decisions per second, at most
 act_when:  { read: <id>, equals: <value> }                # only act when this holds (our turn)
@@ -217,8 +222,7 @@ def check_pack(pack_dir: Path, frames: list[Path]) -> tuple[bool, str]:
     for f in frames:
         frame = cv2.imread(str(f))
         try:
-            values, _, timings = read_all(pack, frame)
-            values = ag._present(values)
+            values, _, timings = ag.observe(frame)
         except Exception as e:  # noqa: BLE001
             ok = False
             lines.append(f"{f.name}: READ ERROR {type(e).__name__}: {e}")
@@ -231,8 +235,7 @@ def check_pack(pack_dir: Path, frames: list[Path]) -> tuple[bool, str]:
             ok = False
             lines.append(f"TEST {t['frame']}: frame not found")
             continue
-        values, _, _ = read_all(pack, frame, only=set(t["expect"].keys()))
-        values = ag._present(values)
+        values, _, _ = ag.observe(frame)
         misses = {k: (v, values.get(k)) for k, v in t["expect"].items() if not _match(v, values.get(k))}
         if misses:
             ok = False

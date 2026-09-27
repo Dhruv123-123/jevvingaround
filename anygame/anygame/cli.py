@@ -91,9 +91,8 @@ def cmd_eval(a):
     for t in pack.tests:
         frame = cv2.imread(str(pack.path.parent / t["frame"]))
         t0 = time.perf_counter()
-        values, _, timings = read_all(pack, frame, only=set(t["expect"].keys()))
+        values, _, timings = Agent(pack, device=_Dummy(pack.size), jev=None).observe(frame)
         ms = (time.perf_counter() - t0) * 1000
-        values = Agent(pack, device=_Dummy(pack.size), jev=None)._present(values)
         misses = {k: (v, values.get(k)) for k, v in t["expect"].items() if not _match(v, values.get(k))}
         ok = not misses
         line = f"  {'✓' if ok else '✗'} {t['frame']}  reads {ms:.0f} ms"
@@ -104,8 +103,7 @@ def cmd_eval(a):
                 line += "  (action check skipped: no sensor)"
             else:
                 ag = Agent(pack, device=_Dummy(pack.size), jev=jev)
-                vals, _, _ = read_all(pack, frame)
-                vals = ag._present(vals)
+                vals, _, _ = ag.observe(frame)
                 res = jev.ask({"game": pack.name, "how_to_play": pack.play, "screen": vals, "recent_actions": []}, ag.questions(vals))
                 choice = res["answers"]["action"]["choice"]
                 ea = t["expect_action"]
@@ -193,10 +191,17 @@ def cmd_bench(a):
     rows = []
     for seed in a.seeds.split(","):
         url = a.device.replace("{seed}", seed)
-        log = os.path.join(a.out, f"{a.pack}-{a.sensor.replace(':', '_').replace('/', '_')}-{seed}.jsonl")
+        import hashlib
+        tag = hashlib.sha1(a.device.encode()).hexdigest()[:6]          # the device URL (level, speed…) is part of the run's name
+        log = os.path.join(a.out, f"{a.pack}-{a.sensor.replace(':', '_').replace('/', '_')}-{tag}-{seed}.jsonl")
         Path(a.out).mkdir(parents=True, exist_ok=True)
         s = cmd_play_inline(find_pack(a.pack), url, a.max_ticks, log_path=log, sensor=a.sensor)
-        row = {"seed": seed, "ticks": s["ticks"], "decisions": s["decisions"], "outcome": s["reason"], "score": s["final_screen"].get(a.score_read) if a.score_read else None,
+        score = None
+        if a.score_read:
+            from .loop import _get
+            recs = [json.loads(l) for l in open(log)]
+            score = next((_get(r["screen"], a.score_read) for r in reversed(recs) if _get(r.get("screen") or {}, a.score_read) is not None), None)
+        row = {"seed": seed, "ticks": s["ticks"], "decisions": s["decisions"], "outcome": s["reason"], "score": score,
                "cost_usd": s["total_cost_usd"], "sensor_ms_p50": s["sensor_ms_p50"], "sensor_ms_p95": s["sensor_ms_p95"], "errors": s["sensor_errors"]}
         rows.append(row)
         print(json.dumps(row), file=sys.stderr)
@@ -382,7 +387,7 @@ def main(argv=None):
     p = argparse.ArgumentParser(prog="anygame", description="One paragraph, any game.")
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("packs").set_defaults(fn=cmd_packs)
-    pl = sub.add_parser("play"); pl.add_argument("pack"); pl.add_argument("--device", default=os.environ.get("DEVICE", "adb")); pl.add_argument("--sensor", default="jev", choices=["jev", "none"])
+    pl = sub.add_parser("play"); pl.add_argument("pack"); pl.add_argument("--device", default=os.environ.get("DEVICE", "adb")); pl.add_argument("--sensor", default="jev", help="jev | none | random[:seed] | llm:<model>")
     pl.add_argument("--hud", type=int, default=int(os.environ.get("HUD_PORT", "8080"))); pl.add_argument("--no-hud", dest="hud", action="store_const", const=0); pl.add_argument("--log", default="anygame.log.jsonl")
     pl.add_argument("--max-ticks", type=int); pl.add_argument("--hold", action="store_true", help="keep the HUD up after the game ends")
     pl.add_argument("--record", help="save annotated frames here (then `anygame render`)"); pl.set_defaults(fn=cmd_play)

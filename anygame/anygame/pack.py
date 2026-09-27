@@ -7,7 +7,7 @@ from typing import Any
 import yaml
 from .geometry import Rect, Zone
 
-READ_KINDS = {"bar", "templates", "ocr", "vocab", "blobs", "color", "locate", "runs", "around"}
+READ_KINDS = {"bar", "templates", "ocr", "vocab", "blobs", "color", "locate", "runs", "around", "tetris"}
 QUESTION_TYPES = {"noul", "choice", "score"}
 
 
@@ -95,6 +95,9 @@ def load_pack(path: str | os.PathLike) -> Pack:
         elif r.get("kind") == "runs":
             if r.get("in") not in reads or "symbol" not in r:
                 raise PackError(f"{p}: read '{rid}': runs needs 'in' (a grid read id), 'symbol' and optionally length/empty/gravity")
+        elif r.get("kind") == "tetris":
+            if r.get("in") not in reads:
+                raise PackError(f"{p}: read '{rid}': tetris needs 'in' (the board grid read), optionally next_in (the preview grid read)")
         elif r.get("kind") == "around":
             if r.get("of") not in reads or r.get("in") not in reads:
                 raise PackError(f"{p}: read '{rid}': around needs 'of' (a locate read id) and 'in' (a grid read id)")
@@ -105,6 +108,8 @@ def load_pack(path: str | os.PathLike) -> Pack:
         if "id" not in a:
             raise PackError(f"{p}: every action needs an id")
         kind = a.get("kind") or ("wait" if a["id"] == "wait" else "tap")
+        if kind == "macro" and not a.get("options"):
+            raise PackError(f"{p}: action '{a['id']}': macro needs 'options: <read id>' (a read whose value has landings + macros, e.g. a tetris read)")
         actions.append(Action(a["id"], kind, {k: v for k, v in a.items() if k not in ("id", "kind")}))
     if not actions:
         raise PackError(f"{p}: 'act' must list at least one action")
