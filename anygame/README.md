@@ -14,7 +14,9 @@ HUD ◀── frame + boxes + belief bars + action + latency + cost ◀── Je
 The whole runtime in a side panel: open a game tab, click the button, pick a pack or describe the game, play.
 Frames and input go through the debugger API (trusted events, works on canvases), perception and the compiler
 run in TypeScript inside the panel, Jev is called with your own key. No server, no Docker. See
-[`ext/`](ext/README.md). `npm test` there runs every bundled pack's fixture tests through the port.
+[`ext/`](ext/README.md). `npm test` there runs every bundled pack's fixture tests through the port, headless
+Chromium plays the bundled games through it, and with a chat model configured it wins Connect Four and authors a
+pack from the panel, end to end.
 
 ## Point it at a game
 

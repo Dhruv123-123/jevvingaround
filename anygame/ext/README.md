@@ -26,5 +26,9 @@ loop and the sensors are a TypeScript port of the Python runtime; `npm test` run
 tests through it. OCR, template and detector reads are not available in the extension; the bundled web packs do
 not need them to play.
 
-`test/e2e_extension.py` and `test/e2e_tetris.py` load the built extension into headless Chromium with Playwright
-and have it play the bundled games with the random sensor.
+`test/e2e_extension.py`, `test/e2e_tetris.py` and `test/e2e_snake.py` load the built extension into headless
+Chromium with Playwright and have it play the bundled games with the random sensor (taps, macro keys, swipes).
+`test/e2e_azure.py` does it with a real model: with `ANYGAME_LLM_BASE/KEY/MODEL` set it enters the keys through
+the panel's form, plays Connect Four with the chat model as the sensor (GPT-5.6 on Azure: red wins in 14 s), then
+authors a tic-tac-toe pack from the panel (perception passed in one round, a tune round, the pack cached and
+selected). In a container whose only route out is a proxy, the test browser is pointed at `HTTPS_PROXY`.
