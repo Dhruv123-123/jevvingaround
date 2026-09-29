@@ -24,7 +24,8 @@ def open_sensor(spec: str | None, timeout: float | None = None):
     if spec == "random" or spec.startswith("random:"):
         return RandomSensor(int(spec.split(":", 1)[1]) if ":" in spec else 0)
     if spec.startswith("llm:"):
-        return LLMSensor(spec[4:], timeout=timeout)
+        # a chat model answers in seconds, not milliseconds: the pack's Jev timeout would only make it fall back to rules
+        return LLMSensor(spec[4:], timeout=max(float(timeout or 0), float(os.environ.get("ANYGAME_LLM_TIMEOUT", "60"))))
     raise SystemExit(f"unknown sensor '{spec}': jev | none | random | llm:<model>")
 
 
