@@ -263,11 +263,24 @@ def cmd_go(a):
     print(json.dumps({"pack": str(known), "ticks": agent.tick, "reason": last.get("reason"), "total_cost_usd": round(agent.total_cost, 6)}, indent=1))
 
 
+def cmd_explore(a):
+    from .demo import explore
+    from .device import open_device
+    size = tuple(int(v) for v in a.size.split("x"))
+    dev = open_device(a.device, size)
+    try:
+        out = explore(dev, Path(a.out), seconds=a.seconds, game=a.game, log=lambda m: print(m, file=sys.stderr))
+    finally:
+        dev.close()
+    print(json.dumps({"demo": str(out)}))
+
+
 def cmd_author(a):
     from .author import author
     size = tuple(int(v) for v in a.size.split("x"))
     ok, out = author(a.device, a.game, Path(a.out), play=a.play, rounds=a.rounds, model=a.model, frames_n=a.frames, size=size,
-                     play_ticks=a.play_ticks, tune=a.tune, sensor=a.sensor, score_read=a.score_read, log=lambda m: print(m, file=sys.stderr))
+                     play_ticks=a.play_ticks, tune=a.tune, sensor=a.sensor, score_read=a.score_read, log=lambda m: print(m, file=sys.stderr),
+                     demo=Path(a.demo) if a.demo else None)
     print(json.dumps({"pack": str(out / "pack.yaml"), "passes_eval": ok}))
     sys.exit(0 if ok else 1)
 
@@ -411,7 +424,11 @@ def main(argv=None):
     au.add_argument("--play-ticks", type=int, default=0, help="after the pack passes, play it for N ticks")
     au.add_argument("--tune", type=int, default=0, help="rounds of play → digest → revised paragraph/questions/rules (needs --play-ticks)")
     au.add_argument("--sensor", default="jev", help="sensor used for the play rounds: jev | random | llm:<model>")
-    au.add_argument("--score-read", default=None, help="read id that measures progress, for keeping the best pack"); au.set_defaults(fn=cmd_author)
+    au.add_argument("--score-read", default=None, help="read id that measures progress, for keeping the best pack")
+    au.add_argument("--demo", default=None, help="a demonstration directory (from `anygame explore` or the extension) to author from instead of probing"); au.set_defaults(fn=cmd_author)
+    ex = sub.add_parser("explore", help="let the vision model play for a while and write a demonstration for the author")
+    ex.add_argument("--device", required=True); ex.add_argument("--out", required=True); ex.add_argument("--seconds", type=int, default=90)
+    ex.add_argument("--game", default=""); ex.add_argument("--size", default="540x560"); ex.set_defaults(fn=cmd_explore)
     go = sub.add_parser("go", help="point it at a game: author a pack if none exists, then play with the HUD")
     go.add_argument("device", help="web://<url or file>, pyboy://<rom>, adb://<host:port>"); go.add_argument("--game", default=None, help="the game's name and anything the model should know")
     go.add_argument("--play", default=None, help="how you want it played"); go.add_argument("--packs", default=os.environ.get("ANYGAME_HOME", os.path.expanduser("~/.anygame/packs")))

@@ -330,26 +330,48 @@ def _better(a: dict[str, Any] | None, b: dict[str, Any], score_read: str | None)
 
 def author(device_url: str, game: str, out: Path, play: str | None = None, rounds: int = 3, model: str | None = None,
            frames_n: int = 4, size: tuple[int, int] = (540, 560), play_ticks: int = 0, tune: int = 0, sensor: str = "jev",
-           score_read: str | None = None, log=print) -> tuple[bool, Path]:
+           score_read: str | None = None, log=print, demo: Path | None = None) -> tuple[bool, Path]:
     """Write a pack for the game behind device_url. rounds: perception rounds until eval passes. tune: after that,
     play `play_ticks` ticks, hand the model a digest of the run, and let it revise the paragraph, questions and
     rules; the best-playing pack is kept."""
     from .device import open_device
     out.mkdir(parents=True, exist_ok=True)
     fixtures = out / "fixtures"
-    dev = open_device(device_url, size)
-    try:
-        frames = probe(dev, fixtures, n=frames_n, keys=device_url.startswith("web://"))
-    finally:
-        dev.close()
-    log(f"probed {len(frames)} distinct frames into {fixtures}")
+    demo_text, demo_parts = "", []
+    if demo is not None:
+        from .demo import load_demo, digest as demo_digest
+        d = load_demo(Path(demo))
+        dg = demo_digest(d)
+        fixtures.mkdir(parents=True, exist_ok=True)
+        picks = [f for _, f in d["frames"] if f is not None]
+        step = max(1, len(picks) // frames_n)
+        frames = []
+        for i, f in enumerate(picks[::step][:frames_n], 1):
+            pth = fixtures / f"probe-{i}.png"
+            cv2.imwrite(str(pth), f)
+            frames.append(pth)
+        demo_text = "\n\n" + dg["text"] + "\n"
+        for pr in dg["pairs"]:
+            demo_parts.append({"type": "text", "text": f"before and after the input {json.dumps(pr['event'])}:"})
+            demo_parts.append({"type": "image_url", "image_url": {"url": _b64(pr["before"])}})
+            demo_parts.append({"type": "image_url", "image_url": {"url": _b64(pr["after"])}})
+        log(f"using a {dg['seconds']}s {d['source']} demonstration with {len(d['events'])} inputs")
+    else:
+        dev = open_device(device_url, size)
+        try:
+            frames = probe(dev, fixtures, n=frames_n, keys=device_url.startswith("web://"))
+        finally:
+            dev.close()
+        log(f"probed {len(frames)} distinct frames into {fixtures}")
     w, h = size
     au = Author(model=model)
     parts: list[dict[str, Any]] = [{"type": "text", "text":
         f"Game: {game}\nDevice: {device_url}\nFrame size: {w}x{h} pixels (write rect_px in these pixels).\n"
         + (f"How the user wants it played: {play}\n" if play else "")
-        + f"\nProbe frames are fixtures/probe-1.png … fixtures/probe-{len(frames)}.png, in order: the start screen, then after "
-          "taps at the centre / left / right / top / bottom and arrow keys. Each is shown twice: raw, then with a 50 px grid.\n"
+        + (f"\nThe frames fixtures/probe-1.png … fixtures/probe-{len(frames)}.png are sampled from a demonstration of someone playing (details below)." if demo is not None else
+           f"\nProbe frames are fixtures/probe-1.png … fixtures/probe-{len(frames)}.png, in order: the start screen, then after "
+           "taps at the centre / left / right / top / bottom and arrow keys.")
+        + " Each is shown twice: raw, then with a 50 px grid.\n" + demo_text
         + FORMAT + "\n\n" + examples_text()}]
     for i, f in enumerate(frames, 1):
         img = cv2.imread(str(f))
@@ -357,7 +379,9 @@ def author(device_url: str, game: str, out: Path, play: str | None = None, round
         parts.append({"type": "text", "text": f"--- fixtures/probe-{i}.png raw, then with grid. Dominant colours (median hex, share, bbox px): {json.dumps(pal)}"})
         parts.append({"type": "image_url", "image_url": {"url": _b64(img)}})
         parts.append({"type": "image_url", "image_url": {"url": _b64(grid_overlay(img))}})
-    parts.append({"type": "text", "text": "Write the complete pack.yaml now, with a test for every probe frame."})
+    parts.extend(demo_parts)
+    parts.append({"type": "text", "text": "Write the complete pack.yaml now, with a test for every probe frame."
+                  + (" Use the demonstration: the keys and clicks it used are the action set, the regions that changed are where the reads go, and what the player said they were doing goes into the paragraph." if demo is not None else "")})
     ok = False
     prev_exp: dict[str, dict[str, Any]] = {}
     for rnd in range(1, rounds + 1):

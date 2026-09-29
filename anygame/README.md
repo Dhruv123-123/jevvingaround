@@ -346,7 +346,9 @@ anygame eval <pack> [--sensor jev]        # perception tests on the pack's frame
 anygame record --device adb://<ip>:5555 --out packs/<pack>/fixtures --seconds 30   # frames for authoring
 anygame render <recorded-dir> --log run.jsonl --out demo.mp4                         # video with the decision panel
 anygame go <device> [--game "…"] [--play "…"] [--pack <bundled>]        # author if needed, cache, play with HUD
-anygame author --device <url> --game "<name>" --out packs/<name> [--play "…"] [--rounds 3] [--play-ticks 40 --tune 2] [--model …]
+anygame author --device <url> --game "<name>" --out packs/<name> [--play "…"] [--rounds 3] [--play-ticks 40 --tune 2] [--demo <dir>]
+anygame explore --device <url> --out <dir> --seconds 90 --game "…"        # the vision model plays and writes a demonstration
+anygame play <pack> --device <url> --fallback [--goal "…"]                # VLM on unknown screens; learned pack written next to the original
 anygame battle <pack-a> <pack-b> --device <url> [--sensor-a …] [--sensor-b …]
 anygame bench <pack> --device "<url with {seed}>" --sensor jev|random|llm:<model> --seeds 1,2,3 [--score-read score]
 ```

@@ -548,3 +548,31 @@ def test_vlm_fallback_dismisses_transients_from_memo_and_merges_verified_modes(m
     assert ag2.merge_mode("magenta_card", mode, {"banner": "magenta"}, magenta, fingerprint(magenta)) is True
     assert "magenta_card" in ag2.base.modes and "learned mode magenta_card" in log
     assert ag2.merge_mode("liar", mode, {"banner": "other"}, magenta, fingerprint(magenta)) is False
+
+
+def test_demonstration_digest_and_author_from_demo(monkeypatch, tmp_path):
+    from anygame.demo import load_demo, digest
+    from anygame import author as A
+    d = tmp_path / "demo"; d.mkdir()
+    a = np.full((200, 200, 3), (39, 24, 17), np.uint8); b = a.copy(); b[100:150, :] = (255, 255, 255)
+    cv2.imwrite(str(d / "00001.png"), a); cv2.imwrite(str(d / "00002.png"), b); cv2.imwrite(str(d / "00003.png"), a)
+    events = [{"t": 0, "type": "frame", "file": "00001.png"}, {"t": 100, "type": "click", "x": 50, "y": 50},
+              {"t": 300, "type": "frame", "file": "00002.png"}, {"t": 400, "type": "click", "x": 55, "y": 48, "intent": "take the centre"},
+              {"t": 500, "type": "key", "key": "ArrowLeft"}, {"t": 600, "type": "frame", "file": "00003.png"}]
+    (d / "events.jsonl").write_text("\n".join(json.dumps(e) for e in events) + "\n")
+    (d / "meta.json").write_text(json.dumps({"source": "explorer"}))
+    demo = load_demo(d)
+    dg = digest(demo)
+    assert dg["keys"] == {"ArrowLeft": 1} and dg["clicks"][0]["n"] == 2 and dg["intents"] == ["take the centre"]
+    assert any(y == 4 for _, _, y in dg["hot"]) and dg["text"].startswith("DEMONSTRATION (explorer)")
+    # the author takes the demonstration's frames as its fixtures and mentions it to the model
+    seen = []
+    yaml_text = open(os.path.join(ROOT, "packs", "tictactoe", "pack.yaml")).read().split("\ntests:")[0]
+    def fake_ask(self, parts):
+        seen.append(" ".join(p.get("text", "") for p in parts if p.get("type") == "text"))
+        return "```yaml\n" + yaml_text + "\ntests:\n  - { frame: fixtures/probe-1.png, expect: {} }\n```"
+    monkeypatch.setenv("OPENROUTER_API_KEY", "x")
+    monkeypatch.setattr(A.Author, "ask", fake_ask)
+    out = tmp_path / "out"
+    ok, _ = A.author("web://unused", "x", out, rounds=1, log=lambda m: None, demo=d, size=(200, 200))
+    assert (out / "fixtures" / "probe-1.png").exists() and "DEMONSTRATION (explorer)" in seen[0] and "Use the demonstration" in seen[0]
