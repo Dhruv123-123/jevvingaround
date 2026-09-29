@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "anygame",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "One paragraph, any browser game. Jev plays the tab you are looking at; you edit the paragraph while it plays.",
   "action": {
     "default_title": "anygame: play this tab",

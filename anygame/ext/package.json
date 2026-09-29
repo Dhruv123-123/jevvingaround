@@ -1,6 +1,6 @@
 {
   "name": "anygame-extension",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "anygame in a Chrome extension: a game tab in, Jev decisions out, nothing else to install.",
