@@ -448,3 +448,26 @@ def test_hud_paragraph_edit_applies_on_the_next_tick():
         assert not _json.loads(urllib.request.urlopen(bad).read())["ok"]
     finally:
         hud.close()
+
+
+def test_accent_survives_a_glyph_that_covers_most_of_the_cell():
+    from anygame.perceive.color import accent_color
+    img = np.full((166, 166, 3), (55, 41, 31), np.uint8)
+    cv2.circle(img, (83, 83), 60, (250, 165, 96), 22)            # a thick O ring: the majority of the inset crop
+    assert accent_color(img, inset=0.25) == (250, 165, 96)
+    assert accent_color(np.full((166, 166, 3), (55, 41, 31), np.uint8), inset=0.25) == (55, 41, 31)
+
+
+def test_author_rejects_expectations_bent_to_a_wrong_read(monkeypatch, tmp_path):
+    from anygame import author as A
+    (tmp_path / "pack.yaml").write_text("tests:\n  - { frame: fixtures/probe-2.png, expect: { board: ['...', '.X.', '...'] } }\n")
+    exp = A.expectations(tmp_path)
+    assert exp == {"fixtures/probe-2.png": {"board": ["...", ".X.", "..."]}}
+    before = {"fixtures/probe-2.png": {"board": ["...", ".X.", "O.."]}}
+    monkeypatch.setenv("OPENROUTER_API_KEY", "x")
+    asked = []
+    monkeypatch.setattr(A.Author, "ask", lambda self, parts: (asked.append(parts), '{"1": false}')[1])
+    au = A.Author()
+    rejected = A.verify_changes(au, tmp_path, before, exp)
+    assert len(rejected) == 1 and "the READ is wrong" in rejected[0] and asked
+    assert A.verify_changes(au, tmp_path, before, before) == []      # nothing changed, nothing asked
