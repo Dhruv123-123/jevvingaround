@@ -24,3 +24,15 @@ jobs:
           anygame eval 2048 --sensor jev && anygame eval snake --sensor jev && anygame eval connect4 --sensor jev
           anygame play 2048 --device "web://games/2048.html?seed=3" --max-ticks 30 --no-hud
           anygame play connect4 --device "web://games/connect4.html?seed=9" --max-ticks 60 --no-hud
+  extension:
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: anygame/ext } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - run: npm ci && npm test
+      - run: pip install playwright && python -m playwright install --with-deps chromium
+      - run: python test/e2e_extension.py && python test/e2e_tetris.py

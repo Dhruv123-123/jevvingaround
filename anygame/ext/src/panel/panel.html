@@ -1,0 +1,69 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>anygame</title>
+  <link rel="stylesheet" href="panel.css">
+</head>
+<body>
+  <header>
+    <h1>anygame</h1>
+    <span id="tabinfo" class="dim"></span>
+  </header>
+
+  <section id="setup">
+    <label>pack
+      <select id="pack"></select>
+    </label>
+    <div class="row">
+      <button id="region" title="drag a box around the game on the page">region</button>
+      <span id="regioninfo" class="dim">whole page</span>
+    </div>
+    <div class="row">
+      <label>sensor
+        <select id="sensor">
+          <option value="jev">Jev (OpenRouter)</option>
+          <option value="llm">chat model (settings)</option>
+          <option value="random">random (no key)</option>
+        </select>
+      </label>
+      <button id="play" class="primary">play</button>
+      <button id="stop" disabled>stop</button>
+    </div>
+    <details id="authorbox">
+      <summary>no pack for this game? write one</summary>
+      <input id="game" placeholder="the game in a sentence: 'Tetris, arrow keys rotate and move, space drops'">
+      <input id="playhint" placeholder="how you want it played (optional)">
+      <div class="row"><button id="author">author with the chat model</button><span id="authorinfo" class="dim"></span></div>
+    </details>
+    <details id="settings">
+      <summary>keys and models</summary>
+      <label>OpenRouter key (Jev) <input id="k_openrouter" type="password" placeholder="sk-or-…"></label>
+      <label>chat model endpoint <input id="k_llmBase" placeholder="https://<resource>.services.ai.azure.com/openai/v1/responses or https://openrouter.ai/api/v1"></label>
+      <label>chat model key <input id="k_llmKey" type="password"></label>
+      <label>chat model / deployment <input id="k_llmModel" placeholder="gpt-5.6-luna or anthropic/claude-sonnet-5"></label>
+      <button id="savekeys">save</button>
+      <span class="dim">Keys stay in this browser's extension storage and go only to the endpoints above. Jev sees compiled state, never frames; the chat model sees frames only while authoring.</span>
+    </details>
+  </section>
+
+  <section id="live" hidden>
+    <div id="action">…</div>
+    <div id="probs"></div>
+    <div id="nouls"></div>
+    <div id="rules" class="dim"></div>
+    <div id="meta" class="dim"></div>
+    <details open>
+      <summary class="dim">the paragraph (edit and apply: it takes effect on the next tick)</summary>
+      <textarea id="playtext" rows="6"></textarea>
+      <div class="dim">rules (YAML list)</div>
+      <textarea id="rulestext" rows="4"></textarea>
+      <div class="row"><button id="apply">apply</button><span id="applymsg" class="dim"></span></div>
+    </details>
+    <pre id="screen"></pre>
+  </section>
+
+  <pre id="log"></pre>
+  <script type="module" src="panel.js"></script>
+</body>
+</html>

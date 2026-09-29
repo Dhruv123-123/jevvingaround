@@ -9,6 +9,13 @@ device ──frames──▶ perception (colours, bars, templates, OCR, open-voc
 HUD ◀── frame + boxes + belief bars + action + latency + cost ◀── Jev (one call, all questions) ──▶ tap / swipe
 ```
 
+## The Chrome extension
+
+The whole runtime in a side panel: open a game tab, click the button, pick a pack or describe the game, play.
+Frames and input go through the debugger API (trusted events, works on canvases), perception and the compiler
+run in TypeScript inside the panel, Jev is called with your own key. No server, no Docker. See
+[`ext/`](ext/README.md). `npm test` there runs every bundled pack's fixture tests through the port.
+
 ## Point it at a game
 
 ```bash
