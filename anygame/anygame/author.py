@@ -416,7 +416,11 @@ def author(device_url: str, game: str, out: Path, play: str | None = None, round
                     tune_parts.append({"type": "text", "text": f"frame at tick {int(f.stem)} of the play run (raw, then with the pixel grid):"})
                     tune_parts.append({"type": "image_url", "image_url": {"url": _b64(img)}})
                     tune_parts.append({"type": "image_url", "image_url": {"url": _b64(grid_overlay(img))}})
-            text = au.ask(tune_parts)
+            try:
+                text = au.ask(tune_parts)
+            except Exception as e:  # noqa: BLE001 — keep the best pack so far rather than lose the run
+                log(f"tune {t + 1}: model call failed ({str(e)[:120]}); keeping the best pack so far")
+                break
             y = extract_yaml(text)
             if not y:
                 break

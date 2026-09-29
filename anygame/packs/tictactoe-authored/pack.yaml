@@ -1,0 +1,187 @@
+# Written entirely by GPT-5.6 (Azure) through `anygame author`: one perception round, one tune round, no human edits.
+# Kept as the authoring reference; compare with packs/tictactoe, the hand-written one.
+game: tictactoe-authored
+screen: { orientation: portrait, size: [540, 560] }
+
+zones:
+  board: { rect_px: [20, 60, 520, 560], grid: [3, 3] }
+  status: { rect_px: [404, 12, 524, 38] }
+
+read:
+  board:
+    kind: color
+    zone: board
+    options:
+      ".": "#1f2937"
+      X: "#f67070"
+      O: "#5fa4f9"
+    max_dist: 60
+    otherwise: "."
+    inset: 0.2
+    stat: accent
+    as: matrix
+
+  status:
+    kind: color
+    zone: status
+    options:
+      our_turn: "#3a81f5"
+      their_turn: "#e9b208"
+      game_over: "#a7adb8"
+    max_dist: 60
+    otherwise: their_turn
+
+  legal:
+    kind: locate
+    in: board
+    symbol: "."
+    many: true
+
+  x_wins_at:
+    kind: runs
+    in: board
+    symbol: X
+    length: 3
+    empty: "."
+
+  o_wins_at:
+    kind: runs
+    in: board
+    symbol: O
+    length: 3
+    empty: "."
+
+act:
+  - id: tap
+    kind: tap
+    zone: board
+    description: "tap one legal empty cell"
+
+tick_hz: 4
+act_when: { read: status, equals: our_turn }
+stop_when: { read: status, in: [won, lost, draw, game_over] }
+settle: screen_change
+
+play: >
+  We are X and move first; the page plays O. The board cells are c1r1 through c3r3, from left to right and
+  top to bottom. Tap only a cell in legal. First take an immediate X win from x_wins_at. Otherwise block an
+  immediate O win from o_wins_at. For strategic moves, take the centre if it is available, then create a fork
+  when the board permits one, then take an opposite corner to an O corner, then any empty corner, then an edge.
+  Prefer moves that create two future winning threats and avoid moves that give O an immediate winning reply.
+  The game is finished when status is game_over or when no legal cells remain.
+
+questions:
+  - id: can_win
+    type: noul
+    instructions: "Is x_wins_at non-empty, meaning X can complete three in a row with one legal move?"
+    criteria:
+      true: "X has an immediate winning move."
+      false: "X has no immediate winning move."
+
+  - id: must_block
+    type: noul
+    instructions: "Is o_wins_at non-empty, meaning O can complete three in a row on its next move?"
+    criteria:
+      true: "O has an immediate threat that must be blocked."
+      false: "O has no immediate winning threat."
+
+  - id: win_cell
+    type: choice
+    instructions: "Choose the first cell in x_wins_at, or none if x_wins_at is empty."
+    criteria:
+      none: null
+      c1r1: null
+      c2r1: null
+      c3r1: null
+      c1r2: null
+      c2r2: null
+      c3r2: null
+      c1r3: null
+      c2r3: null
+      c3r3: null
+
+  - id: block_cell
+    type: choice
+    instructions: "Choose the first cell in o_wins_at, or none if o_wins_at is empty."
+    criteria:
+      none: null
+      c1r1: null
+      c2r1: null
+      c3r1: null
+      c1r2: null
+      c2r2: null
+      c3r2: null
+      c1r3: null
+      c2r3: null
+      c3r3: null
+
+  - id: tap__cell
+    type: choice
+    instructions: >
+      Choose a cell from legal. Apply this priority: immediate X win; otherwise immediate O block;
+      otherwise create an X fork if possible; otherwise centre; otherwise an opposite corner to O;
+      otherwise an empty corner; otherwise an edge. Do not choose an occupied cell.
+    criteria:
+      c1r1: null
+      c2r1: null
+      c3r1: null
+      c1r2: null
+      c2r2: null
+      c3r2: null
+      c1r3: null
+      c2r3: null
+      c3r3: null
+
+rules:
+  - { if: { read: status, equals: our_turn }, only: { tap__cell: legal } }
+  - { if: { noul: must_block, gte: 0.6 }, set: { tap__cell: block_cell } }
+  - { if: { noul: can_win, gte: 0.6 }, set: { tap__cell: win_cell } }
+
+tests:
+  - frame: fixtures/probe-1.png
+    expect:
+      status: our_turn
+      board:
+        - "..."
+        - "..."
+        - "..."
+
+  - frame: fixtures/probe-2.png
+    expect:
+      status: their_turn
+      board:
+        - "..."
+        - ".X."
+        - "..."
+
+  - frame: fixtures/probe-3.png
+    expect:
+      status: our_turn
+      board:
+        - "..."
+        - ".X."
+        - "O.."
+
+  - frame: fixtures/probe-4.png
+    expect:
+      status: their_turn
+      board:
+        - "..."
+        - "XX."
+        - "O.."
+
+  - frame: fixtures/probe-5.png
+    expect:
+      status: our_turn
+      board:
+        - "..."
+        - "XXO"
+        - "O.."
+
+  - frame: fixtures/probe-6.png
+    expect:
+      status: their_turn
+      board:
+        - ".X."
+        - "XXO"
+        - "O.."

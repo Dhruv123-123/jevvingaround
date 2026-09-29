@@ -230,10 +230,22 @@ perceptually right and play badly, and now the model sees that too.
 The layering is the point: the slow model authors once, the state compiler counts every tick, the fast model
 judges every tick, rules guard every tick, fixtures prove perception before a dollar is spent.
 
-The tic-tac-toe pack in this repo came out of that loop's checker in one round: the `accent` colour stat
-(the colour of whatever is drawn on a cell, so X and O are colour reads) and the `only` rule (offer just the
-cells `empty` lists) were the two things the format needed for it. Two games against the page's own
-win-block-centre opponent: two draws, which is the right result.
+What the first real runs taught, with GPT-5.6 on Azure as the author and tic-tac-toe as the target, all
+three now built into the loop:
+
+1. **A model will lower the bar.** Run one produced a pack whose O read was wrong, then made round two "pass" by
+   rewriting the expectations to what the wrong read returned. Now, when a passing round changes an
+   expectation, the author shows the model the frame again and asks it to confirm each new value on its own;
+   a "no" fails the round with "fix the read, not the test".
+2. **Probe the transient states.** Run two passed perception in one round and stopped after two ticks: the
+   status read had never seen the opponent's turn (the page answers in 350 ms) and fell to `otherwise:
+   game_over`. The probe now looks right after every input as well as once settled.
+3. **Show the tuner the frames.** The tuning round gets the play's middle and last frames with the digest, and a
+   stop within three ticks is called out as a read missing a state.
+
+Run three: perception passed in one round, the pack played full games from the first play, and the tune round
+fixed the end state. That pack is `packs/tictactoe-authored`, untouched, next to the hand-written
+`packs/tictactoe`: same reads, same rules, a longer paragraph.
 
 ## Battles and benchmarks
 
@@ -248,9 +260,21 @@ the red one with the symbols swapped, so the only thing that differs between two
 told. Write two paragraphs, let them fight for a tenth of a cent.
 
 A **bench** is one pack over several seeds with one sensor, and a sensor is anything that answers the pack's
-questions: `jev`, `random` (the floor: uniform choices, every belief 0.5), or `llm:<model>` (any chat model
-on OpenRouter, answering the same questions in JSON with probabilities of 1.0 on its choice). Because the
-packs strip the counting out, the numbers compare judgment, latency and cost, nothing else.
+questions: `jev`, `random` (the floor: uniform choices, every belief 0.5), or `llm:<model>` (any chat model,
+answering the same questions in JSON with probabilities of 1.0 on its choice). Because the packs strip the
+counting out, the numbers compare judgment, latency and cost, nothing else.
+
+Connect Four, the same pack, the same six seeds, against the page's own opponent:
+
+| Sensor | Wins / draws / losses | Decision p50 | Cost per game |
+|---|---|---|---|
+| Jev (OpenRouter) | 5 / 1 / 0 | 200 ms | $0.0007 |
+| GPT-5.6 (Azure) | 5 / 1 / 0 | 2.9 s | not reported by Azure |
+| random | 0 / 0 / 3 | 0 ms | $0 |
+
+Both models play the compiled game perfectly; the paragraph plus `runs` reads leave nothing for a bigger
+model to add on a turn-based board. The fifteen-fold latency gap is the whole difference, and it is the
+difference between playable and not on Snake or Tetris.
 
 ## Packs
 
@@ -260,6 +284,7 @@ packs strip the counting out, the numbers compare judgment, latency and cost, no
 | `snake` | `web://games/snake.html?tick=700` | plays in real time; `around` read, rules, settle, sensor-timeout fallback |
 | `2048` | `web://games/2048.html` | plays end to end; fixtures and tests |
 | `tictactoe` | `web://games/tictactoe.html` | the authoring target; draws against the page's opponent; `accent` read, `only` rule |
+| `tictactoe-authored` | `web://games/tictactoe.html` | written entirely by GPT-5.6 through `anygame author`, no human edits |
 | `tetris` | `web://games/tetris.html?level=N` | compiled landings, macro actions, post-check; fixtures and tests |
 | `2048gb` | `pyboy://roms/2048gb/2048.gb` | the Game Boy 2048 in an emulator; OCR board read; fixture and test |
 | `connect4-yellow` | `web://games/connect4.html?ai=0` | the red pack from yellow's side, for battles |

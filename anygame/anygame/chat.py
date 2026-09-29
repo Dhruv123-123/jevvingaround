@@ -64,7 +64,13 @@ class Chat:
             body["usage"] = {"include": True}
         t0 = time.perf_counter()
         for attempt in range(4):
-            r = self.s.post(self.url(), json=body, headers=self.headers(), timeout=self.timeout)
+            try:
+                r = self.s.post(self.url(), json=body, headers=self.headers(), timeout=self.timeout)
+            except requests.exceptions.RequestException as e:      # a dropped connection or proxy blip is not a reason to lose the run
+                if attempt < 3:
+                    time.sleep(3 * (attempt + 1))
+                    continue
+                raise RuntimeError(f"{self.base}: {type(e).__name__}: {str(e)[:160]}") from e
             if r.status_code == 429 and attempt < 3:
                 time.sleep(8 * (attempt + 1))
                 continue
