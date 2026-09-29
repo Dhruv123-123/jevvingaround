@@ -21,7 +21,10 @@ import requests
 class Chat:
     def __init__(self, model: str | None = None, api_key: str | None = None, base_url: str | None = None, api: str | None = None, timeout: float = 240):
         self.base = (base_url or os.environ.get("ANYGAME_LLM_BASE") or "https://openrouter.ai/api/v1").rstrip("/")
-        self.api = (api or os.environ.get("ANYGAME_LLM_API") or ("azure" if ".openai.azure.com" in self.base else "azure-models" if ".services.ai.azure.com" in self.base else "openai")).lower()
+        if self.base.endswith("/responses") or self.base.endswith("/chat/completions"):
+            self.base = self.base.rsplit("/", 1)[0]          # accept the full URL from the Azure portal
+        self.api = (api or os.environ.get("ANYGAME_LLM_API") or
+                    ("azure" if (self.base.endswith("/openai/v1") or ".openai.azure.com" in self.base) else "azure-models" if ".services.ai.azure.com" in self.base else "openai")).lower()
         self.model = model or os.environ.get("ANYGAME_LLM_MODEL") or ("anthropic/claude-sonnet-5" if "openrouter" in self.base else None)
         if not self.model:
             raise SystemExit("set ANYGAME_LLM_MODEL (on Azure: the deployment name) or pass --model")
@@ -49,9 +52,14 @@ class Chat:
 
     def complete(self, messages: list[dict[str, Any]], max_tokens: int = 1000, temperature: float = 0.0) -> tuple[str, dict[str, Any], int]:
         """Returns (text, usage, latency_ms). Adds to self.cost when the server reports a cost (OpenRouter does)."""
-        body: dict[str, Any] = {"messages": messages, "max_tokens": max_tokens, "temperature": temperature}
-        if self.api == "azure-models" or self.api == "openai":
-            body["model"] = self.model
+        body: dict[str, Any] = {"messages": messages, "model": self.model}
+        # newer OpenAI-family models take max_completion_tokens and only the default temperature
+        strict = self.api.startswith("azure") or self.model.split("/")[-1].startswith(("gpt-5", "o1", "o3", "o4"))
+        if strict:
+            body["max_completion_tokens"] = max_tokens
+        else:
+            body["max_tokens"] = max_tokens
+            body["temperature"] = temperature
         if "openrouter" in self.base:
             body["usage"] = {"include": True}
         t0 = time.perf_counter()

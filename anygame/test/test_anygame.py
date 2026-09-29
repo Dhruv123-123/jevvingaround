@@ -373,6 +373,8 @@ def test_chat_routes_azure_and_openai_compatible(monkeypatch):
     assert fo.api == "azure-models" and "/models/chat/completions" in fo.url()
     orr = Chat(model="anthropic/claude-sonnet-5", base_url="https://openrouter.ai/api/v1")
     assert orr.api == "openai" and orr.headers()["authorization"] == "Bearer k"
+    fv1 = Chat(model="gpt-5.6-luna", base_url="https://myres.services.ai.azure.com/openai/v1/responses")   # the portal's full URL
+    assert fv1.api == "azure" and fv1.url() == "https://myres.services.ai.azure.com/openai/v1/chat/completions" and fv1.headers()["api-key"] == "k"
 
 
 # ---------- the Tetris compiler: candidates enumerated, consequences computed, a typed choice ----------

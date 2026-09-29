@@ -184,7 +184,7 @@ class Author:
 
     def ask(self, parts: list[dict[str, Any]]) -> str:
         self.messages.append({"role": "user", "content": parts})
-        text, _usage, _ms = self.chat.complete(self.messages, max_tokens=4000, temperature=0.2)
+        text, _usage, _ms = self.chat.complete(self.messages, max_tokens=12000, temperature=0.2)
         self.messages.append({"role": "assistant", "content": text})
         return text
 

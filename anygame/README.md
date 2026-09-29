@@ -29,7 +29,9 @@ model and any `llm:` sensor, goes wherever `ANYGAME_LLM_BASE` points:
 ```bash
 # default: OpenRouter, any model id
 ANYGAME_LLM_MODEL=anthropic/claude-sonnet-5
-# Azure OpenAI: the model is your deployment name
+# Azure OpenAI / Foundry v1 endpoint: paste the portal's URL as is, the model is your deployment name
+ANYGAME_LLM_BASE=https://<resource>.services.ai.azure.com/openai/v1/responses  ANYGAME_LLM_KEY=<api key>  ANYGAME_LLM_MODEL=<deployment>
+# classic Azure OpenAI deployments endpoint
 ANYGAME_LLM_BASE=https://<resource>.openai.azure.com  ANYGAME_LLM_KEY=<api key>  ANYGAME_LLM_MODEL=<deployment>  ANYGAME_LLM_API_VERSION=2024-10-21
 # Azure AI Foundry serverless models endpoint
 ANYGAME_LLM_BASE=https://<resource>.services.ai.azure.com  ANYGAME_LLM_KEY=<key>  ANYGAME_LLM_MODEL=<model name>
