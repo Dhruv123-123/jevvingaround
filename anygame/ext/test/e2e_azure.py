@@ -45,7 +45,8 @@ with sync_playwright() as p:
         time.sleep(2)
     print("connect4:", "red wins" if state.get("over") == 1 else "yellow wins" if state.get("over") == 2 else "draw" if state.get("over") == 3 else "unfinished", f"in {time.time()-t0:.0f}s")
     print("panel:", (panel.text_content("#meta") or "").strip())
-    panel.click("#stop"); time.sleep(1)
+    if panel.is_enabled("#stop"): panel.click("#stop")     # a finished game already stopped itself
+    time.sleep(1)
     c4_ok = state.get("over") in (1, 3)
 
     # --- the author, on tic-tac-toe, from the panel ---
