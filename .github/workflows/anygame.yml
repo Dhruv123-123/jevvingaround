@@ -35,4 +35,4 @@ jobs:
         with: { python-version: "3.11" }
       - run: npm ci && npm test
       - run: pip install playwright && python -m playwright install --with-deps chromium
-      - run: python test/e2e_extension.py && python test/e2e_tetris.py
+      - run: python test/e2e_extension.py && python test/e2e_tetris.py && python test/e2e_snake.py

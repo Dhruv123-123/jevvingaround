@@ -1,3 +1,4 @@
 node_modules/
 dist/
 src/packs.generated.ts
+anygame-extension.zip

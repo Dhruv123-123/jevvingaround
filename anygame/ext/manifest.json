@@ -3,10 +3,38 @@
   "name": "anygame",
   "version": "0.1.0",
   "description": "One paragraph, any browser game. Jev plays the tab you are looking at; you edit the paragraph while it plays.",
-  "action": { "default_title": "anygame: play this tab" },
-  "side_panel": { "default_path": "panel.html" },
-  "background": { "service_worker": "background.js", "type": "module" },
-  "permissions": ["sidePanel", "debugger", "activeTab", "tabs", "storage", "scripting"],
-  "host_permissions": ["<all_urls>"],
-  "minimum_chrome_version": "120"
+  "action": {
+    "default_title": "anygame: play this tab",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "side_panel": {
+    "default_path": "panel.html"
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "permissions": [
+    "sidePanel",
+    "debugger",
+    "activeTab",
+    "tabs",
+    "storage",
+    "scripting"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "minimum_chrome_version": "120",
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
 }
