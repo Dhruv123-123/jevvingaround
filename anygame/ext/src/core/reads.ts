@@ -20,12 +20,14 @@ function sample(img: Frame, r: ReadDef): RGB {
   return st === "median" ? medianColor(f) : meanColor(f);
 }
 
-function labelOf(img: Frame, r: ReadDef): any {
+function labelOf(img: Frame, r: ReadDef, hit?: { n: number; ok: number }): any {
   if (!img.width || !img.height) return r.otherwise ?? "unknown";
   const options: Record<string, string> = {};
   for (const [k, v] of Object.entries(r.options ?? {})) options[String(k)] = String(v);
   const [name, dist] = nearestNamed(sample(img, r), options);
-  let val: any = dist <= Number(r.max_dist ?? 120) ? name : (r.otherwise ?? "unknown");
+  const matched = dist <= Number(r.max_dist ?? 120);
+  if (hit) { hit.n++; if (matched) hit.ok++; }
+  let val: any = matched ? name : (r.otherwise ?? "unknown");
   if (r.parse === "int") {
     const n = parseInt(String(val), 10);
     val = Number.isNaN(n) ? (r.empty ?? 0) : n;
@@ -33,14 +35,14 @@ function labelOf(img: Frame, r: ReadDef): any {
   return val;
 }
 
-export function readColor(frame: Frame, pack: Pack, r: ReadDef): any {
+export function readColor(frame: Frame, pack: Pack, r: ReadDef, hit?: { n: number; ok: number }): any {
   const zone = r.zone ? pack.zones[r.zone] : null;
   if (zone && zone.grid) {
     const out: Record<string, any> = {};
-    for (const [name, cr] of Object.entries(zone.cells())) out[name.split(".", 2)[1]] = labelOf(crop(frame, cr), r);
+    for (const [name, cr] of Object.entries(zone.cells())) out[name.split(".", 2)[1]] = labelOf(crop(frame, cr), r, hit);
     return out;
   }
-  return labelOf(crop(frame, rectFor(pack, r)), r);
+  return labelOf(crop(frame, rectFor(pack, r)), r, hit);
 }
 
 export function readBar(frame: Frame, pack: Pack, r: ReadDef): number {
@@ -151,21 +153,24 @@ export function aroundOf(cell: any, src: any, moving: string | null, r: ReadDef)
 }
 
 /** The pixel and simple derived reads. Loop-state reads (around, tetris) are computed by the Agent. */
-export function readAll(pack: Pack, frame: Frame, only?: Set<string>): { values: Values; timings: Record<string, number> } {
+/** Confidence per read, 0..1: how much of what the read looked for it actually found. The loop averages
+ *  these into a support score; a screen the pack does not understand scores low. */
+export function readAll(pack: Pack, frame: Frame, only?: Set<string>): { values: Values; timings: Record<string, number>; conf: Record<string, number> } {
   const values: Values = {};
   const timings: Record<string, number> = {};
+  const conf: Record<string, number> = {};
   for (const [rid, r] of Object.entries(pack.reads)) {
     if (only && !only.has(rid)) continue;
     const t0 = performance.now();
     switch (r.kind) {
-      case "color": values[rid] = readColor(frame, pack, r); break;
-      case "bar": values[rid] = readBar(frame, pack, r); break;
-      case "locate": values[rid] = locate(values[r.in], r); break;
+      case "color": { const hit = { n: 0, ok: 0 }; values[rid] = readColor(frame, pack, r, hit); if (hit.n) conf[rid] = hit.ok / hit.n; break; }
+      case "bar": values[rid] = readBar(frame, pack, r); conf[rid] = 1; break;
+      case "locate": values[rid] = locate(values[r.in], r); if (!r.many) conf[rid] = values[rid] ? 1 : 0; break;
       case "runs": values[rid] = runsOf(values[r.in], r); break;
       case "around": case "tetris": continue;
       default: values[rid] = null;   // ocr, templates, blobs, vocab: not in the extension
     }
     timings[rid] = Math.round((performance.now() - t0) * 10) / 10;
   }
-  return { values, timings };
+  return { values, timings, conf };
 }

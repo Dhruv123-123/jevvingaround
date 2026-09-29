@@ -9,6 +9,9 @@ import { loadPack, type Pack } from "./pack.js";
 import { StillDevice, evalPack } from "./index.js";
 import type { Keys } from "./sensors.js";
 import { BUNDLED_PACKS } from "../packs.generated.js";
+import { digest as demoDigest, type Demo } from "./demo.js";
+import { fingerprint, fpToBase64 } from "./fingerprint.js";
+import yaml from "js-yaml";
 
 export const FORMAT = `
 # Pack format (YAML). Everything the runtime needs to play a game from its screen.
@@ -78,7 +81,40 @@ export function extractYaml(text: string): string | null {
   return m ? m[1] : null;
 }
 
+// A minimal PNG encoder (stored deflate blocks) for environments without a canvas, i.e. the Node tests.
+function crc32(buf: Uint8Array): number {
+  let c, crc = 0xffffffff;
+  for (let n = 0; n < buf.length; n++) { c = (crc ^ buf[n]) & 0xff; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; crc = (crc >>> 8) ^ c; }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+function pngBytes(f: Frame): Uint8Array {
+  const raw = new Uint8Array((f.width * 4 + 1) * f.height);
+  for (let y = 0; y < f.height; y++) { raw[y * (f.width * 4 + 1)] = 0; raw.set(f.data.subarray(y * f.width * 4, (y + 1) * f.width * 4), y * (f.width * 4 + 1) + 1); }
+  const blocks: number[] = [0x78, 0x01];
+  let a = 1, b = 0;
+  for (let i = 0; i < raw.length; i++) { a = (a + raw[i]) % 65521; b = (b + a) % 65521; }
+  for (let off = 0; off < raw.length; off += 65535) {
+    const len = Math.min(65535, raw.length - off);
+    blocks.push(off + len >= raw.length ? 1 : 0, len & 0xff, len >> 8, ~len & 0xff, (~len >> 8) & 0xff, ...raw.subarray(off, off + len));
+  }
+  blocks.push((b >> 8) & 0xff, b & 0xff, (a >> 8) & 0xff, a & 0xff);
+  const chunk = (type: string, data: number[] | Uint8Array) => {
+    const t = [...type].map((c) => c.charCodeAt(0));
+    const body = new Uint8Array([...t, ...data]);
+    const crc = crc32(body);
+    return [data.length >>> 24, (data.length >> 16) & 0xff, (data.length >> 8) & 0xff, data.length & 0xff, ...body, crc >>> 24, (crc >> 16) & 0xff, (crc >> 8) & 0xff, crc & 0xff];
+  };
+  const ihdr = [f.width >>> 24, (f.width >> 16) & 0xff, (f.width >> 8) & 0xff, f.width & 0xff, f.height >>> 24, (f.height >> 16) & 0xff, (f.height >> 8) & 0xff, f.height & 0xff, 8, 6, 0, 0, 0];
+  return new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, ...chunk("IHDR", ihdr), ...chunk("IDAT", blocks), ...chunk("IEND", [])]);
+}
+function b64(buf: Uint8Array): string {
+  let s = "";
+  for (let i = 0; i < buf.length; i += 0x8000) s += String.fromCharCode(...buf.subarray(i, i + 0x8000));
+  return btoa(s);
+}
+
 export async function frameToDataUrl(f: Frame, grid = false): Promise<string> {
+  if (typeof OffscreenCanvas === "undefined") return "data:image/png;base64," + b64(pngBytes(f));   // Node: no grid overlay
   const canvas = new OffscreenCanvas(f.width, f.height);
   const ctx = canvas.getContext("2d")!;
   ctx.putImageData(new ImageData(f.data as any, f.width, f.height), 0, 0);
@@ -88,10 +124,7 @@ export async function frameToDataUrl(f: Frame, grid = false): Promise<string> {
     for (let y = 0; y < f.height; y += 50) { ctx.beginPath(); ctx.moveTo(0, y + 0.5); ctx.lineTo(f.width, y + 0.5); ctx.stroke(); ctx.fillText(String(y), 2, y ? y - 2 : 10); }
   }
   const blob = await canvas.convertToBlob({ type: "image/png" });
-  const buf = new Uint8Array(await blob.arrayBuffer());
-  let s = "";
-  for (let i = 0; i < buf.length; i += 0x8000) s += String.fromCharCode(...buf.subarray(i, i + 0x8000));
-  return "data:image/png;base64," + btoa(s);
+  return "data:image/png;base64," + b64(new Uint8Array(await blob.arrayBuffer()));
 }
 
 function frameHash(f: Frame): string {
@@ -151,6 +184,17 @@ export class Author {
 export interface AuthorOptions {
   game: string; play?: string; rounds?: number; framesN?: number; playTicks?: number; tune?: number;
   keys: Keys; sensor: Sensor | null; device: Device; log?: (m: string) => void; onPack?: (yaml: string) => void; shouldStop?: () => boolean;
+  demo?: Demo;     // a recording of someone (or the explorer) playing: replaces the blind probe as the author's evidence
+}
+
+/** Stamp the fixtures' fingerprints into the pack so the loop knows its screens without any images. */
+export function withFingerprints(text: string, fixtures: Record<string, Frame>): string {
+  try {
+    const raw: any = yaml.load(text) ?? {};
+    raw.fingerprints = raw.fingerprints ?? {};
+    for (const [name, f] of Object.entries(fixtures)) raw.fingerprints[`main:${name.replace(/^fixtures\//, "").replace(/\.png$/, "")}`] = fpToBase64(fingerprint(f));
+    return yaml.dump(raw, { lineWidth: 120, noRefs: true, sortKeys: false });
+  } catch { return text; }
 }
 
 function digest(recs: any[], reason: string | undefined, ticks: number): string {
@@ -171,7 +215,24 @@ function digest(recs: any[], reason: string | undefined, ticks: number): string 
 /** Returns the final pack YAML (or null) and whether it passes its own tests. */
 export async function author(o: AuthorOptions): Promise<{ ok: boolean; yaml: string | null; fixtures: Record<string, Frame> }> {
   const log = o.log ?? (() => {});
-  const frames = await probe(o.device, o.framesN ?? 6, true, log);
+  let frames: Frame[];
+  let demoText = "";
+  const demoParts: any[] = [];
+  if (o.demo && o.demo.frames.length) {
+    const dg = demoDigest(o.demo);
+    demoText = "\n\n" + dg.text + "\n";
+    // the demonstration's frames are the fixtures: distinct ones, spread over the recording
+    const step = Math.max(1, Math.floor(o.demo.frames.length / (o.framesN ?? 6)));
+    frames = o.demo.frames.filter((_, i) => i % step === 0).slice(0, o.framesN ?? 6).map((d) => d.frame);
+    for (const pr of dg.pairs) {
+      demoParts.push({ type: "text", text: `before and after the input ${JSON.stringify({ ...pr.event, t: Math.round(pr.event.t) })}:` });
+      demoParts.push({ type: "image_url", image_url: { url: await frameToDataUrl(pr.before) } });
+      demoParts.push({ type: "image_url", image_url: { url: await frameToDataUrl(pr.after) } });
+    }
+    log(`using a ${dg.seconds}s ${o.demo.source} demonstration with ${o.demo.events.length} inputs`);
+  } else {
+    frames = await probe(o.device, o.framesN ?? 6, true, log);
+  }
   const fixtures: Record<string, Frame> = {};
   frames.forEach((f, i) => (fixtures[`fixtures/probe-${i + 1}.png`] = f));
   const [w, h] = o.device.size();
@@ -179,14 +240,16 @@ export async function author(o: AuthorOptions): Promise<{ ok: boolean; yaml: str
   const examples = ["2048", "connect4", "snake"].map((n) => `### example pack: ${n}\n\`\`\`yaml\n${BUNDLED_PACKS[n]}\n\`\`\``).join("\n\n");
   const parts: any[] = [{ type: "text", text:
     `Game: ${o.game}\nFrame size: ${w}x${h} pixels (write rect_px in these pixels).\n${o.play ? `How the user wants it played: ${o.play}\n` : ""}` +
+    (o.demo ? `\nThe frames fixtures/probe-1.png … fixtures/probe-${frames.length}.png are sampled from a demonstration of someone playing (details below).` :
     `\nProbe frames are fixtures/probe-1.png … fixtures/probe-${frames.length}.png, in order: the start screen, then after taps and arrow keys, ` +
-    `looking right after each input and once settled. Each is shown twice: raw, then with a 50 px grid.\n` + FORMAT + "\n\n" + examples }];
+    `looking right after each input and once settled.`) + ` Each is shown twice: raw, then with a 50 px grid.\n` + demoText + FORMAT + "\n\n" + examples }];
   for (let i = 0; i < frames.length; i++) {
     parts.push({ type: "text", text: `--- fixtures/probe-${i + 1}.png raw, then with grid. Dominant colours (hex, share, bbox px): ${JSON.stringify(palette(frames[i]))}` });
     parts.push({ type: "image_url", image_url: { url: await frameToDataUrl(frames[i]) } });
     parts.push({ type: "image_url", image_url: { url: await frameToDataUrl(frames[i], true) } });
   }
-  parts.push({ type: "text", text: "Write the complete pack.yaml now, with a test for every probe frame." });
+  for (const dp of demoParts) parts.push(dp);
+  parts.push({ type: "text", text: "Write the complete pack.yaml now, with a test for every probe frame." + (o.demo ? " Use the demonstration: the keys and clicks it used are the action set, the regions that changed are where the reads go, and what the player said they were doing goes into the paragraph." : "") });
   let ok = false, yaml: string | null = null, prevExp: Record<string, Record<string, any>> = {};
   let next: any[] = parts;
   for (let rnd = 1; rnd <= (o.rounds ?? 3); rnd++) {
@@ -195,8 +258,8 @@ export async function author(o: AuthorOptions): Promise<{ ok: boolean; yaml: str
     const text = await au.ask(next);
     const y = extractYaml(text);
     if (!y) { next = [{ type: "text", text: "I could not find a ```yaml block. Send the whole pack.yaml in one fenced yaml block." }]; continue; }
-    yaml = y; o.onPack?.(y);
-    const res = checkPack(y, fixtures);
+    yaml = withFingerprints(y, fixtures); o.onPack?.(yaml);
+    const res = checkPack(yaml, fixtures);
     ok = res.ok;
     let report = res.report;
     const curExp = expectations(y);
@@ -255,7 +318,7 @@ export async function author(o: AuthorOptions): Promise<{ ok: boolean; yaml: str
       if (!y) break;
       const res = checkPack(y, fixtures);
       if (!res.ok) { log("tuned pack broke perception; keeping the previous one\n" + res.report); break; }
-      yaml = y; o.onPack?.(y);
+      yaml = withFingerprints(y, fixtures); o.onPack?.(yaml);
     }
     yaml = bestYaml; o.onPack?.(yaml);
   }

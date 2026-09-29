@@ -6,6 +6,11 @@ export * from "./tetris.js";
 export * from "./loop.js";
 export * from "./sensors.js";
 export * from "./chat.js";
+export * from "./fingerprint.js";
+export * from "./fallback.js";
+export * from "./demo.js";
+export * from "./explore.js";
+export { author, probe, checkPack, withFingerprints, extractYaml, frameToDataUrl } from "./author.js";
 export { BUNDLED_PACKS } from "../packs.generated.js";
 
 /** The runtime's own `eval`: run a pack's tests on decoded fixture frames. Used by the Node tests and the panel. */

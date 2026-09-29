@@ -16,6 +16,7 @@ const common = { bundle: true, format: "esm", target: "chrome120", sourcemap: tr
 await build({ ...common, entryPoints: ["src/panel/panel.ts"], outfile: "dist/panel.js" });
 await build({ ...common, entryPoints: ["src/background.ts"], outfile: "dist/background.js" });
 await build({ ...common, entryPoints: ["src/region.ts"], outfile: "dist/region.js", format: "iife" });
+await build({ ...common, entryPoints: ["src/record.ts"], outfile: "dist/record.js", format: "iife" });
 await build({ ...common, entryPoints: ["src/core/index.ts"], outfile: "dist/core.js", platform: "neutral" });
 for (const f of ["manifest.json", "src/panel/panel.html", "src/panel/panel.css"]) cpSync(f, join("dist", f.split("/").pop()));
 cpSync("icons", "dist/icons", { recursive: true });

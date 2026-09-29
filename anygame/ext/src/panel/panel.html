@@ -30,10 +30,21 @@
       <button id="play" class="primary">play</button>
       <button id="stop" disabled>stop</button>
     </div>
+    <div class="row">
+      <label><input type="checkbox" id="fallback" checked> VLM fallback on screens the pack cannot read (learns them)</label>
+    </div>
+    <div class="row">
+      <label><input type="checkbox" id="improve"> keep improving the pack while it plays (a tune round every 40 decisions or on a loss)</label>
+    </div>
     <details id="authorbox">
       <summary>no pack for this game? write one</summary>
       <input id="game" placeholder="the game in a sentence: 'Tetris, arrow keys rotate and move, space drops'">
       <input id="playhint" placeholder="how you want it played (optional)">
+      <div class="row">
+        <button id="record">record me</button>
+        <button id="explore">let the model explore (90 s)</button>
+        <span id="demoinfo" class="dim">no demonstration yet: the author will probe blindly</span>
+      </div>
       <div class="row"><button id="author">author with the chat model</button><span id="authorinfo" class="dim"></span></div>
     </details>
     <details id="settings">
@@ -48,6 +59,7 @@
   </section>
 
   <section id="live" hidden>
+    <div id="hybrid" class="dim"></div>
     <div id="action">…</div>
     <div id="probs"></div>
     <div id="nouls"></div>

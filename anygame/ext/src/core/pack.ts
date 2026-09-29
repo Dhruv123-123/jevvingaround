@@ -19,6 +19,30 @@ export interface Pack {
   rules: Record<string, any>[];
   tests: Test[];
   raw: Record<string, any>;
+  modes: Record<string, Pack>;                 // sub-packs for other screens, each with a `when`
+  fingerprints: Record<string, string>;        // screen name → base64 fingerprint (main and every mode)
+}
+
+export interface ModeWhen { read?: string; equals?: any; in?: any[]; not?: any; fingerprint?: string }
+
+/** A mode is the base pack with these keys overridden or merged. */
+export const MODE_KEYS = ["zones", "read", "act", "play", "questions", "rules", "act_when", "stop_when", "settle", "tick_hz"];
+
+export function mergeMode(base: Record<string, any>, mode: Record<string, any>): Record<string, any> {
+  const out: Record<string, any> = { ...base };
+  delete out.modes; delete out.tests; delete out.fingerprints;
+  for (const k of MODE_KEYS) {
+    if (!(k in mode)) continue;
+    if ((k === "zones" || k === "read") && mode[k] && typeof mode[k] === "object") out[k] = { ...(base[k] ?? {}), ...mode[k] };
+    else out[k] = mode[k];
+  }
+  if (mode.act_when === null) delete out.act_when;
+  if (mode.stop_when === null) delete out.stop_when;
+  return out;
+}
+
+export function dumpPack(raw: Record<string, any>): string {
+  return yaml.dump(raw, { lineWidth: 120, noRefs: true, sortKeys: false });
 }
 
 export class PackError extends Error {}
@@ -95,8 +119,19 @@ export function loadPack(text: string, name = "pack"): Pack {
     if (!["exclude", "set", "avoid", "only"].some((k) => k in rl)) throw new PackError(`${name}: rule needs exclude, set, avoid or only`);
   }
   const tests: Test[] = raw.tests ?? [];
+  const modes: Record<string, Pack> = {};
+  for (const [mn, m] of Object.entries<any>(raw.modes ?? {})) {
+    if (!m || typeof m !== "object" || !m.when) throw new PackError(`${name}: mode '${mn}' needs 'when' ({read, equals|in|not} or {fingerprint})`);
+    const merged = mergeMode(raw, m);
+    merged.game = `${raw.game}/${mn}`;
+    modes[mn] = loadPack(yaml.dump(merged), `${name}/${mn}`);
+    modes[mn].raw.when = m.when;
+    modes[mn].raw.own_reads = Object.keys(m.read ?? {});     // a mode's support is judged on the reads it defines itself
+  }
+  const fingerprints: Record<string, string> = { ...(raw.fingerprints ?? {}) };
+  for (const [mn, m] of Object.entries<any>(raw.modes ?? {})) if (m.when?.fingerprint) fingerprints[mn] = m.when.fingerprint;
   return {
     name: String(raw.game), size, zones, reads, actions, tickHz: Number(raw.tick_hz ?? 3), play: String(raw.play ?? "").trim(),
-    questions, rules, tests, raw,
+    questions, rules, tests, raw, modes, fingerprints,
   };
 }
