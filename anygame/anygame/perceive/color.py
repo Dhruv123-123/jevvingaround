@@ -3,7 +3,7 @@ from __future__ import annotations
 from .common import crop, mean_color, median_color, nearest_named
 
 
-def _one(img, r):
+def _one(img, r, hit=None):
     if img.size == 0:
         return r.get("otherwise", "unknown")
     inset = float(r.get("inset", 0))
@@ -16,7 +16,11 @@ def _one(img, r):
             img = img[m:img.shape[0] - m, m:img.shape[1] - m]
         sample = median_color(img) if st == "median" else mean_color(img)
     name, dist = nearest_named(sample, {str(k): v for k, v in r["options"].items()})
-    val = name if dist <= float(r.get("max_dist", 120)) else r.get("otherwise", "unknown")
+    matched = dist <= float(r.get("max_dist", 120))
+    if hit is not None:
+        hit[0] += 1
+        hit[1] += 1 if matched else 0
+    val = name if matched else r.get("otherwise", "unknown")
     if r.get("parse") == "int":
         try:
             return int(val)
@@ -47,7 +51,7 @@ def accent_color(img, min_share: float = 0.03, tol: int = 40, inset: float = 0.0
     return tuple(int(v) for v in np.median(px[mask], axis=0))
 
 
-def _grid(frame, zone, r):
+def _grid(frame, zone, r, hit=None):
     """All cells of a grid in one go: per-cell median (or mean) colour, one Lab conversion, one distance matrix.
     ~10x faster than cell-by-cell on a 12x12 board, which matters when the game moves every few hundred ms."""
     import numpy as np
@@ -75,6 +79,9 @@ def _grid(frame, zone, r):
     keys = list(opts.keys())
     best, bd = dist.argmin(axis=1), dist.min(axis=1)
     max_dist = float(r.get("max_dist", 120))
+    if hit is not None:
+        hit[0] += len(names)
+        hit[1] += int((bd <= max_dist).sum())
     out = {}
     for i, name in enumerate(names):
         val = keys[best[i]] if bd[i] <= max_dist else r.get("otherwise", "unknown")
@@ -87,7 +94,8 @@ def _grid(frame, zone, r):
     return out
 
 
-def read(frame, rect, r, zone=None):
+def read(frame, rect, r, zone=None, hit=None):
+    """hit, when given, is a [looked, matched] counter the caller turns into a confidence."""
     if zone and zone.grid:
-        return _grid(frame, zone, r)
-    return _one(crop(frame, rect), r)
+        return _grid(frame, zone, r, hit)
+    return _one(crop(frame, rect), r, hit)

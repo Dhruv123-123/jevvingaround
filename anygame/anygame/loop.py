@@ -10,6 +10,8 @@ from .geometry import Zone
 from .jev import Jev
 from .pack import Action, Pack
 from .perceive import read_all, around_of
+from .fingerprint import Index as FpIndex, fingerprint, to_b64
+from .pack import dump_pack, load_pack_text
 
 
 def copy_answers(answers: dict[str, Any]) -> dict[str, Any]:
@@ -58,6 +60,17 @@ class Agent:
         self.settling = 0
         self.last_answers: dict[str, Any] | None = None
         self.trackers: dict[str, Any] = {}
+        # the hybrid: which screen is this, does the pack understand it, and who decides when it does not
+        self.base = pack
+        self.mode = "main"
+        self.fps = FpIndex()
+        self.fallback = None
+        self.goal = ""
+        self.miss_ticks = 0
+        self.fallback_calls = 0
+        self.on_pack_change = None
+        self.last_support = 1.0
+        self._load_fingerprints()
         # slow reads (OCR, detectors) run in a forked worker process: a thread starves next to onnxruntime and
         # the browser, a process does not, and the loop only ever waits on the first value
         import multiprocessing
@@ -197,13 +210,95 @@ class Agent:
             return f"play {slot} → {target}"
         return f"unknown kind {a.kind}"
 
-    def observe(self, frame) -> tuple[dict[str, Any], list, dict[str, float]]:
+    # ---- the hybrid ------------------------------------------------------------------------------
+    def _load_fingerprints(self) -> None:
+        self.fps = FpIndex()
+        for name, b64 in self.base.fingerprints.items():
+            try:
+                self.fps.add(name, b64)
+            except Exception:  # noqa: BLE001
+                pass
+
+    def swap_pack(self, pack) -> None:
+        """Replace the pack while playing: the paragraph is the weights, and now the reads and modes are too."""
+        self.base = pack
+        self.pack = pack.modes[self.mode] if self.mode != "main" and self.mode in pack.modes else pack
+        self.trackers = {}
+        self.last_answers = None
+        self._load_fingerprints()
+
+    def classify(self, base_values: dict[str, Any], fp) -> tuple[str, str | None]:
+        for name, m in self.base.modes.items():
+            w = m.raw.get("when") or {}
+            if "read" in w and self._cond(w, base_values):
+                return name, name
+        k = self.fps.known(fp)
+        if k:
+            return (k[0] if k[0] in self.base.modes else "main"), k[0]
+        return "main", None
+
+    def support(self, conf: dict[str, float], values: dict[str, Any], pack=None) -> float:
+        pack = pack or self.pack
+        c = dict(conf)
+        for rid, r in pack.reads.items():
+            if r.get("kind") == "tetris" and isinstance(values.get(rid), dict):
+                c[rid] = 0.4 if values[rid].get("phase") == "none" else 1.0
+        own = pack.raw.get("own_reads") or []
+        if own and any(k in c for k in own):
+            c = {k: v for k, v in c.items() if k in own}
+        return sum(c.values()) / len(c) if c else 1.0
+
+    def act_fallback(self, now: dict[str, Any]) -> str:
+        if now.get("action"):
+            a = next((x for x in self.pack.actions if x.id == now["action"]), None) or next((x for x in self.base.actions if x.id == now["action"]), None)
+            if a:
+                answers = {f"{a.id}__cell": {"type": "choice", "choice": now["cell"]}} if now.get("cell") else {}
+                return "fallback " + self.act(a, answers)
+        if now.get("kind") == "key" and now.get("key"):
+            self.device.key(now["key"])
+            return f"fallback key {now['key']}"
+        if now.get("kind") == "tap" and now.get("at"):
+            x, y = int(now["at"][0]), int(now["at"][1])
+            self.device.tap(x, y)
+            return f"fallback tap ({x},{y})"
+        return "fallback wait"
+
+    def merge_mode(self, name: str, mode: dict[str, Any], expect: dict[str, Any], frame, fp) -> bool:
+        """A mode the VLM defined becomes part of the pack only if its reads return what it said they would on this frame."""
+        import copy
+        try:
+            raw = copy.deepcopy(self.base.raw)
+            raw["modes"] = {**(raw.get("modes") or {}), name: {**mode, "when": {"fingerprint": to_b64(fp)}}}
+            cand = load_pack_text(dump_pack(raw), f"{self.base.name}+{name}")
+            mp = cand.modes[name]
+            probe = Agent(mp, self.device, None)
+            values, conf = probe.observe(frame, mp, want_conf=True)[0], probe.last_conf
+            misses = [(k, v, values.get(k)) for k, v in expect.items() if json.dumps(values.get(k), sort_keys=True, default=str) != json.dumps(v, sort_keys=True, default=str)]
+            sup = probe.support(conf, values, mp)
+            if misses or sup < float(self.base.raw.get("support_threshold", 0.7)):
+                why = "; ".join(f"{k} expected {v!r} got {g!r}" for k, v, g in misses) or f"support {sup:.2f}"
+                if self.on_pack_change:
+                    self.on_pack_change(dump_pack(self.base.raw), f"mode {name} rejected: {why}")
+                return False
+            self.swap_pack(cand)
+            if self.on_pack_change:
+                self.on_pack_change(dump_pack(cand.raw), f"learned mode {name}")
+            return True
+        except Exception as e:  # noqa: BLE001
+            if self.on_pack_change:
+                self.on_pack_change(dump_pack(self.base.raw), f"mode {name} invalid: {str(e)[:120]}")
+            return False
+
+    def observe(self, frame, pack=None, want_conf: bool = False) -> tuple[dict[str, Any], list, dict[str, float]]:
         """Frame → the state the model sees: the pack's reads, presented, plus history (<id>_prev/_moving/_reverse)
         and the derived reads computed here because they need per-run state (around, tetris)."""
-        values, dets, timings = read_all(self.pack, frame, tick=self.tick, previous=self.last_values, pool=self.pool, pending=self.pending)
+        pack = pack or self.pack
+        conf: dict[str, float] = {}
+        values, dets, timings = read_all(pack, frame, tick=self.tick, previous=self.last_values, pool=self.pool, pending=self.pending, conf=conf)
+        self.last_conf = conf
         raw_values = values
-        values = self._present(values)
-        for rid, r in self.pack.reads.items():
+        values = self._present(values, pack)
+        for rid, r in pack.reads.items():
             if not r.get("history"):
                 continue
             cur = values.get(rid)
@@ -214,7 +309,7 @@ class Agent:
                 if r.get("kind") == "locate" and isinstance(cur, str) and isinstance(self.prev_distinct[rid], str):
                     values[f"{rid}_moving"] = _direction(self.prev_distinct[rid], cur)
                     values[f"{rid}_reverse"] = {"up": "down", "down": "up", "left": "right", "right": "left"}.get(values[f"{rid}_moving"], "none")
-        for rid, r in self.pack.reads.items():
+        for rid, r in pack.reads.items():
             if r.get("kind") == "around":
                 values[rid] = around_of(values.get(r["of"]), raw_values.get(r["in"]), values.get(f"{r['of']}_moving"), r)
             elif r.get("kind") == "tetris":
@@ -236,7 +331,19 @@ class Agent:
                 self.pack.rules = edit["rules"]
                 self.last_answers = None
         frame = self.device.frame()
-        values, dets, timings = self.observe(frame)
+        fp = fingerprint(frame)
+        values, dets, timings = self.observe(frame, self.base)
+        cls_mode, known = self.classify(values, fp)
+        if cls_mode != self.mode:
+            self.mode, self.trackers, self.last_answers, self.noops = cls_mode, {}, None, []
+        self.pack = self.base if self.mode == "main" else self.base.modes[self.mode]
+        if self.mode != "main":
+            values, dets, timings = self.observe(frame, self.pack)
+        support = self.support(self.last_conf, values, self.pack)
+        self.last_support = support
+        supported = support >= float(self.base.raw.get("support_threshold", 0.7))
+        if supported and not known:
+            self.fps.add(self.mode, fp)          # a screen the pack reads well is a known screen from now on
         t_perc = (time.perf_counter() - t0) * 1000
         h = stable_hash({k: v for k, v in values.items() if not k.endswith("_prev")})
         changed = h != self.last_hash
@@ -249,7 +356,48 @@ class Agent:
                  "last_action_changed_screen": changed if self.history else None,
                  "actions_that_did_nothing_since_last_change": list(self.noops)}
         self.last_values = values
-        rec: dict[str, Any] = {"tick": self.tick, "t": round(t0, 3), "hash": h, "perception_ms": round(t_perc), "timings_ms": timings, "screen": values}
+        rec: dict[str, Any] = {"tick": self.tick, "t": round(t0, 3), "hash": h, "perception_ms": round(t_perc), "timings_ms": timings, "screen": values,
+                               "mode": self.mode, "support": round(support, 2), "known": known}
+        # the hybrid: a screen the pack cannot read goes to the VLM, which acts now and may define a mode
+        if not supported and not known:
+            self.miss_ticks += 1
+            if self.fallback is not None and self.miss_ticks >= int(self.base.raw.get("miss_ticks", 2)):
+                d = self.fallback.decide(frame, self.pack, self.goal or self.base.play[:300], [x["action"] for x in self.history[-6:]])
+                rec["fallback"] = f"{'memo' if d.get('memo') else 'vlm'} {d['screen']}{' ' + d['name'] if d.get('name') else ''}: {json.dumps(d['now'])}{' — ' + d['note'] if d.get('note') else ''}"
+                if not d.get("memo"):
+                    self.fallback_calls += 1
+                rec["action"] = self.act_fallback(d["now"])
+                rec["reason"] = f"unsupported screen (support {rec['support']}) → fallback"
+                if d["screen"] == "mode" and d.get("mode") and d.get("name"):
+                    self.merge_mode(d["name"], d["mode"], d.get("expect") or {}, frame, fp)
+                elif d["screen"] == "transient" and d.get("name"):
+                    self.fps.add(f"transient:{d['name']}", fp)
+                    self.base.fingerprints[f"transient:{d['name']}"] = to_b64(fp)
+                    self.base.raw["fingerprints"] = self.base.fingerprints
+                    if self.on_pack_change:
+                        self.on_pack_change(dump_pack(self.base.raw), f"learned transient screen {d['name']}")
+                self.history.append({"tick": self.tick, "action": rec["action"], "choice": "fallback", "key": "fallback"})
+                self.miss_ticks = 0
+                self.last_hash = h
+                self._emit(rec, frame, dets, None)
+                return rec
+            if self.fallback is not None:
+                rec["action"] = "wait"
+                rec["reason"] = f"unsupported screen (support {rec['support']}), {self.miss_ticks} tick(s)"
+                self.last_hash = h
+                self._emit(rec, frame, dets, None)
+                return rec
+        else:
+            self.miss_ticks = 0
+        if known and str(known).startswith("transient:") and self.fallback is not None:
+            d = self.fallback.recall(fp)
+            if d:
+                rec["action"] = self.act_fallback(d["now"])
+                rec["fallback"] = f"memo transient: {json.dumps(d['now'])}"
+                rec["reason"] = "known transient screen"
+                self.last_hash = h
+                self._emit(rec, frame, dets, None)
+                return rec
         stop = self.pack.raw.get("stop_when")
         if stop and self._cond(stop, values):
             rec["action"] = "stop"
@@ -380,12 +528,13 @@ class Agent:
             return False
         return False
 
-    def _present(self, values: dict[str, Any]) -> dict[str, Any]:
+    def _present(self, values: dict[str, Any], pack=None) -> dict[str, Any]:
         """Grid reads marked `as: matrix` become rows of characters (top to bottom): models read that far better."""
+        pack = pack or self.pack
         out = dict(values)
-        for rid, r in self.pack.reads.items():
+        for rid, r in pack.reads.items():
             if r.get("as") == "matrix" and isinstance(values.get(rid), dict) and "zone" in r:
-                z = self.pack.zone(r["zone"])
+                z = pack.zone(r["zone"])
                 if z.grid:
                     cols, rows = z.grid
                     v = values[rid]

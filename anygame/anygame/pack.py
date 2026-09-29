@@ -37,6 +37,8 @@ class Pack:
     rules: list[dict[str, Any]]
     tests: list[dict[str, Any]]
     raw: dict[str, Any]
+    modes: dict[str, "Pack"] = field(default_factory=dict)          # sub-packs for other screens, each with a `when`
+    fingerprints: dict[str, str] = field(default_factory=dict)      # screen name → base64 fingerprint
 
     def zone(self, name: str) -> Zone:
         if name not in self.zones:
@@ -53,7 +55,38 @@ class Pack:
         raise PackError(f"{self.path}: unknown action '{id}'")
 
 
-def load_pack(path: str | os.PathLike) -> Pack:
+MODE_KEYS = ("zones", "read", "act", "play", "questions", "rules", "act_when", "stop_when", "settle", "tick_hz")
+
+
+def merge_mode(base: dict[str, Any], mode: dict[str, Any]) -> dict[str, Any]:
+    """A mode is the base pack with these keys overridden (zones/read merged by key)."""
+    out = {k: v for k, v in base.items() if k not in ("modes", "tests", "fingerprints")}
+    for k in MODE_KEYS:
+        if k not in mode:
+            continue
+        if k in ("zones", "read") and isinstance(mode[k], dict):
+            out[k] = {**(base.get(k) or {}), **mode[k]}
+        else:
+            out[k] = mode[k]
+    for k in ("act_when", "stop_when"):
+        if k in mode and mode[k] is None:
+            out.pop(k, None)
+    return out
+
+
+def dump_pack(raw: dict[str, Any]) -> str:
+    return yaml.safe_dump(raw, sort_keys=False, width=120, allow_unicode=True)
+
+
+def load_pack_text(text: str, name: str = "pack") -> "Pack":
+    """Load a pack from YAML text (no fixtures on disk): what the loop uses for learned modes."""
+    import tempfile
+    d = Path(tempfile.mkdtemp(prefix="anygame-pack-"))
+    (d / "pack.yaml").write_text(text)
+    return load_pack(d, _allow_no_tests=True)
+
+
+def load_pack(path: str | os.PathLike, _allow_no_tests: bool = False) -> Pack:
     p = Path(path)
     if p.is_dir():
         p = p / "pack.yaml"
@@ -129,15 +162,29 @@ def load_pack(path: str | os.PathLike) -> Pack:
         if not any(k in rl for k in ("exclude", "set", "avoid", "only")):
             raise PackError(f"{p}: rule needs 'exclude: [actions]', 'set: {{param_question: from_question}}', 'avoid: {{param_question: read}}' or 'only: {{param_question: read}}'")
     tests = raw.get("tests") or []
-    if not tests:
+    if not tests and not _allow_no_tests:
         raise PackError(f"{p}: a pack without tests is refused; add at least one frame under 'tests'")
     for t in tests:
         if "frame" not in t or "expect" not in t:
             raise PackError(f"{p}: every test needs 'frame' and 'expect'")
-        if not (p.parent / t["frame"]).exists():
+        if not _allow_no_tests and not (p.parent / t["frame"]).exists():
             raise PackError(f"{p}: test frame not found: {t['frame']}")
+    modes: dict[str, Pack] = {}
+    for mn, m in (raw.get("modes") or {}).items():
+        if not isinstance(m, dict) or not m.get("when"):
+            raise PackError(f"{p}: mode '{mn}' needs 'when' ({{read, equals|in|not}} or {{fingerprint}})")
+        merged = merge_mode(raw, m)
+        merged["game"] = f"{raw['game']}/{mn}"
+        mp = load_pack_text(dump_pack(merged), f"{raw['game']}/{mn}")
+        mp.raw["when"] = m["when"]
+        mp.raw["own_reads"] = list((m.get("read") or {}).keys())
+        modes[mn] = mp
+    fingerprints = dict(raw.get("fingerprints") or {})
+    for mn, m in (raw.get("modes") or {}).items():
+        if isinstance(m.get("when"), dict) and m["when"].get("fingerprint"):
+            fingerprints[mn] = m["when"]["fingerprint"]
     return Pack(
         name=raw["game"], path=p, orientation=screen.get("orientation", "portrait"), size=(int(size[0]), int(size[1])),
         zones=zones, reads=reads, actions=actions, tick_hz=float(raw.get("tick_hz", 3)), play=(raw.get("play") or "").strip(),
-        questions=questions, rules=rules, tests=tests, raw=raw,
+        questions=questions, rules=rules, tests=tests, raw=raw, modes=modes, fingerprints=fingerprints,
     )

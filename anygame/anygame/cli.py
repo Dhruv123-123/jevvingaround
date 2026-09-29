@@ -50,11 +50,21 @@ def cmd_play(a):
     if hud:
         print(f"HUD on http://localhost:{a.hud}", file=sys.stderr)
     agent = Agent(pack, device, jev, hud, log_path=a.log, max_ticks=a.max_ticks, record_dir=a.record)
+    if a.fallback:
+        from .fallback import VLMFallback
+        agent.fallback = VLMFallback()
+        agent.goal = a.goal or ""
+        learned = Path(a.fallback if a.fallback != "yes" else str(pack.path.parent / "pack.learned.yaml"))
+        def _changed(y, why):
+            print(f"pack: {why}", file=sys.stderr)
+            if "learned" in why:
+                learned.write_text(y)
+        agent.on_pack_change = _changed
     try:
         last = agent.run()
     finally:
         device.close()
-    summary = {"game": pack.name, "ticks": agent.tick, "last": last.get("action"), "reason": last.get("reason"), "sensor_errors": agent.errors,
+    summary = {"game": pack.name, "fallback_calls": agent.fallback_calls, "mode": agent.mode, "ticks": agent.tick, "last": last.get("action"), "reason": last.get("reason"), "sensor_errors": agent.errors,
                "total_cost_usd": round(agent.total_cost, 6), "final_screen": {k: v for k, v in (last.get("screen") or {}).items() if not isinstance(v, dict)}}
     print(json.dumps(summary, indent=1))
     if a.record:

@@ -334,7 +334,7 @@ export class Agent {
       const { values, conf } = probe.observe(frame, mp);
       const misses = Object.entries(expect).filter(([k, v]) => JSON.stringify(values[k]) !== JSON.stringify(v));
       const sup = probe.support(conf, values, mp);
-      if (misses.length || sup < Number(this.base.raw.support_threshold ?? 0.5)) {
+      if (misses.length || sup < Number(this.base.raw.support_threshold ?? 0.7)) {
         this.onPackChange?.(dumpPack(this.base.raw), `mode ${name} rejected: ${misses.map(([k, v]) => `${k} expected ${JSON.stringify(v)} got ${JSON.stringify(values[k])}`).join("; ") || `support ${sup.toFixed(2)}`}`);
         return false;
       }
@@ -363,7 +363,7 @@ export class Agent {
     const { values, timings } = obs;
     const support = this.support(obs.conf, values, this.pack);
     this.lastSupport = support;
-    const threshold = Number(this.base.raw.support_threshold ?? 0.5);
+    const threshold = Number(this.base.raw.support_threshold ?? 0.7);
     const supported = support >= threshold;
     if (supported && !cls.known) this.fps.add(this.mode, fp);          // a screen the pack reads well is a known screen from now on
     const tPerc = performance.now() - t0;

@@ -17,7 +17,11 @@ anygame button, and the side panel opens for that tab:
 3. **pack**: pick a bundled pack, or open *no pack for this game? write one*, describe the game in a sentence and
    let the chat model author a pack against this tab (probe, write, check, play, tune). Authored packs are cached.
 4. **play**. The panel shows the action, its probabilities, the beliefs, the rules that fired, latency and cost,
-   and the paragraph, editable while it plays.
+   the paragraph (editable while it plays), and a hybrid line: which mode, the support score, whether the screen is
+   known. With *VLM fallback* on, screens the pack cannot read go to the chat model, which acts and teaches the
+   pack (transients are memoised, modes are merged after verification); learned packs are saved as "<name>-learned".
+   *Keep improving* tunes the pack in the background while it plays.
+5. **record me** / **let the model explore**: a demonstration for the author, instead of the blind probe.
 
 How it works: frames come from `Page.captureScreenshot` and input goes through `Input.dispatch*` on the
 `chrome.debugger` API, so canvas games get trusted events and the tab does not have to be the active one for

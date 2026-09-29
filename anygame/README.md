@@ -18,6 +18,41 @@ run in TypeScript inside the panel, Jev is called with your own key. No server, 
 Chromium plays the bundled games through it, and with a chat model configured it wins Connect Four and authors a
 pack from the panel, end to end.
 
+## When the pack does not understand the screen
+
+Every tick the runtime knows two things about the frame: **which screen it is** (a 16×16 Lab fingerprint,
+looked up against the pack's fixtures and every screen it has read well since) and **how well the pack reads it**
+(a support score from the reads' own confidences: colour distances, whether a located thing was found, whether
+the falling piece was identified). A frame that is neither known nor supported for a couple of ticks is a miss.
+
+A miss goes to the **VLM fallback**: the vision model sees the frame, the pack's typed actions and the goal, acts
+now, and says what the screen is. A *transient* (a start prompt, a game-over card, a level-up popup) is
+dismissed and memoised by fingerprint, so the next time it costs no model call. A *mode* (a shop, a map, a battle)
+comes with a definition, zones, reads, actions, a paragraph, and is merged into the pack only if its reads return
+on that frame what the model said they would. Packs carry `modes:` (sub-packs with `when: {read: …}` or
+`when: {fingerprint: …}`) and `fingerprints:`, and the learned pack is written back.
+
+The split: Jev plays every supported tick from compiled state (200 ms, text only); the VLM sees pixels only on a
+miss and while authoring; the compiler and rules do everything deterministic in between. The VLM's cost decays,
+because every screen it handles once is Jev's from then on.
+
+```bash
+anygame play snake --device "web://games/snake.html?menu=1" --fallback --goal "snake, arrow keys"   # start prompt and game-over card are unknown to the pack
+```
+
+Measured through the extension with GPT-5.6 on Azure as the fallback: the unknown start prompt was dismissed
+and learned on the second tick, the pack played, the game-over card was reached. See `ext/test/e2e_hybrid.py`.
+
+## Learning from a demonstration
+
+The author's evidence no longer has to be the blind probe. A **demonstration** is frames plus every input for a
+minute or two, from one of three sources: the human (*record me* in the extension: a content script logs keys
+and clicks while the panel captures frames), the **explorer** (the VLM plays slowly, one input every few seconds,
+each with a one-line intent), or the probe. The digest hands the author the action set as used, click clusters as
+candidate zones, the regions that change after inputs, before/after frame pairs, and the intents as raw material
+for the paragraph. *Keep improving* runs a tune round in the background every forty decisions or on a loss and
+hot-swaps the pack when the revision still reads the current screens.
+
 ## Point it at a game
 
 ```bash

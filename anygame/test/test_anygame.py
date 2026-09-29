@@ -1,3 +1,4 @@
+import json
 import os
 import numpy as np
 import cv2
@@ -471,3 +472,79 @@ def test_author_rejects_expectations_bent_to_a_wrong_read(monkeypatch, tmp_path)
     rejected = A.verify_changes(au, tmp_path, before, exp)
     assert len(rejected) == 1 and "the READ is wrong" in rejected[0] and asked
     assert A.verify_changes(au, tmp_path, before, before) == []      # nothing changed, nothing asked
+
+
+# ---------- the hybrid: fingerprints, support, modes, the VLM fallback (stubbed) ----------
+
+def test_fingerprints_and_support_and_modes():
+    from anygame.fingerprint import fingerprint, distance, to_b64, from_b64, Index
+    a = cv2.imread(os.path.join(ROOT, "packs", "tictactoe", "fixtures", "probe-1.png"))
+    b = cv2.imread(os.path.join(ROOT, "packs", "tictactoe", "fixtures", "probe-4.png"))
+    c = cv2.imread(os.path.join(ROOT, "packs", "connect4", "fixtures", "start.png"))
+    fa, fb, fc = fingerprint(a), fingerprint(b), fingerprint(c)
+    assert distance(fa, fb) < 25 and distance(fa, fc) > 40
+    assert (from_b64(to_b64(fa)) == fa).all()
+    idx = Index(); idx.add("main", fa)
+    assert idx.known(fb)[0] == "main" and idx.known(fc) is None
+    # support: the pack's own screen is high, a magenta screen is low and unknown
+    pack = load_pack(os.path.join(ROOT, "packs", "tictactoe"))
+    magenta = np.full((560, 540, 3), (200, 30, 200), np.uint8)
+    ag = Agent(pack, FakeDevice([b, magenta]), ChoiceJev(noul=0.1))
+    r1, r2 = ag.step(), ag.step()
+    assert r1["support"] >= 0.9 and r1["mode"] == "main"
+    assert r2["support"] < 0.5 and r2["known"] is None
+    # modes by read condition, with their own actions, surviving a dump/load round trip
+    from anygame.pack import load_pack_text, dump_pack
+    raw = """
+game: modal
+screen: { size: [100, 100] }
+zones: { status: { rect: [0, 0, 1, 0.1] } }
+read: { status: { kind: color, zone: status, options: { play: "#111827", menu: "#c81e1e" }, max_dist: 60, otherwise: play } }
+act: [ { id: go, kind: key, key: ArrowRight } ]
+play: main screen
+modes:
+  menu: { when: { read: status, equals: menu }, act: [ { id: start, kind: key, key: Enter } ], play: press start }
+"""
+    pk = load_pack_text(raw)
+    assert list(pk.modes) == ["menu"] and pk.modes["menu"].actions[0].id == "start"
+    assert load_pack_text(dump_pack(pk.raw)).modes["menu"].play == "press start"
+    red = np.full((100, 100, 3), (30, 30, 200), np.uint8); dark = np.full((100, 100, 3), (39, 24, 17), np.uint8)
+    dev = FakeDevice([red, dark]); keys = []
+    dev.key = lambda k: keys.append(k)
+    ag2 = Agent(pk, dev, ChoiceJev(noul=0.1))
+    s1, s2 = ag2.step(), ag2.step()
+    assert s1["mode"] == "menu" and keys[0] == "Enter" and s2["mode"] == "main" and keys[1] == "ArrowRight"
+
+
+def test_vlm_fallback_dismisses_transients_from_memo_and_merges_verified_modes(monkeypatch):
+    from anygame.fallback import VLMFallback
+    from anygame.fingerprint import fingerprint
+    pack = load_pack(os.path.join(ROOT, "packs", "tictactoe"))
+    good = cv2.imread(os.path.join(ROOT, "packs", "tictactoe", "fixtures", "probe-2.png"))
+    magenta = np.full((560, 540, 3), (200, 30, 200), np.uint8)
+    dev = FakeDevice([magenta, magenta, magenta, good]); keys = []
+    dev.key = lambda k: keys.append(k)
+    ag = Agent(pack, dev, ChoiceJev(noul=0.1))
+    calls = []
+
+    class StubChat:
+        model = "stub"; cost = 0.0
+        def complete(self, messages, max_tokens=1000, temperature=0.0):
+            calls.append(messages)
+            return json.dumps({"now": {"kind": "key", "key": "Enter"}, "screen": "transient", "name": "start_prompt", "note": "a start card"}), {}, 1
+    ag.fallback = VLMFallback(StubChat())
+    changes = []
+    ag.on_pack_change = lambda y, why: changes.append(why)
+    r1 = ag.step(); assert r1["action"] == "wait" and "unsupported" in r1["reason"]
+    r2 = ag.step(); assert len(calls) == 1 and keys == ["Enter"] and r2["fallback"].startswith("vlm transient start_prompt")
+    assert any("learned transient screen start_prompt" in c for c in changes)
+    r3 = ag.step(); assert len(calls) == 1 and keys == ["Enter", "Enter"] and r3["fallback"].startswith("memo")
+    r4 = ag.step(); assert r4["mode"] == "main" and r4["support"] >= 0.9 and r4["choice"] == "mark"
+    # a mode definition is merged when it reads the frame as it claims, rejected when it lies
+    ag2 = Agent(load_pack(os.path.join(ROOT, "packs", "tictactoe")), FakeDevice([magenta]), None)
+    log = []; ag2.on_pack_change = lambda y, why: log.append(why)
+    mode = {"zones": {"banner": {"rect_px": [0, 0, 540, 560]}}, "read": {"banner": {"kind": "color", "zone": "banner", "options": {"magenta": "#c81ec8", "other": "#111827"}, "max_dist": 60, "otherwise": "other"}},
+            "act": [{"id": "dismiss", "kind": "key", "key": "Enter"}], "play": "press dismiss", "questions": [], "rules": [], "stop_when": None, "act_when": None}
+    assert ag2.merge_mode("magenta_card", mode, {"banner": "magenta"}, magenta, fingerprint(magenta)) is True
+    assert "magenta_card" in ag2.base.modes and "learned mode magenta_card" in log
+    assert ag2.merge_mode("liar", mode, {"banner": "other"}, magenta, fingerprint(magenta)) is False

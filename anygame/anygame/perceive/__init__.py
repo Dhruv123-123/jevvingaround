@@ -13,8 +13,11 @@ def rect_for(pack: Pack, r: dict[str, Any]) -> Rect:
     return pack.zone(r["zone"]).rect if "zone" in r else Rect.parse(r["rect"])
 
 
+CONF: dict[int, dict[str, float]] = {}   # per-call confidences, keyed by id(values): read_all fills, the loop collects
+
+
 def read_all(pack: Pack, frame: np.ndarray, only: set[str] | None = None, tick: int = 0, previous: dict[str, Any] | None = None,
-             pool=None, pending: dict[str, Any] | None = None) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, float]]:
+             pool=None, pending: dict[str, Any] | None = None, conf: dict[str, float] | None = None) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, float]]:
     """Returns (values, detections, timings_ms). A read with `every: N` is refreshed every N ticks and otherwise carried
     over. Given a thread `pool`, such a slow read (OCR, a detector) runs in the background and the loop keeps its last
     value until the new one is ready, so a 1 s OCR never stalls a 300 ms decision loop."""
@@ -59,6 +62,8 @@ def read_all(pack: Pack, frame: np.ndarray, only: set[str] | None = None, tick: 
             if "col" in r:
                 cells = [c for c in cells if c.startswith(f"c{r['col']}r") or c == f"c{r['col']}"]
             values[rid] = cells if r.get("many") else (cells[0] if cells else None)
+            if conf is not None and not r.get("many"):
+                conf[rid] = 1.0 if cells else 0.0
             timings[rid] = 0.0
             continue
         if kind in ("around", "tetris"):
@@ -71,8 +76,13 @@ def read_all(pack: Pack, frame: np.ndarray, only: set[str] | None = None, tick: 
         rect = rect_for(pack, r)
         if kind == "bar":
             values[rid] = bar.read(frame, rect, r)
+            if conf is not None:
+                conf[rid] = 1.0
         elif kind == "color":
-            values[rid] = color.read(frame, rect, r, zone)
+            hit = [0, 0]
+            values[rid] = color.read(frame, rect, r, zone, hit)
+            if conf is not None and hit[0]:
+                conf[rid] = hit[1] / hit[0]
         elif kind == "ocr":
             values[rid] = ocr.read(frame, rect, zone, r)
         elif kind == "templates":
