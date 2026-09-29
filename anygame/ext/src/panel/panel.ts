@@ -76,10 +76,12 @@ chrome.runtime.onMessage.addListener(async (msg) => {
   $("regioninfo").textContent = msg.region ? `${msg.region.w}×${msg.region.h} at (${msg.region.x},${msg.region.y})` : "whole page";
 });
 
-async function makeDevice(store: Store, pack: Pack | null): Promise<TabDevice> {
+async function makeDevice(store: Store, pack: Pack | null, name_is_authored = false): Promise<TabDevice> {
   const t = await currentTab();
-  const region = store.regions?.[originOf(tabUrl)] ?? null;
-  // capture at the scale that makes the region match the pack's authored frame size, so its rects line up
+  let region = store.regions?.[originOf(tabUrl)] ?? null;
+  // no region drawn: a bundled pack was authored on a fixed-size page at the top-left, so use that box;
+  // otherwise capture at the scale that makes the region match the pack's authored frame size, so its rects line up
+  if (!region && pack && !name_is_authored) region = { x: 0, y: 0, w: pack.size[0], h: pack.size[1] };
   const scale = region && pack ? pack.size[0] / region.w : 1;
   const d = new TabDevice(t.id!, region, Math.max(0.25, Math.min(3, scale)));
   await d.attach();
@@ -98,7 +100,7 @@ async function play() {
   try { sensor = await openSensor(sensorSpec === "llm" ? "llm" : sensorSpec, store.keys ?? {}, Number(pack.raw.sensor_timeout_s ?? 4) * 1000); }
   catch (e) { log(`sensor: ${(e as Error).message} (open "keys and models")`); return; }
   await save({ packFor: { ...(store.packFor ?? {}), [originOf(tabUrl)]: name }, sensor: sensorSpec });
-  device = await makeDevice(store, pack);
+  device = await makeDevice(store, pack, name.endsWith(" (authored)"));
   agent = new Agent(pack, device, sensor, null);
   agent.onRecord = (rec) => showRec(rec);
   $("playtext").textContent = pack.play; ($("playtext") as HTMLTextAreaElement).value = pack.play;

@@ -11,7 +11,9 @@ anygame button, and the side panel opens for that tab:
 
 1. **keys and models**: your OpenRouter key (Jev) and, for authoring, a chat model endpoint (Azure or any
    OpenAI-compatible URL), key and deployment name. They live in the extension's storage and go only to those endpoints.
-2. **region**: drag a box around the game once per site (the frames and the input are clipped to it).
+2. **region**: drag a box around the game once per site (the frames and the input are clipped to it). Without
+   one, a bundled pack uses the box its game renders in (top-left, the pack's frame size); an authored pack uses
+   the whole viewport, which is what it was authored on.
 3. **pack**: pick a bundled pack, or open *no pack for this game? write one*, describe the game in a sentence and
    let the chat model author a pack against this tab (probe, write, check, play, tune). Authored packs are cached.
 4. **play**. The panel shows the action, its probabilities, the beliefs, the rules that fired, latency and cost,
