@@ -206,6 +206,48 @@ def examples_text() -> str:
     return "\n\n".join(out)
 
 
+def expectations(pack_dir: Path) -> dict[str, dict[str, Any]]:
+    """{frame: {read: expected}} from the pack's tests, for spotting expectations that were changed to fit a read."""
+    import yaml
+    try:
+        raw = yaml.safe_load((pack_dir / "pack.yaml").read_text()) or {}
+    except Exception:  # noqa: BLE001
+        return {}
+    return {t.get("frame", ""): dict(t.get("expect") or {}) for t in (raw.get("tests") or []) if isinstance(t, dict)}
+
+
+def verify_changes(au: "Author", pack_dir: Path, before: dict[str, dict[str, Any]], after: dict[str, dict[str, Any]]) -> list[str]:
+    """When a round changes what a test expects, ask the model to look at the frame again and confirm each new
+    value in isolation. A 'no' means the read is wrong and the test was bent to it. Returns the rejected items."""
+    changed = []
+    for frame, exp in after.items():
+        for read, val in exp.items():
+            old = before.get(frame, {}).get(read, None)
+            if old is not None and old != val:
+                changed.append((frame, read, old, val))
+    if not changed:
+        return []
+    parts: list[dict[str, Any]] = [{"type": "text", "text":
+        "Some test expectations changed between rounds. For each item look at the frame again and answer whether the NEW "
+        "value is exactly what the frame shows. Reply with one JSON object {\"1\": true/false, ...} and nothing else."}]
+    for i, (frame, read, old, val) in enumerate(changed, 1):
+        img = cv2.imread(str(pack_dir / frame))
+        parts.append({"type": "text", "text": f"{i}. frame {frame}, read `{read}`: previously expected {json.dumps(old)}, now expected {json.dumps(val)}"})
+        if img is not None:
+            parts.append({"type": "image_url", "image_url": {"url": _b64(img)}})
+    text = au.ask(parts)
+    m = re.search(r"\{.*\}", text, re.S)
+    try:
+        verdict = json.loads(m.group(0)) if m else {}
+    except json.JSONDecodeError:
+        verdict = {}
+    rejected = []
+    for i, (frame, read, old, val) in enumerate(changed, 1):
+        if not verdict.get(str(i), False):
+            rejected.append(f"{frame}: `{read}` now expects {json.dumps(val)} but the frame shows {json.dumps(old)}: the READ is wrong, fix the read (colours, rect, inset, stat) and restore the expectation")
+    return rejected
+
+
 def check_pack(pack_dir: Path, frames: list[Path]) -> tuple[bool, str]:
     """Load the pack, run every test, and dump what every read sees on every probe frame."""
     from .loop import Agent
@@ -311,6 +353,7 @@ def author(device_url: str, game: str, out: Path, play: str | None = None, round
         parts.append({"type": "image_url", "image_url": {"url": _b64(grid_overlay(img))}})
     parts.append({"type": "text", "text": "Write the complete pack.yaml now, with a test for every probe frame."})
     ok = False
+    prev_exp: dict[str, dict[str, Any]] = {}
     for rnd in range(1, rounds + 1):
         log(f"round {rnd}: asking {au.model} …")
         text = au.ask(parts)
@@ -320,6 +363,13 @@ def author(device_url: str, game: str, out: Path, play: str | None = None, round
             continue
         (out / "pack.yaml").write_text(y)
         ok, report = check_pack(out, frames)
+        cur_exp = expectations(out)
+        if ok and prev_exp:
+            rejected = verify_changes(au, out, prev_exp, cur_exp)
+            if rejected:
+                ok = False
+                report += "\nEXPECTATIONS CHANGED TO FIT A WRONG READ (the model itself confirmed the frame disagrees):\n" + "\n".join(rejected)
+        prev_exp = prev_exp or cur_exp      # round 1's expectations are what the model saw in the images: the bar
         log(report)
         log(f"round {rnd}: {'PASS' if ok else 'FAIL'}  (author spend so far ${au.cost:.4f})")
         if ok:

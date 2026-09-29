@@ -7,11 +7,14 @@ def _one(img, r):
     if img.size == 0:
         return r.get("otherwise", "unknown")
     inset = float(r.get("inset", 0))
-    if inset:
-        m = int(inset * min(img.shape[:2]))
-        img = img[m:img.shape[0] - m, m:img.shape[1] - m]
     st = r.get("stat", "median")
-    sample = accent_color(img, float(r.get("min_share", 0.03))) if st == "accent" else (median_color(img) if st == "median" else mean_color(img))
+    if st == "accent":
+        sample = accent_color(img, float(r.get("min_share", 0.03)), inset=inset)
+    else:
+        if inset:
+            m = int(inset * min(img.shape[:2]))
+            img = img[m:img.shape[0] - m, m:img.shape[1] - m]
+        sample = median_color(img) if st == "median" else mean_color(img)
     name, dist = nearest_named(sample, {str(k): v for k, v in r["options"].items()})
     val = name if dist <= float(r.get("max_dist", 120)) else r.get("otherwise", "unknown")
     if r.get("parse") == "int":
@@ -22,15 +25,21 @@ def _one(img, r):
     return val
 
 
-def accent_color(img, min_share: float = 0.03, tol: int = 40):
-    """The colour of the thing drawn on a flat background: median of the pixels that differ from the cell's
-    median colour. When fewer than min_share of the pixels differ, the cell is empty and its background is
-    returned. Glyphs (X, O, a chess piece), icons and markers become colour reads this way."""
+def accent_color(img, min_share: float = 0.03, tol: int = 40, inset: float = 0.0):
+    """The colour of the thing drawn on a flat background. The background is the median of the cell's border
+    band (the outer 8%), which a glyph never covers; the accent is the median of the interior pixels that differ
+    from it. When fewer than min_share of them differ, the cell is empty and its background is returned.
+    Glyphs (X, O, a chess piece), icons and markers become colour reads this way, whatever the glyph's size."""
     import numpy as np
     import cv2
-    px = img.reshape(-1, 3)
-    bg = np.median(px, axis=0)
-    lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB).astype(np.int16).reshape(-1, 3)
+    h, w = img.shape[:2]
+    b = max(1, int(0.08 * min(h, w)))
+    border = np.concatenate([img[:b].reshape(-1, 3), img[-b:].reshape(-1, 3), img[:, :b].reshape(-1, 3), img[:, -b:].reshape(-1, 3)])
+    bg = np.median(border, axis=0)
+    m = int(inset * min(h, w))
+    inner = img[m:h - m, m:w - m] if m else img
+    px = inner.reshape(-1, 3)
+    lab = cv2.cvtColor(inner, cv2.COLOR_BGR2LAB).astype(np.int16).reshape(-1, 3)
     lab_bg = cv2.cvtColor(np.uint8([[bg]]), cv2.COLOR_BGR2LAB)[0, 0].astype(np.int16)
     mask = np.abs(lab - lab_bg).sum(axis=1) > tol * 3 // 2
     if mask.mean() < min_share:
