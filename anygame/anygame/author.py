@@ -141,7 +141,9 @@ def probe(device, out_dir: Path, n: int = 4, keys: bool = True) -> list[Path]:
 
     time.sleep(0.5)
     keep()
-    moves = [("tap", w // 2, h // 2), ("tap", w // 4, h // 2), ("tap", 3 * w // 4, h // 2), ("tap", w // 2, h // 4), ("tap", w // 2, 3 * h // 4)]
+    # after every input, look twice: right away (a transient state such as the opponent's turn) and once settled
+    moves = [("tap", w // 2, h // 2), ("tap", w // 4, h // 2), ("tap", 3 * w // 4, h // 2), ("tap", w // 2, h // 4), ("tap", w // 2, 3 * h // 4),
+             ("tap", w // 4, h // 4), ("tap", 3 * w // 4, 3 * h // 4), ("tap", w // 4, 3 * h // 4), ("tap", 3 * w // 4, h // 4)]
     for m in moves:
         if len(frames) >= n:
             break
@@ -149,7 +151,9 @@ def probe(device, out_dir: Path, n: int = 4, keys: bool = True) -> list[Path]:
             device.tap(m[1], m[2])
         except Exception:  # noqa: BLE001
             break
-        time.sleep(0.7)
+        time.sleep(0.12)
+        keep()
+        time.sleep(0.8)
         keep()
     if keys:
         for k in ("ArrowLeft", "ArrowUp", "ArrowRight", "ArrowDown", "Space"):
@@ -159,7 +163,9 @@ def probe(device, out_dir: Path, n: int = 4, keys: bool = True) -> list[Path]:
                 device.key(k)
             except Exception:  # noqa: BLE001
                 break
-            time.sleep(0.7)
+            time.sleep(0.12)
+            keep()
+            time.sleep(0.8)
             keep()
     return frames
 
@@ -384,20 +390,33 @@ def author(device_url: str, game: str, out: Path, play: str | None = None, round
         best_yaml = (out / "pack.yaml").read_text()
         for t in range(0, tune + 1):
             log_path = out / f"play-{t}.jsonl"
-            summary = cmd_play_inline(out, device_url, play_ticks, log_path=str(log_path), sensor=sensor)
+            rec_dir = out / f"play-{t}-frames"
+            summary = cmd_play_inline(out, device_url, play_ticks, log_path=str(log_path), sensor=sensor, record_dir=str(rec_dir))
             digest = play_digest(summary, log_path)
+            if summary.get("reason") and summary.get("ticks", 0) <= 3 and "stop_when" in (out / "pack.yaml").read_text():
+                digest = ("WARNING: stop_when fired after only " + str(summary.get("ticks")) + " ticks. Almost certainly a read met a state it has no "
+                          "option for (the opponent's turn, an animation) and fell to `otherwise`. Look at the last frames below, add the missing "
+                          "options with their colours, and make stop_when match only real end states.\n\n") + digest
             log(f"play {t}: {summary.get('reason') or 'tick cap'} after {summary.get('ticks')} ticks, ${summary.get('total_cost_usd')}")
             if _better(best, summary, score_read):
                 best, best_yaml = summary, (out / "pack.yaml").read_text()
             if t == tune:
                 break
             log(f"tune {t + 1}: asking {au.model} …")
-            text = au.ask([{"type": "text", "text":
+            tune_parts: list[dict[str, Any]] = [{"type": "text", "text":
                 "The pack passes its perception tests. Here is how it PLAYED. Revise the pack so it plays better: the play "
                 "paragraph, the questions, the rules (move any counting into derived reads: runs, around, locate; make "
                 "fatal or wasted moves impossible with exclude/avoid/only rules; add act_when/settle/stop_when if the "
-                "log shows waits or missed turns). Keep the zones, reads and tests that pass unless the log shows a read "
-                "is wrong. Return the whole pack.yaml in one fenced yaml block.\n\n" + digest}])
+                "log shows waits or missed turns). Keep the zones, reads and tests that pass unless the log or the frames "
+                "show a read is wrong. Return the whole pack.yaml in one fenced yaml block.\n\n" + digest}]
+            shots = sorted(rec_dir.glob("*.jpg")) if rec_dir.exists() else []
+            for f in ([shots[len(shots) // 2], shots[-1]] if len(shots) > 2 else shots):
+                img = cv2.imread(str(f))
+                if img is not None:
+                    tune_parts.append({"type": "text", "text": f"frame at tick {int(f.stem)} of the play run (raw, then with the pixel grid):"})
+                    tune_parts.append({"type": "image_url", "image_url": {"url": _b64(img)}})
+                    tune_parts.append({"type": "image_url", "image_url": {"url": _b64(grid_overlay(img))}})
+            text = au.ask(tune_parts)
             y = extract_yaml(text)
             if not y:
                 break

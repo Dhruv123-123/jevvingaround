@@ -124,7 +124,7 @@ def cmd_eval(a):
     sys.exit(1 if failed else 0)
 
 
-def cmd_play_inline(pack_dir, device_url: str, ticks: int, log_path: str | None = None, sensor: str = "jev") -> dict:
+def cmd_play_inline(pack_dir, device_url: str, ticks: int, log_path: str | None = None, sensor: str = "jev", record_dir: str | None = None) -> dict:
     """Play a pack for N ticks and return the summary (used by `author --play-ticks` and `bench`)."""
     from .device import open_device
     from .loop import Agent
@@ -133,7 +133,7 @@ def cmd_play_inline(pack_dir, device_url: str, ticks: int, log_path: str | None 
     pack = load_pack(pack_dir)
     device = open_device(device_url, pack.size)
     jev = open_sensor(sensor, timeout=float(pack.raw.get("sensor_timeout_s", os.environ.get("ANYGAME_JEV_TIMEOUT", "4"))))
-    agent = Agent(pack, device, jev, None, log_path=log_path, max_ticks=ticks)
+    agent = Agent(pack, device, jev, None, log_path=log_path, max_ticks=ticks, record_dir=record_dir)
     try:
         last = agent.run()
     finally:
