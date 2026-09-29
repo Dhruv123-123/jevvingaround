@@ -18,8 +18,12 @@ def wait_log(panel, needle, seconds):
 
 
 with sync_playwright() as p:
+    # this container reaches the internet only through a proxy that Chromium does not pick up from the environment;
+    # a user's Chrome has direct access. The certificate flag is for the proxy's CA in the test container only.
+    proxy = {"server": os.environ["HTTPS_PROXY"]} if os.environ.get("HTTPS_PROXY") else None
+    extra = ["--ignore-certificate-errors"] if proxy else []
     ctx = p.chromium.launch_persistent_context("/tmp/anygame-ext-profile-azure", headless=False, executable_path=CHROME if os.path.exists(CHROME) else None,
-        args=["--headless=new", "--no-sandbox", f"--disable-extensions-except={EXT}", f"--load-extension={EXT}"], viewport={"width": 540, "height": 700})
+        args=["--headless=new", "--no-sandbox", f"--disable-extensions-except={EXT}", f"--load-extension={EXT}", *extra], viewport={"width": 540, "height": 700}, proxy=proxy)
     sw = ctx.service_workers[0] if ctx.service_workers else ctx.wait_for_event("serviceworker")
     ext_id = sw.url.split("/")[2]
     game = ctx.pages[0] if ctx.pages else ctx.new_page()
