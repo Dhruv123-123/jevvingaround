@@ -575,13 +575,21 @@ class Agent:
             self.log.close()
             self.log = None
 
+    stall_ticks: int = 0            # >0: a run ends after this many consecutive unchanged screens (the game is over and the pack has no stop_when for it)
+
     def run(self):
         period = 1.0 / self.pack.tick_hz
+        unchanged = 0
         try:
             while True:
                 t = time.perf_counter()
                 rec = self.step()
                 if rec.get("action") == "stop" or (self.max_ticks and self.tick >= self.max_ticks):
+                    return rec
+                unchanged = unchanged + 1 if rec.get("reason") == "screen unchanged" else 0
+                if self.stall_ticks and unchanged >= self.stall_ticks:
+                    rec["action"] = "stop"
+                    rec["reason"] = f"stalled: the screen has not changed for {unchanged} ticks"
                     return rec
                 if getattr(self.device, "exhausted", False):
                     return rec

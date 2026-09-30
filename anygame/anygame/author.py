@@ -407,7 +407,10 @@ def author(device_url: str, game: str, out: Path, play: str | None = None, round
         parts = [{"type": "text", "text":
             "Here is what your pack does on the probe frames. Fix the pack so every test passes: correct colours "
             "(use the median hex values), rects, grid sizes, max_dist, and the expectations themselves where the read is "
-            "right and the expectation was wrong. Return the whole corrected pack.yaml in one fenced yaml block.\n\n" + report}]
+            "right and the expectation was wrong. If a read misses small things the frame plainly shows (bullets, a "
+            "cursor, a thin marker), the grid is too coarse for them: give them their own read on a finer grid, or a "
+            "`blobs` read, rather than dropping them from the expectations. Return the whole corrected pack.yaml in one "
+            "fenced yaml block.\n\n" + report}]
     if ok and play_ticks:
         from .cli import cmd_play_inline
         best: dict[str, Any] | None = None

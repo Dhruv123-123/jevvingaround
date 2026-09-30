@@ -111,3 +111,21 @@ class VLMFallback:
         if d["screen"] != "unknown":
             self.remember(fp, d)
         return d
+
+    def outcome(self, frame: np.ndarray, goal: str = "") -> dict[str, Any]:
+        """When a run stalls and the pack has no read for the end of the game: one look at the frame says whether it is
+        won, lost, a draw, or still playing (and what input would start the next game)."""
+        import json as _json
+        parts = [{"type": "text", "text": "The game has not changed for a while. " + (f"The game: {goal[:300]}. " if goal else "") +
+                  "Answer with ONE JSON object: {\"outcome\": \"won\" | \"lost\" | \"draw\" | \"playing\", \"note\": \"<one line>\", "
+                  "\"restart\": {\"kind\": \"key\", \"key\": \"...\"} or {\"kind\": \"tap\", \"at\": [x, y]} or null}"},
+                 {"type": "image_url", "image_url": {"url": _data_url(frame)}}]
+        try:
+            text = self.chat.complete([{"role": "user", "content": parts}], max_tokens=300, temperature=0.0)[0]
+            m = text[text.find("{"):text.rfind("}") + 1]
+            j = _json.loads(m) if m else {}
+        except Exception as e:  # noqa: BLE001
+            return {"outcome": "unknown", "note": str(e)[:80], "restart": None}
+        o = str(j.get("outcome", "unknown")).lower()
+        return {"outcome": o if o in ("won", "lost", "draw", "playing") else "unknown", "note": str(j.get("note", ""))[:120], "restart": j.get("restart")}
+
