@@ -115,11 +115,22 @@ anygame play snake-state --device "web://games/snake.html?seed=4&tick=700#state=
 ```
 
 A game that streams its state is the fast path for anything with an API, a mod hook or a telemetry feed; a game
-that does not still gets played from pixels. Both end in the same typed frame, so a pack can mix them. Measured:
+that does not still gets played from pixels. Both end in the same typed frame, so a pack can mix them.
+`games/snake_ws.py` is such a game: Snake published over a WebSocket, keys taken back; `test/e2e_stream.py`
+plays it through `stream://ws://127.0.0.1:8765` with nothing but the state (passes: 40 ticks, support 1.0, keys
+on the socket). `test/e2e_screen.py` is the desktop device live: a virtual display, a real Chromium window in
+kiosk mode, frames from the X framebuffer, keys through X; with Jev it played 200 ticks alive with score 60
+(`xvfb-run -a -s "-screen 0 1024x768x24" python test/e2e_screen.py jev 200`). Measured:
 `snake-state` with Jev, 400 ticks, alive at the cap with score 140, 108 decisions, perception 27 ms p50 (the
 page expression), Jev 190 ms p50; no pixel was read.
 
 ### Deploying it
+
+```bash
+docker compose up                                              # Jev plays 2048 at http://localhost:8080, no hardware
+docker build -t anygame . && docker run --rm anygame eval snake # the image carries every extra and the tests
+docker run --rm -e OPENROUTER_API_KEY anygame learn snake --device "web://games/snake.html?tick=700" --episodes 3
+```
 
 `scripts/dist.sh` builds the two things that ship: the Python wheel (`pip install dist/anygame-*.whl[desktop,stream]`
 gives the `anygame` command: the CLI, the desktop device, the learning loop, the HUD) and the Chrome extension

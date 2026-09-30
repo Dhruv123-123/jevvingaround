@@ -1,3 +1,11 @@
-.venv
-*.log.jsonl
-__pycache__
+.venv/
+build/
+dist/
+ext/node_modules/
+ext/dist/
+ext/*.zip
+**/__pycache__/
+*.jsonl
+rec-*/
+*.mp4
+*.egg-info/
