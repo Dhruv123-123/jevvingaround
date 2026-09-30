@@ -107,6 +107,11 @@ def load_pack(path: str | os.PathLike, _allow_no_tests: bool = False) -> Pack:
                 x0, y0, x1, y1 = [float(v) for v in d["rect_px"]]
             except Exception as e:  # noqa: BLE001
                 raise PackError(f"{p}: {what}: rect_px must be [x0, y0, x1, y1] pixels") from e
+            # an author often overshoots the frame by a few pixels: clamp to it, and refuse only an empty box
+            x0, x1 = max(0.0, min(x0, size[0])), max(0.0, min(x1, size[0]))
+            y0, y1 = max(0.0, min(y0, size[1])), max(0.0, min(y1, size[1]))
+            if x1 <= x0 or y1 <= y0:
+                raise PackError(f"{p}: {what}: rect_px {d['rect_px']} is empty or outside the {size[0]}x{size[1]} frame")
             d["rect"] = [x0 / size[0], y0 / size[1], x1 / size[0], y1 / size[1]]
 
     for name, z in (raw.get("zones") or {}).items():
@@ -114,7 +119,10 @@ def load_pack(path: str | os.PathLike, _allow_no_tests: bool = False) -> Pack:
         if "rect" not in z:
             raise PackError(f"{p}: zone '{name}': needs rect or rect_px")
         grid = tuple(z["grid"]) if z.get("grid") else None
-        zones[name] = Zone(name, Rect.parse(z["rect"]), grid)
+        try:
+            zones[name] = Zone(name, Rect.parse(z["rect"]), grid)
+        except ValueError as e:      # a bad rect is a pack error the author can fix, not a crash
+            raise PackError(f"{p}: zone '{name}': {e}") from e
     reads = raw.get("read") or {}
     for rid, r in reads.items():
         _px(r, f"read '{rid}'")
