@@ -1,0 +1,60 @@
+<!doctype html><html><head><meta charset="utf-8"><title>invaders</title>
+<style>
+html,body{margin:0;background:#0b1020;color:#e5e7eb;font-family:system-ui,sans-serif;width:540px;height:700px;overflow:hidden;user-select:none}
+#bar{height:44px;display:flex;align-items:center;justify-content:space-between;padding:0 14px;font:700 20px/1 system-ui}
+#status{width:120px;height:26px;border-radius:6px;background:#3b82f6}
+canvas{display:block;background:#050816}
+.overlay{position:absolute;left:0;top:44px;width:540px;height:656px;display:none;align-items:center;justify-content:center;flex-direction:column;gap:16px;font:700 30px system-ui;color:#fff}
+.overlay small{font-size:18px;font-weight:500;color:#e5e7eb}
+#menu{background:#312e81}#dead{background:#7f1d1d}#upgrade{background:#064e3b}
+.opt{display:flex;gap:14px;margin-top:10px}.opt div{background:#10b981;color:#052e16;padding:14px 18px;border-radius:10px;font-size:20px;cursor:pointer;width:130px;text-align:center}
+</style></head>
+<body>
+<div id="bar"><span>invaders · <span id="score">0</span> · wave <span id="wave">1</span> · ♥<span id="lives">3</span></span><div id="status"></div></div>
+<canvas id="c" width="540" height="656"></canvas>
+<div id="menu" class="overlay"><div>INVADERS</div><small>← → move · space fires · press Enter to start</small></div>
+<div id="upgrade" class="overlay"><div>WAVE CLEARED</div><small>choose an upgrade: press 1, 2 or 3</small><div class="opt"><div>1 · faster ship</div><div>2 · double shot</div><div>3 · +1 life</div></div></div>
+<div id="dead" class="overlay"><div>GAME OVER</div><small>press R to play again</small></div>
+<script>
+// A real-time shooter with screens the pack does not know until it meets them: a start prompt, an upgrade choice
+// between waves, a game-over card. ?seed=N  ?speed=1 (game speed multiplier)  ?menu=0 (start immediately)
+const q=new URLSearchParams(location.search);let seed=Number(q.get("seed")||1);const SPEED=Number(q.get("speed")||1);
+const rnd=()=>{seed=(seed*1103515245+12345)&0x7fffffff;return seed/0x7fffffff};
+const W=540,H=656,c=document.getElementById("c").getContext("2d");
+const ov=(id,on)=>document.getElementById(id).style.display=on?"flex":"none";
+let phase=q.get("menu")==="0"?"play":"menu",score=0,wave=1,lives=3,shipX=270,shipSpeed=5,double=false,fireCd=0;
+let enemies=[],bullets=[],ebullets=[],dir=1,edown=0,tickN=0,invaderSpeed=0.6;
+const spawn=()=>{enemies=[];const rows=2+Math.min(3,wave),cols=8;for(let r=0;r<rows;r++)for(let i=0;i<cols;i++)enemies.push({x:70+i*52,y:80+r*44,alive:true});dir=1;invaderSpeed=0.6+0.25*(wave-1);bullets=[];ebullets=[]};
+const render=()=>{c.fillStyle="#050816";c.fillRect(0,0,W,H);
+ c.fillStyle="#22d3ee";c.fillRect(shipX-18,H-40,36,16);c.fillRect(shipX-4,H-50,8,10);
+ for(const e of enemies)if(e.alive){c.fillStyle="#f472b6";c.fillRect(e.x-16,e.y-10,32,20);c.fillStyle="#050816";c.fillRect(e.x-10,e.y-4,6,6);c.fillRect(e.x+4,e.y-4,6,6)}
+ c.fillStyle="#facc15";for(const b of bullets)c.fillRect(b.x-2,b.y-8,4,12);
+ c.fillStyle="#f87171";for(const b of ebullets)c.fillRect(b.x-2,b.y,4,12);
+ document.getElementById("score").textContent=score;document.getElementById("wave").textContent=wave;document.getElementById("lives").textContent=lives;
+ document.getElementById("status").style.background=phase==="play"?"#3b82f6":phase==="menu"?"#8b5cf6":phase==="upgrade"?"#10b981":"#ef4444";
+ ov("menu",phase==="menu");ov("upgrade",phase==="upgrade");ov("dead",phase==="dead")};
+const keys={};document.addEventListener("keydown",e=>{keys[e.key]=true;
+ if(phase==="menu"&&e.key==="Enter"){phase="play";spawn()}
+ else if(phase==="upgrade"&&["1","2","3"].includes(e.key)){if(e.key==="1")shipSpeed+=3;if(e.key==="2")double=true;if(e.key==="3")lives++;phase="play";wave++;spawn()}
+ else if(phase==="dead"&&(e.key==="r"||e.key==="R")){score=0;wave=1;lives=3;shipSpeed=5;double=false;phase="play";spawn()}
+ if(e.key===" "||e.key.startsWith("Arrow"))e.preventDefault()});
+document.addEventListener("keyup",e=>{keys[e.key]=false});
+const step=()=>{tickN++;if(phase!=="play"){render();return}
+ if(keys.ArrowLeft)shipX=Math.max(20,shipX-shipSpeed*SPEED);if(keys.ArrowRight)shipX=Math.min(W-20,shipX+shipSpeed*SPEED);
+ if(fireCd>0)fireCd--;if(keys[" "]&&fireCd===0){bullets.push({x:shipX,y:H-52});if(double)bullets.push({x:shipX+12,y:H-52});fireCd=14}
+ for(const b of bullets)b.y-=9*SPEED;bullets=bullets.filter(b=>b.y>0);
+ let minX=1e9,maxX=-1e9;for(const e of enemies)if(e.alive){minX=Math.min(minX,e.x);maxX=Math.max(maxX,e.x)}
+ if(minX===1e9){phase="upgrade";render();return}
+ if(maxX+16>=W-10&&dir>0||minX-16<=10&&dir<0){dir=-dir;for(const e of enemies)e.y+=14}
+ for(const e of enemies)if(e.alive){e.x+=dir*invaderSpeed*SPEED;if(e.y>H-70){lives=0}}
+ if(tickN%Math.max(12,40-wave*4)===0){const live=enemies.filter(e=>e.alive);if(live.length){const s=live[Math.floor(rnd()*live.length)];ebullets.push({x:s.x,y:s.y+10})}}
+ for(const b of ebullets)b.y+=4.5*SPEED;
+ for(const b of bullets)for(const e of enemies)if(e.alive&&Math.abs(b.x-e.x)<18&&Math.abs(b.y-e.y)<14){e.alive=false;b.y=-100;score+=10}
+ const hit=ebullets.some(b=>b.y>H-52&&Math.abs(b.x-shipX)<20);
+ if(hit){lives--;ebullets=[];}
+ ebullets=ebullets.filter(b=>b.y<H);
+ if(lives<=0){phase="dead"}
+ render()};
+window.__state=()=>({phase,score,wave,lives,shipX,enemies:enemies.filter(e=>e.alive).length,ebullets:ebullets.map(b=>[Math.round(b.x),Math.round(b.y)])});
+render();if(phase==="play")spawn();setInterval(step,33);
+</script></body></html>

@@ -17,7 +17,13 @@
     </label>
     <div class="row">
       <button id="region" title="drag a box around the game on the page">region</button>
+      <input id="regiontext" placeholder="x,y,w,h in page px (or drag)" style="flex:1">
+      <button id="regionset">set</button>
       <span id="regioninfo" class="dim">whole page</span>
+    </div>
+    <div class="row">
+      <span id="poolinfo" class="dim">pool: checking…</span>
+      <button id="export" title="download the selected pack as YAML (to keep, share, or add to the pool)">export</button>
     </div>
     <div class="row">
       <label>sensor

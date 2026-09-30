@@ -1,0 +1,68 @@
+{
+ "generated": "2026-09-30",
+ "packs": [
+  {
+   "name": "2048",
+   "game": "2048",
+   "urls": [],
+   "yaml_url": "https://raw.githubusercontent.com/Dhruv123-123/jevvingaround/main/anygame/packs/2048/pack.yaml",
+   "fingerprints": 0
+  },
+  {
+   "name": "2048gb",
+   "game": "2048gb",
+   "urls": [],
+   "yaml_url": "https://raw.githubusercontent.com/Dhruv123-123/jevvingaround/main/anygame/packs/2048gb/pack.yaml",
+   "fingerprints": 0
+  },
+  {
+   "name": "clash-royale",
+   "game": "clash-royale",
+   "urls": [],
+   "yaml_url": "https://raw.githubusercontent.com/Dhruv123-123/jevvingaround/main/anygame/packs/clash-royale/pack.yaml",
+   "fingerprints": 0
+  },
+  {
+   "name": "connect4",
+   "game": "connect4",
+   "urls": [],
+   "yaml_url": "https://raw.githubusercontent.com/Dhruv123-123/jevvingaround/main/anygame/packs/connect4/pack.yaml",
+   "fingerprints": 0
+  },
+  {
+   "name": "connect4-yellow",
+   "game": "connect4-yellow",
+   "urls": [],
+   "yaml_url": "https://raw.githubusercontent.com/Dhruv123-123/jevvingaround/main/anygame/packs/connect4-yellow/pack.yaml",
+   "fingerprints": 0
+  },
+  {
+   "name": "snake",
+   "game": "snake",
+   "urls": [],
+   "yaml_url": "https://raw.githubusercontent.com/Dhruv123-123/jevvingaround/main/anygame/packs/snake/pack.yaml",
+   "fingerprints": 0
+  },
+  {
+   "name": "tetris",
+   "game": "tetris",
+   "urls": [],
+   "yaml_url": "https://raw.githubusercontent.com/Dhruv123-123/jevvingaround/main/anygame/packs/tetris/pack.yaml",
+   "fingerprints": 0
+  },
+  {
+   "name": "tictactoe",
+   "game": "tictactoe",
+   "urls": [],
+   "yaml_url": "https://raw.githubusercontent.com/Dhruv123-123/jevvingaround/main/anygame/packs/tictactoe/pack.yaml",
+   "fingerprints": 0
+  },
+  {
+   "name": "tictactoe-authored",
+   "game": "tictactoe-authored",
+   "urls": [],
+   "yaml_url": "https://raw.githubusercontent.com/Dhruv123-123/jevvingaround/main/anygame/packs/tictactoe-authored/pack.yaml",
+   "fingerprints": 0
+  }
+ ]
+}

@@ -64,6 +64,53 @@ function showRec(rec: Rec) {
   $("screen").textContent = JSON.stringify(rec.screen, null, 1);
 }
 
+const POOL_URL = "https://raw.githubusercontent.com/Dhruv123-123/jevvingaround/main/anygame/packs/pool.json";
+
+/** The pool: packs the project (and later, everyone) has already learned, matched to this tab by URL or fingerprint. */
+async function checkPool(store: Store) {
+  const el = $("poolinfo");
+  try {
+    const r = await fetch(POOL_URL, { cache: "no-store" });
+    if (!r.ok) throw new Error(String(r.status));
+    const pool: { packs: { name: string; urls?: string[]; game?: string; yaml_url?: string }[] } = await r.json();
+    const here = tabUrl.toLowerCase();
+    const hit = pool.packs.find((p) => (p.urls ?? []).some((u) => here.includes(u.toLowerCase())));
+    if (!hit) { el.textContent = `pool: ${pool.packs.length} packs, none for this site`; return; }
+    if (BUNDLED_PACKS[hit.name] || store.packs?.[hit.name]) { el.textContent = `pool: "${hit.name}" matches this site`; $<HTMLSelectElement>("pack").value = BUNDLED_PACKS[hit.name] ? hit.name : `${hit.name} (authored)`; return; }
+    if (hit.yaml_url) {
+      const y = await (await fetch(hit.yaml_url, { cache: "no-store" })).text();
+      loadPack(y, hit.name);
+      await save({ packs: { ...(store.packs ?? {}), [hit.name]: y } });
+      await refreshPacks(await load());
+      $<HTMLSelectElement>("pack").value = `${hit.name} (authored)`;
+      el.textContent = `pool: installed "${hit.name}" for this site`;
+    }
+  } catch (e) { el.textContent = `pool: unreachable (${(e as Error).message.slice(0, 40)})`; }
+}
+
+async function setRegionText() {
+  const v = ($("regiontext") as HTMLInputElement).value.trim();
+  const store = await load();
+  const regions = { ...(store.regions ?? {}) };
+  const key = originOf(tabUrl);
+  const m = v.match(/^\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*$/);
+  if (m) regions[key] = { x: +m[1], y: +m[2], w: +m[3], h: +m[4] }; else delete regions[key];
+  await save({ regions });
+  $("regioninfo").textContent = m ? `${m[3]}×${m[4]} at (${m[1]},${m[2]})` : "whole page";
+}
+
+function exportPack() {
+  load().then((store) => {
+    const name = $<HTMLSelectElement>("pack").value;
+    const text = packText(store, name);
+    if (!text) return;
+    const blob = new Blob([text], { type: "text/yaml" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob); a.download = `${name.replace(" (authored)", "")}.pack.yaml`; a.click();
+    log(`exported ${a.download}: add it to packs/pool.json in the repo to share it`);
+  });
+}
+
 async function pickRegion() {
   const t = await currentTab();
   await chrome.scripting.executeScript({ target: { tabId: t.id! }, files: ["region.js"] });
@@ -290,6 +337,10 @@ async function main() {
     await save({ keys }); log("keys saved");
   };
   $("region").onclick = () => pickRegion().catch((e) => log(String(e)));
+  $("regionset").onclick = () => setRegionText().catch((e) => log(String(e)));
+  $("export").onclick = exportPack;
+  if (region) ($("regiontext") as HTMLInputElement).value = `${region.x},${region.y},${region.w},${region.h}`;
+  checkPool(store);
   $("play").onclick = () => play().catch((e) => log(String(e)));
   $("stop").onclick = () => stop();
   $("apply").onclick = applyEdits;
