@@ -16,7 +16,7 @@ RUN --mount=type=secret,id=ca,required=false sh -c 'if [ -s /run/secrets/ca ]; t
     pip install --no-cache-dir ".[render,emulator,stream]" "playwright==${PW}" pytest mss && pip install --no-cache-dir --no-deps pynput python-xlib six \
     && python -c "import rapidocr_onnxruntime"'   # pynput without evdev (the X backend is the one a display has); warms the OCR model download
 COPY test ./test
-ENV HUD_PORT=8080 PYTHONUNBUFFERED=1 ANYGAME_HOME=/packs
+ENV HUD_PORT=8080 PYTHONUNBUFFERED=1 ANYGAME_HOME=/packs ANYGAME_PACKS=/app/packs
 VOLUME /packs                                        # authored packs persist here: docker run -v anygame-packs:/packs …
 EXPOSE 8080
 ENTRYPOINT ["anygame"]
