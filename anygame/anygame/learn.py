@@ -108,6 +108,15 @@ def replay(pack: Pack, inc: Incident) -> dict[str, list]:
     return {"values": values, "choices": choices, "applied": applied, "support": support}
 
 
+def _get_path(values: dict[str, Any], path: str | None) -> Any:
+    cur: Any = values
+    for part in str(path or "").split("."):
+        if not part:
+            continue
+        cur = cur.get(part) if isinstance(cur, dict) else None
+    return cur
+
+
 def _flat(v: dict[str, Any], prefix: str = "") -> dict[str, str]:
     o: dict[str, str] = {}
     for k, x in v.items():
@@ -146,6 +155,19 @@ def verify_revision(candidate: Pack, incumbent: Pack, inc: Incident, threshold: 
     the candidate must not block their ordinary decisions either (a rule that fits one loss and breaks the rest is out)."""
     if not inc.decisions:
         return {"ok": False, "why": "no decisions to replay", "guarded": False, "distinguished": [], "overblocked": 0.0, "support": 0.0}
+    if inc.decisions[-1].rec.get("never_acted"):
+        # the pack never made a move on this screen (its gate never opened, or every action was excluded): the revision
+        # is good if it would act here and still reads the screen
+        from .loop import Agent
+        c = replay(candidate, inc)
+        v = c["values"][-1]
+        gate = candidate.raw.get("act_when")
+        opens = gate is None or Agent._cond(gate, v)
+        if not opens:
+            return {"ok": False, "why": f"act_when still does not hold on the stalled screen ({gate.get('read')} = {_get_path(v, gate.get('read'))})", "guarded": False, "distinguished": [], "overblocked": 0.0, "support": min(c["support"])}
+        if min(c["support"]) < threshold:
+            return {"ok": False, "why": f"reads the stalled screen badly (support {min(c['support']):.2f})", "guarded": False, "distinguished": [], "overblocked": 0.0, "support": min(c["support"])}
+        return {"ok": True, "why": "the pack would act on the screen it stalled on", "guarded": True, "distinguished": [], "overblocked": 0.0, "support": min(c["support"])}
     narrow = cell_rule(candidate, incumbent)
     if narrow:
         return {"ok": False, "why": f"rule on {narrow} tests the exact cell of a located read; it would fire only there", "guarded": False, "distinguished": [], "overblocked": 0.0, "support": 0.0}
@@ -249,6 +271,11 @@ def _trim(v: Any, n: int = 420) -> str:
 
 def incident_digest(inc: Incident, episodes: list[dict[str, Any]] | None = None) -> str:
     """The incident as the chat model sees it: every decision with its typed frame, Jev's beliefs and what the rules did."""
+    if inc.decisions and inc.decisions[-1].rec.get("never_acted"):
+        r = inc.decisions[-1].rec
+        return (f"STALL: {inc.reason}. The pack never made a move: for {inc.tick} ticks the screen did not change and no action was taken "
+                f"(last reason: {r.get('reason')}). Its reads returned screen={_trim(r.get('screen'))}. Look at the frame: if the game is waiting "
+                f"for us, a read behind act_when or a colour option is wrong (measure the real colours), or every action is excluded by a rule.")
     lines = [f"LOSS: {inc.reason} at tick {inc.tick}. The last {len(inc.decisions)} decisions before it, oldest first; the LAST one is the fatal decision:"]
     for k, d in enumerate(inc.decisions):
         r = d.rec

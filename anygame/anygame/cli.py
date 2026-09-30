@@ -446,6 +446,10 @@ def cmd_learn(a):
                 last["reason"] = f"stalled: {verdict['outcome']} ({verdict['note']})"
                 recs[-1]["reason"] = last["reason"]
                 log(f"episode {n}: the screen stalled; the vision model says {verdict['outcome']}: {verdict['note']}")
+            if not decisions and str(last.get("reason", "")).startswith("stalled") and "playing" in str(last.get("reason", "")):
+                # never acted: the stalled frame itself is the incident, so the model can fix the read that gated us
+                stalled_rec = {**last, "choice": "wait", "action": "wait", "never_acted": True}
+                decisions.append(Decision(stalled_rec, device.frame().copy(), getattr(agent, "last_state", None)))
             ep = outcome(recs, n, version, score_read)
             log(f"episode {n}: {last.get('action')}{' · ' + str(last.get('reason')) if last.get('reason') else ''} after {agent.tick} ticks, ${agent.total_cost:.4f}" + (f", score {ep['score']}" if ep["score"] is not None else ""))
             if incumbent is not None:

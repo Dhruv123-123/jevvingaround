@@ -579,14 +579,17 @@ class Agent:
 
     def run(self):
         period = 1.0 / self.pack.tick_hz
-        unchanged = 0
+        unchanged, last_hash = 0, None
         try:
             while True:
                 t = time.perf_counter()
                 rec = self.step()
                 if rec.get("action") == "stop" or (self.max_ticks and self.tick >= self.max_ticks):
                     return rec
-                unchanged = unchanged + 1 if rec.get("reason") == "screen unchanged" else 0
+                # a stall is the same screen tick after tick with nothing decided: the game ended and the pack has no
+                # read for it, or a gate (act_when) never opens because a read is wrong
+                unchanged = unchanged + 1 if (rec.get("hash") == last_hash and "jev_ms" not in rec) else 0
+                last_hash = rec.get("hash")
                 if self.stall_ticks and unchanged >= self.stall_ticks:
                     rec["action"] = "stop"
                     rec["reason"] = f"stalled: the screen has not changed for {unchanged} ticks"
