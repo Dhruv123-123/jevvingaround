@@ -12,7 +12,7 @@ dependencies = [
 [project.optional-dependencies]
 render = ["imageio-ffmpeg>=0.5"]
 desktop = ["mss>=9", "pynput>=1.7"]          # screen://: this computer's screen and input
-stream = ["websocket-client>=1.6"]            # stream://ws://…: a game that publishes its state
+stream = ["websocket-client>=1.6", "websockets>=12"]   # stream://ws://…: a game that publishes its state; websockets serves games/snake_ws.py
 emulator = ["pyboy>=2.0"]
 vocab = ["ultralytics"]
 [project.scripts]
