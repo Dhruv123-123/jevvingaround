@@ -75,13 +75,13 @@ before; until then it is idle. Rules and reads a kept revision added become **le
 travel with it into the pool, and are shown to the model when this or a similar game loses next. This is the
 part SIMA's loop does not have: the judge and the proposer improve from the record, not only the policy.
 
-Measured on Snake from a **naive pack** (no rules, no `around` read, a two-line paragraph), six episodes with
-GPT-5.6 revising and Jev playing: episode 1 died at tick 28; the first revision (a rule on free cells) was
-accepted by replay and played 136 ticks; four later revisions were accepted by replay but played worse on trial
-and were reverted, two were rejected by replay outright, and the pack stayed at v2, dying at 131–140 ticks with
-the food eaten. The bundled Snake pack, with the `_space` and `ahead` rules a person wrote, survives 400+ ticks:
-the loop closes part of that gap on its own and the trial guards against the rest. Total model spend for the six
-episodes and seven revisions: about four cents.
+Measured on Snake from a **naive pack** (no rules, no `around` read, a two-line paragraph), eight episodes with
+GPT-5.6 revising and Jev playing, the trial record and lessons on: episode 1 died at tick 51; v2 (rules on free
+cells) played 365 ticks; v3 381; v4 408 with score 1500, which is where the hand-written Snake pack sits. Eight
+revisions were proposed: three kept, four reverted by trial, one on trial at the end; five lessons were banked.
+By the seventh trial the calibrator was active and vetoed a round-one revision as "shaped like ones reverted
+before" (keep probability 0.25), and the round-two revision it let through scored 1.00. Total model spend for
+the run: about five cents. An earlier six-episode run without the calibrator plateaued at 136 ticks.
 
 The **pool** (`packs/pool.json`) indexes every pack by site and by the fingerprints of its screens
 (`anygame stamp` writes them into the packs). The extension checks it when the panel opens, matching the visible
