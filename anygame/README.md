@@ -115,7 +115,9 @@ anygame play snake-state --device "web://games/snake.html?seed=4&tick=700#state=
 ```
 
 A game that streams its state is the fast path for anything with an API, a mod hook or a telemetry feed; a game
-that does not still gets played from pixels. Both end in the same typed frame, so a pack can mix them.
+that does not still gets played from pixels. Both end in the same typed frame, so a pack can mix them. Measured:
+`snake-state` with Jev, 400 ticks, alive at the cap with score 140, 108 decisions, perception 27 ms p50 (the
+page expression), Jev 190 ms p50; no pixel was read.
 
 ### Deploying it
 
