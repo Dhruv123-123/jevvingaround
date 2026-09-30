@@ -265,11 +265,25 @@ def cmd_go(a):
     if known is None:
         print(f"no pack for {base}: authoring one into {pack_dir} …", file=sys.stderr)
         size = tuple(int(v) for v in a.size.split("x"))
+        demo = None
+        if a.explore:
+            # the explorer plays first: the vision model's minute of play, with intents, is the author's evidence
+            from .demo import explore
+            dev = open_device(a.device, size)
+            try:
+                demo = explore(dev, pack_dir / "demo", seconds=a.explore, game=a.game or name, log=lambda m: print(m, file=sys.stderr))
+            finally:
+                dev.close()
         ok, _ = author(a.device, a.game or name, pack_dir, play=a.play, model=a.model, size=size, play_ticks=a.play_ticks, tune=a.tune,
-                       sensor=a.sensor, log=lambda m: print(m, file=sys.stderr))
+                       sensor=a.sensor, log=lambda m: print(m, file=sys.stderr), demo=demo)
         if not ok:
             sys.exit(f"could not write a pack that passes its own tests; see {pack_dir}")
         known = pack_dir
+    if a.learn is not None:
+        # the application loop: episodes with the fallback on, a replay-verified revision after every loss, restarts
+        import argparse as _ap
+        print(f"learning {known} over {a.learn or 'endless'} episodes", file=sys.stderr)
+        return cmd_learn(_ap.Namespace(pack=str(known), device=a.device, sensor=a.sensor, episodes=a.learn, max_ticks=a.max_ticks, goal=a.game, fallback=True, bank=None, out=None, fresh=a.fresh))
     pack = load_pack(known)
     device = open_device(a.device, pack.size)
     hud = Hud(a.hud) if a.hud else None
@@ -404,7 +418,7 @@ def cmd_learn(a):
     log = lambda m: print(m, file=sys.stderr)  # noqa: E731
     # lessons: what survived trial here and on other packs in the pool, shown to the model when it revises
     from .pool import fetch_pool, pool_lessons
-    pool_hints = pool_lessons(fetch_pool(), exclude=pack.name)
+    pool_hints = [] if a.fresh else pool_lessons(fetch_pool(), exclude=pack.name)     # --fresh: nothing from the pool, not even lessons
     read_kinds = {str(r.get("kind")) for r in pack.reads.values()}
     try:
         import itertools
@@ -584,7 +598,7 @@ def main(argv=None):
     go.add_argument("--play", default=None, help="how you want it played"); go.add_argument("--packs", default=os.environ.get("ANYGAME_HOME", os.path.expanduser("~/.anygame/packs")))
     go.add_argument("--hud", type=int, default=int(os.environ.get("HUD_PORT", "8080"))); go.add_argument("--max-ticks", type=int, default=None); go.add_argument("--size", default="540x560")
     go.add_argument("--model", default=None); go.add_argument("--tune", type=int, default=1); go.add_argument("--play-ticks", type=int, default=40); go.add_argument("--sensor", default="jev")
-    go.add_argument("--fresh", action="store_true", help="ignore a cached pack for this game"); go.add_argument("--pack", default=None, help="use this bundled pack instead of authoring")
+    go.add_argument("--fresh", action="store_true", help="from scratch: ignore a cached pack, the pool and its lessons"); go.add_argument("--explore", type=int, default=0, metavar="SECONDS", help="let the vision model play first and author from that demonstration"); go.add_argument("--pack", default=None, help="use this bundled pack instead of authoring")
     go.set_defaults(fn=cmd_go)
     bt = sub.add_parser("battle", help="two packs on one screen, alternating turns")
     bt.add_argument("pack_a"); bt.add_argument("pack_b"); bt.add_argument("--device", required=True); bt.add_argument("--sensor", default="jev")
