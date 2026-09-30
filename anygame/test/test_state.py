@@ -104,10 +104,9 @@ def test_screen_device_url_parsing_and_keys():
     assert parse_url("")["region"] is None
     with pytest.raises(ValueError):
         parse_url("1,2,3")
-    pytest.importorskip("pynput")
     try:
-        from anygame.device.screen import key_of
-        from pynput.keyboard import Key
-        assert key_of("ArrowUp") == Key.up and key_of("a") == "a" and key_of("Space") == Key.space
-    except Exception as e:  # noqa: BLE001 — pynput needs a display to import its backend on some platforms
+        from pynput.keyboard import Key       # pynput needs a display to import its backend: no display, no key test
+    except Exception as e:  # noqa: BLE001
         pytest.skip(f"no display for pynput: {e}")
+    from anygame.device.screen import key_of
+    assert key_of("ArrowUp") == Key.up and key_of("a") == "a" and key_of("Space") == Key.space
