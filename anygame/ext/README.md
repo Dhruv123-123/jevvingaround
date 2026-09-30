@@ -20,8 +20,14 @@ anygame button, and the side panel opens for that tab:
    the paragraph (editable while it plays), and a hybrid line: which mode, the support score, whether the screen is
    known. With *VLM fallback* on, screens the pack cannot read go to the chat model, which acts and teaches the
    pack (transients are memoised, modes are merged after verification); learned packs are saved as "<name>-learned".
-   *Keep improving* tunes the pack in the background while it plays.
+   *Keep learning* turns play into episodes: after a loss the chat model revises the typed frame (reads, rules,
+   questions, paragraph), the revision is accepted only if it replays better on that loss, the tab reloads, the
+   next episode plays with it on trial, and it is reverted if it plays worse than the incumbent's median episode.
+   Episodes and incidents are banked per pack in extension storage.
 5. **record me** / **let the model explore**: a demonstration for the author, instead of the blind probe.
+6. **go**: one button. A pack from the pool (by site, or by what the screen looks like) or from the store plays
+   now; with none, the explorer plays a minute, the author writes the pack from that, and it plays, with the
+   fallback and learning on, restarting until *stop*.
 
 How it works: frames come from `Page.captureScreenshot` and input goes through `Input.dispatch*` on the
 `chrome.debugger` API, so canvas games get trusted events and the tab does not have to be the active one for
