@@ -43,6 +43,11 @@ read:                                                     # each read is one key
         # cells; mode: hands = landing cells whose cell above completes the line (drop there and you lose)
   <id>: { kind: around, of: <locate read id>, in: <grid read id>, free: [".", F] }
         # {up,down,left,right,ahead} neighbours plus <dir>_free (open cells that way) and <dir>_space (flood fill)
+  <id>: { kind: blobs, zone: <grid zone>, colors: { <label>: "#hex", ... }, min_area: 20, tol: 40, max: 20 }
+        # small moving things a grid read misses (bullets, a cursor, sprites): connected blobs of each colour,
+        # returned as { <label>: [ { cell: "c3r7", size: small|medium|large }, ... ] } (cells of the zone's grid;
+        # an empty list when none). min_area is pixels: a 4x12 bullet needs min_area 20 or less. Expectations
+        # must use exactly that shape, e.g. enemy_bullets: { shot: [ { cell: c3r7, size: small } ] }
   <id>: { ..., history: 1 }        # also exposes <id>_prev; for a located cell <id>_moving and <id>_reverse
   <id>: { kind: tetris, in: <board grid read>, next_in: <preview grid read>, empty: ".", top_k: 6, moves_per_row: 3,
           keys: { rotate: ArrowUp, left: ArrowLeft, right: ArrowRight, drop: Space } }

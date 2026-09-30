@@ -20,7 +20,7 @@ import yaml
 
 from .pack import Pack, dump_pack, load_pack_text
 
-LOST = re.compile(r"lost|dead|over|game_over|crash|died", re.I)
+LOST = re.compile(r"lost|dead|over|game_over|crash|died|stalled: playing", re.I)   # a deadlock mid-game is a failure to act: a loss
 WON = re.compile(r"won|win|victory|cleared", re.I)
 
 

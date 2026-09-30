@@ -19,7 +19,7 @@ export interface Incident { reason: string; tick: number; decisions: Decision[];
 export interface Episode { n: number; ticks: number; decisions: number; reason: string; score: number | null; won: boolean; lost: boolean; cost_usd: number; version: number; at: string }
 export interface Verdict { ok: boolean; why: string; guarded: boolean; distinguished: string[]; overblocked: number; support: number }
 
-export const LOST = /lost|dead|over|game_over|crash|died/i;
+export const LOST = /lost|dead|over|game_over|crash|died|stalled: playing/i;   // a deadlock mid-game is a failure to act: a loss
 export const WON = /won|win|victory|cleared/i;
 
 /** The outcome of an episode from its records: the last record's reason, the score read if the pack names one. */
