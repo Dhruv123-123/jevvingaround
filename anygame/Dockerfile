@@ -12,7 +12,8 @@ COPY test ./test
 # render: videos · emulator: Game Boy · stream: WebSocket state feeds · desktop: screen:// (needs a display: xvfb-run inside a container)
 # a corporate proxy with its own CA: docker build --secret id=ca,src=/path/ca.crt . (ignored when absent)
 RUN --mount=type=secret,id=ca,required=false sh -c 'if [ -s /run/secrets/ca ]; then export PIP_CERT=/run/secrets/ca REQUESTS_CA_BUNDLE=/run/secrets/ca SSL_CERT_FILE=/run/secrets/ca; fi; \
-    pip install --no-cache-dir ".[render,emulator,stream,desktop]" pytest && python -c "import rapidocr_onnxruntime"'   # warms the OCR model download
+    pip install --no-cache-dir ".[render,emulator,stream]" pytest mss && pip install --no-cache-dir --no-deps pynput python-xlib six \
+    && python -c "import rapidocr_onnxruntime"'   # pynput without evdev (the X backend is the one a display has); warms the OCR model download
 ENV HUD_PORT=8080 PYTHONUNBUFFERED=1 ANYGAME_HOME=/packs
 VOLUME /packs                                        # authored packs persist here: docker run -v anygame-packs:/packs …
 EXPOSE 8080
