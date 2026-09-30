@@ -113,6 +113,8 @@ reload the tab, play again, forever until *stop*. In the CLI it is `anygame lear
 | the Chrome extension | the whole runtime in a side panel; frames and input through the debugger API; the pool, the author, the learning loop, the state expression | `scripts/dist.sh` → `ext/anygame-extension.zip` |
 | the pool | `packs/pool.json` on `main`: every pack with its site hints and screen fingerprints | `npm run build` in `ext/` after `anygame stamp` |
 
+| the Docker image | the CLI with every extra, Xvfb for the desktop device, the tests | `docker build .`; `scripts/test-image.sh` runs the unit tests, the fixture evals and a play through pixels, a state stream and a virtual desktop inside it |
+
 The same pack plays in both: the YAML is the contract, the fixtures (screenshots or state JSON) are the tests.
 
 ## 6. What this is, in SIMA terms

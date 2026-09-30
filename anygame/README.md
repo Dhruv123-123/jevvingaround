@@ -130,7 +130,15 @@ page expression), Jev 190 ms p50; no pixel was read.
 docker compose up                                              # Jev plays 2048 at http://localhost:8080, no hardware
 docker build -t anygame . && docker run --rm anygame eval snake # the image carries every extra and the tests
 docker run --rm -e OPENROUTER_API_KEY anygame learn snake --device "web://games/snake.html?tick=700" --episodes 3
+scripts/test-image.sh anygame                                  # proves the image: everything below, inside the container
 ```
+
+Measured inside the image (`scripts/test-image.sh`, Playwright 1.56 base, every extra installed): 43 unit tests
+pass (one skipped: no display at that point), every bundled pack's fixtures pass, Snake plays from pixels through
+`web://`, from a WebSocket state stream through `stream://`, and from a virtual display through `screen://`
+(Xvfb, a kiosk Chromium window, mss and pynput); with Jev through the desktop device, 150 ticks alive with 49
+keystrokes and score 40. Behind a proxy with its own CA: `docker build --secret id=ca,src=ca.crt .` and
+`CA_BUNDLE=ca.crt scripts/test-image.sh`.
 
 `scripts/dist.sh` builds the two things that ship: the Python wheel (`pip install dist/anygame-*.whl[desktop,stream]`
 gives the `anygame` command: the CLI, the desktop device, the learning loop, the HUD) and the Chrome extension
