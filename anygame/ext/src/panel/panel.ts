@@ -10,7 +10,7 @@ const log = (m: string) => { const el = $("log"); el.textContent = (el.textConte
 
 interface StoredIncident { reason: string; tick: number; at: string; recs: Rec[]; frames: string[] }
 interface StoredBank { episodes: Episode[]; incidents: StoredIncident[]; version: number }
-interface Store { keys?: Keys; sensor?: string; regions?: Record<string, Region>; packs?: Record<string, string>; packFor?: Record<string, string>; bank?: Record<string, StoredBank> }
+interface Store { keys?: Keys; sensor?: string; regions?: Record<string, Region>; states?: Record<string, string>; packs?: Record<string, string>; packFor?: Record<string, string>; bank?: Record<string, StoredBank> }
 async function load(): Promise<Store> { return (await chrome.storage.local.get(null)) as Store; }
 async function save(patch: Partial<Store>) { await chrome.storage.local.set(patch); }
 
@@ -171,7 +171,9 @@ async function makeDevice(store: Store, pack: Pack | null, name_is_authored = fa
   // otherwise capture at the scale that makes the region match the pack's authored frame size, so its rects line up
   if (!region && pack && !name_is_authored) region = { x: 0, y: 0, w: pack.size[0], h: pack.size[1] };
   const scale = region && pack ? pack.size[0] / region.w : 1;
-  const d = new TabDevice(t.id!, region, Math.max(0.25, Math.min(3, scale)));
+  const stateExpr = ($("stateexpr") as HTMLInputElement).value.trim() || null;
+  if (stateExpr !== (store.states?.[originOf(tabUrl)] ?? null)) await save({ states: { ...(store.states ?? {}), [originOf(tabUrl)]: stateExpr ?? "" } });
+  const d = new TabDevice(t.id!, region, Math.max(0.25, Math.min(3, scale)), 80, stateExpr);
   await d.attach();
   return d;
 }
@@ -402,6 +404,7 @@ async function main() {
   await refreshPacks(store);
   const region = store.regions?.[originOf(tabUrl)];
   $("regioninfo").textContent = region ? `${region.w}×${region.h} at (${region.x},${region.y})` : "whole page";
+  ($("stateexpr") as HTMLInputElement).value = store.states?.[originOf(tabUrl)] ?? "";
   if (store.sensor) $<HTMLSelectElement>("sensor").value = store.sensor;
   for (const k of ["openrouter", "llmBase", "llmKey", "llmModel"] as const) ($(`k_${k}`) as HTMLInputElement).value = (store.keys as any)?.[k] ?? "";
   $("savekeys").onclick = async () => {

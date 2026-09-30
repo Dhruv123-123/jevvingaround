@@ -10,6 +10,7 @@ import type { FallbackDecision, VLMFallback } from "./fallback.js";
 export interface Device {
   size(): [number, number];
   frame(): Promise<Frame>;
+  state?(): Promise<any>;          // a game that publishes its state: what the json / json_grid reads consume
   tap(x: number, y: number): Promise<void>;
   swipe(x0: number, y0: number, x1: number, y1: number, ms?: number): Promise<void>;
   key(name: string): Promise<void>;
@@ -232,8 +233,9 @@ export class Agent {
     return out;
   }
 
-  observe(frame: Frame, pack: Pack = this.pack): { values: Values; timings: Record<string, number>; conf: Record<string, number> } {
-    const { values: raw, timings, conf } = readAll(pack, frame);
+  lastState: any = undefined;
+  observe(frame: Frame, pack: Pack = this.pack, state: any = this.lastState): { values: Values; timings: Record<string, number>; conf: Record<string, number> } {
+    const { values: raw, timings, conf } = readAll(pack, frame, undefined, state);
     const values = this.present(raw, pack);
     for (const [rid, r] of Object.entries(pack.reads)) {
       if (!r.history) continue;
@@ -352,6 +354,7 @@ export class Agent {
     this.tick++;
     const t0 = performance.now();
     const frame = await this.device.frame();
+    this.lastState = this.device.state ? await this.device.state() : undefined;
     const fp = fingerprint(frame);
     this.lastFp = fp;
     // classify on the base pack's reads, then observe with the active mode's pack

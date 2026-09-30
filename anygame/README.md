@@ -89,7 +89,40 @@ OPENROUTER_API_KEY=… anygame go "web://https://example.com/some-game" --game "
 `go` probes the game, has a vision model write the pack, checks the pack against the frames until its
 tests pass, plays a short game and lets the model tune the paragraph and rules from the log, caches the pack
 under `~/.anygame/packs`, and then plays with the HUD at http://localhost:8080. The second time it skips
-straight to playing. `--pack 2048` uses a bundled pack instead of authoring one.
+straight to playing. `--pack 2048` uses a bundled pack instead of authoring one. `--learn 0` keeps playing and
+learning from every loss until you stop it.
+
+### Where the game comes from: pixels or a stream
+
+The runtime does not care how it learns about the game, only that a device gives it frames and, optionally,
+**state**. Every derived read, rule and paragraph works the same on both.
+
+| device | what it is | frames | state |
+|---|---|---|---|
+| `web://<url>` | a page in headless Chromium | screenshots | `#state=window.__state()` evaluates an expression on the page every tick |
+| `screen://x,y,w,h` | this computer's screen and input (`pip install anygame[desktop]`: mss + pynput); any window, any game | a region of the monitor | no |
+| `stream://ws://…`, `stream://http://…`, `stream://file:…`, `stream://stdin` | a game that publishes its state as JSON (`anygame[stream]` for WebSockets); `?input=screen://…` pairs an input device | the input device's, or blank | the latest JSON object |
+| `pyboy://rom.gb`, `adb://host:port`, `replay://dir` | an emulator, a phone, recorded frames | yes | no |
+| the Chrome extension | the tab you are looking at, through the debugger API | yes | a state expression in the panel |
+
+State is consumed by two reads: `json` (`path: score`, `parse: int`, `map: {"true": dead, "false": playing}`)
+and `json_grid` (a `c<col>r<row>` matrix from lists of coordinates: `symbols: {H: {path: snake, index: 0},
+s: {path: snake, slice: [1, null]}, F: {path: food}}`). `packs/snake-state` plays Snake from the page's own
+state with the same `locate`, `around`, rules and paragraph as the pixel pack, and its tests are JSON files:
+
+```bash
+anygame play snake-state --device "web://games/snake.html?seed=4&tick=700#state=window.__state()"
+```
+
+A game that streams its state is the fast path for anything with an API, a mod hook or a telemetry feed; a game
+that does not still gets played from pixels. Both end in the same typed frame, so a pack can mix them.
+
+### Deploying it
+
+`scripts/dist.sh` builds the two things that ship: the Python wheel (`pip install dist/anygame-*.whl[desktop,stream]`
+gives the `anygame` command: the CLI, the desktop device, the learning loop, the HUD) and the Chrome extension
+(`ext/anygame-extension.zip`, load it unpacked at `chrome://extensions`). No server, no Docker required; the
+Dockerfile is for the CLI on a machine without Python.
 
 ### Which model goes where
 
@@ -367,11 +400,11 @@ so every pack is testable in CI with no hardware and no account beyond the model
 
 ```bash
 anygame packs
-anygame play <pack> --device web://…|pyboy://<rom>|adb://…|replay://<dir> [--hud 8080] [--max-ticks N] [--sensor none]
+anygame play <pack> --device web://…[#state=<js>]|screen://x,y,w,h|stream://ws://…|pyboy://<rom>|adb://…|replay://<dir> [--hud 8080] [--max-ticks N] [--sensor none]
 anygame eval <pack> [--sensor jev]        # perception tests on the pack's frames; action checks with a sensor
 anygame record --device adb://<ip>:5555 --out packs/<pack>/fixtures --seconds 30   # frames for authoring
 anygame render <recorded-dir> --log run.jsonl --out demo.mp4                         # video with the decision panel
-anygame go <device> [--game "…"] [--play "…"] [--pack <bundled>]        # author if needed, cache, play with HUD
+anygame go <device> [--game "…"] [--play "…"] [--pack <bundled>] [--learn N]   # pool → author if needed → play; --learn: episodes and revisions
 anygame author --device <url> --game "<name>" --out packs/<name> [--play "…"] [--rounds 3] [--play-ticks 40 --tune 2] [--demo <dir>]
 anygame explore --device <url> --out <dir> --seconds 90 --game "…"        # the vision model plays and writes a demonstration
 anygame play <pack> --device <url> --fallback [--goal "…"]                # VLM on unknown screens; learned pack written next to the original

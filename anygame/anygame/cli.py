@@ -90,6 +90,7 @@ def _match(expected, got, tol=0.05):
 
 def cmd_eval(a):
     import cv2
+    import numpy as np
     from .jev import Jev
     from .loop import Agent
     from .pack import load_pack
@@ -99,13 +100,14 @@ def cmd_eval(a):
     failed = 0
     print(f"{pack.name}  sensor={a.sensor}")
     for t in pack.tests:
-        frame = cv2.imread(str(pack.path.parent / t["frame"]))
+        frame = cv2.imread(str(pack.path.parent / t["frame"])) if t.get("frame") else np.zeros((pack.size[1], pack.size[0], 3), np.uint8)
+        state = json.loads((pack.path.parent / t["state"]).read_text()) if t.get("state") else None
         t0 = time.perf_counter()
-        values, _, timings = Agent(pack, device=_Dummy(pack.size), jev=None).observe(frame)
+        values, _, timings = Agent(pack, device=_Dummy(pack.size), jev=None).observe(frame, state=state)
         ms = (time.perf_counter() - t0) * 1000
         misses = {k: (v, values.get(k)) for k, v in t["expect"].items() if not _match(v, values.get(k))}
         ok = not misses
-        line = f"  {'✓' if ok else '✗'} {t['frame']}  reads {ms:.0f} ms"
+        line = f"  {'✓' if ok else '✗'} {t.get('frame') or t.get('state')}  reads {ms:.0f} ms"
         if misses:
             line += "  mismatch: " + "; ".join(f"{k}: expected {e} got {g}" for k, (e, g) in misses.items())
         if t.get("expect_action"):
@@ -113,7 +115,7 @@ def cmd_eval(a):
                 line += "  (action check skipped: no sensor)"
             else:
                 ag = Agent(pack, device=_Dummy(pack.size), jev=jev)
-                vals, _, _ = ag.observe(frame)
+                vals, _, _ = ag.observe(frame, state=state)
                 res = jev.ask({"game": pack.name, "how_to_play": pack.play, "screen": vals, "recent_actions": []}, ag.questions(vals))
                 choice = res["answers"]["action"]["choice"]
                 ea = t["expect_action"]
@@ -410,7 +412,7 @@ def cmd_learn(a):
             def _rec(rec, frame):
                 recs.append(rec)
                 if rec.get("choice") and rec.get("choice") != "fallback":
-                    decisions.append(Decision(rec, frame.copy()))
+                    decisions.append(Decision(rec, frame.copy(), getattr(agent, "last_state", None)))
                     del decisions[:-12]
             agent.on_record = _rec
             if hasattr(device, "reload"):

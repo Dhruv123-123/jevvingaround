@@ -5,3 +5,6 @@ __pycache__/
 *.pt
 rec-*/
 *.mp4
+dist/
+ext/anygame-extension.zip
+build/

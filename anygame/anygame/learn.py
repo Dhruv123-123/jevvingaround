@@ -26,6 +26,7 @@ WON = re.compile(r"won|win|victory|cleared", re.I)
 class Decision:
     rec: dict[str, Any]
     frame: np.ndarray
+    state: Any = None        # the game's own state at that tick, when the device gives one
 
 
 @dataclass
@@ -94,7 +95,7 @@ def replay(pack: Pack, inc: Incident) -> dict[str, list]:
     values, choices, applied, support = [], [], [], []
     try:
         for d in inc.decisions:
-            v, _, _ = ag.observe(d.frame, pack, want_conf=True)
+            v, _, _ = ag.observe(d.frame, pack, want_conf=True, state=d.state)
             ag.last_values = v
             a = answers_of(d.rec)
             ap = ag._apply_rules(a, v)
@@ -287,7 +288,8 @@ class Bank:
         d.mkdir()
         for k, dec in enumerate(inc.decisions):
             cv2.imwrite(str(d / f"{k}.png"), dec.frame)
-        (d / "incident.json").write_text(json.dumps({"reason": inc.reason, "tick": inc.tick, "at": inc.at, "recs": [dec.rec for dec in inc.decisions]}, indent=1))
+        (d / "incident.json").write_text(json.dumps({"reason": inc.reason, "tick": inc.tick, "at": inc.at, "recs": [dec.rec for dec in inc.decisions],
+                                                     "states": [dec.state for dec in inc.decisions]}, indent=1, default=str))
         old = sorted(self.path.glob("incident-*"), key=lambda p: int(p.name.split("-")[1]))
         for p in old[:-self.max_incidents]:
             for f in p.iterdir():
@@ -301,7 +303,8 @@ class Bank:
 
     def load_incident(self, d: Path) -> Incident:
         j = json.loads((d / "incident.json").read_text())
-        decs = [Decision(r, cv2.imread(str(d / f"{k}.png"))) for k, r in enumerate(j["recs"])]
+        states = j.get("states") or [None] * len(j["recs"])
+        decs = [Decision(r, cv2.imread(str(d / f"{k}.png")), states[k]) for k, r in enumerate(j["recs"])]
         return Incident(j["reason"], j["tick"], decs, j.get("at", ""))
 
     def save_version(self, version: int, yaml_text: str) -> None:

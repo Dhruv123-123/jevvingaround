@@ -42,13 +42,16 @@ export class StillDevice implements Device {
 
 export interface EvalLine { frame: string; ok: boolean; misses: Record<string, { expected: any; got: any }>; skipped?: boolean }
 
-export function evalPack(pack: Pack, frames: Record<string, Frame>): EvalLine[] {
+export function evalPack(pack: Pack, frames: Record<string, Frame>, states: Record<string, any> = {}): EvalLine[] {
   const out: EvalLine[] = [];
+  const blank = (): Frame => ({ width: pack.size[0], height: pack.size[1], data: new Uint8ClampedArray(pack.size[0] * pack.size[1] * 4) });
   for (const t of pack.tests) {
-    const f = frames[t.frame];
-    if (!f) { out.push({ frame: t.frame, ok: false, misses: { frame: { expected: "a decoded fixture", got: "missing" } } }); continue; }
+    const name = t.frame ?? t.state ?? "?";
+    const f = t.frame ? frames[t.frame] : blank();
+    const st = t.state ? states[t.state] : undefined;
+    if (!f || (t.state && st === undefined)) { out.push({ frame: name, ok: false, misses: { frame: { expected: "a decoded fixture", got: "missing" } } }); continue; }
     const ag = new Agent(pack, new StillDevice([f], pack.size), null);
-    const { values } = ag.observe(f);
+    const { values } = ag.observe(f, pack, st);
     const misses: Record<string, { expected: any; got: any }> = {};
     for (const [k, v] of Object.entries(t.expect)) {
       // reads the extension cannot do (ocr, templates, blobs, vocab) are skipped, not failed
@@ -56,7 +59,7 @@ export function evalPack(pack: Pack, frames: Record<string, Frame>): EvalLine[] 
       if (["ocr", "templates", "blobs", "vocab"].includes(kind)) continue;
       if (!matches(v, values[k])) misses[k] = { expected: v, got: values[k] };
     }
-    out.push({ frame: t.frame, ok: !Object.keys(misses).length, misses });
+    out.push({ frame: name, ok: !Object.keys(misses).length, misses });
   }
   return out;
 }

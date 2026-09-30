@@ -7,7 +7,7 @@ from typing import Any
 import yaml
 from .geometry import Rect, Zone
 
-READ_KINDS = {"bar", "templates", "ocr", "vocab", "blobs", "color", "locate", "runs", "around", "tetris"}
+READ_KINDS = {"bar", "templates", "ocr", "vocab", "blobs", "color", "locate", "runs", "around", "tetris", "json", "json_grid"}
 QUESTION_TYPES = {"noul", "choice", "score"}
 
 
@@ -134,6 +134,12 @@ def load_pack(path: str | os.PathLike, _allow_no_tests: bool = False) -> Pack:
         elif r.get("kind") == "around":
             if r.get("of") not in reads or r.get("in") not in reads:
                 raise PackError(f"{p}: read '{rid}': around needs 'of' (a locate read id) and 'in' (a grid read id)")
+        elif r.get("kind") == "json_grid":
+            if "cols" not in r or "rows" not in r or not isinstance(r.get("symbols"), dict):
+                raise PackError(f"{p}: read '{rid}': json_grid needs cols, rows and symbols: {{<char>: {{path, index|slice}}}}")
+        elif r.get("kind") == "json":
+            if "path" not in r:
+                raise PackError(f"{p}: read '{rid}': json needs 'path' into the device's state")
         elif "zone" not in r and "rect" not in r:
             raise PackError(f"{p}: read '{rid}': needs zone or rect")
     actions: list[Action] = []
@@ -165,10 +171,11 @@ def load_pack(path: str | os.PathLike, _allow_no_tests: bool = False) -> Pack:
     if not tests and not _allow_no_tests:
         raise PackError(f"{p}: a pack without tests is refused; add at least one frame under 'tests'")
     for t in tests:
-        if "frame" not in t or "expect" not in t:
-            raise PackError(f"{p}: every test needs 'frame' and 'expect'")
-        if not _allow_no_tests and not (p.parent / t["frame"]).exists():
-            raise PackError(f"{p}: test frame not found: {t['frame']}")
+        if ("frame" not in t and "state" not in t) or "expect" not in t:
+            raise PackError(f"{p}: every test needs 'frame' (a screenshot) or 'state' (a JSON file), and 'expect'")
+        for key in ("frame", "state"):
+            if key in t and not _allow_no_tests and not (p.parent / t[key]).exists():
+                raise PackError(f"{p}: test {key} not found: {t[key]}")
     modes: dict[str, Pack] = {}
     for mn, m in (raw.get("modes") or {}).items():
         if not isinstance(m, dict) or not m.get("when"):

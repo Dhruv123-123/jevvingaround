@@ -17,10 +17,10 @@ device ─▶ frame ─▶ fingerprint ─▶ classify (which screen?) ─▶ re
 
 | stage | contract | where |
 |---|---|---|
-| **device** | `frame() → RGB image`, `tap`, `swipe`, `key`, `reload` | a browser tab through the debugger API, Playwright, ADB, PyBoy |
+| **device** | `frame() → RGB image`, optional `state() → JSON`, `tap`, `swipe`, `key`, `reload` | a browser tab through the debugger API, Playwright, the computer's screen (mss + pynput), a state stream (WebSocket, HTTP, file, stdin), ADB, PyBoy |
 | **fingerprint** | 16×16 Lab grid of the frame; distance < 25 same layout, > 40 a different screen | `fingerprint.*` |
 | **classify** | the nearest known fingerprint names the screen: `main`, a `mode`, or a `transient:` | `Agent.classify` |
-| **reads** | each read turns a zone's pixels into a value with a confidence: colour, bar, OCR, templates, open-vocab | `perceive/`, `reads.ts` |
+| **reads** | each read turns a zone's pixels into a value with a confidence: colour, bar, OCR, templates, open-vocab; or picks it out of the device's state: `json`, `json_grid` | `perceive/`, `perceive/state.py`, `reads.ts` |
 | **present** | grid reads `as: matrix` become rows of characters, the form models read best | `_present` / `present` |
 | **history** | `<id>_prev`, `<id>_moving`, `<id>_reverse` for reads with `history: 1` | `observe` |
 | **derived reads** | the arithmetic the model must never do: `locate`, `runs`, `around`, `tetris` landings | `observe` |
@@ -32,6 +32,13 @@ device ─▶ frame ─▶ fingerprint ─▶ classify (which screen?) ─▶ re
 
 Everything before Jev is deterministic and costs about 3 ms on a 12×12 grid. Jev never sees a pixel: it sees
 the **typed frame**, the `screen` object made of the reads, presented, with history and derived facts.
+
+**Two sources of truth, one frame.** A game is either watched (pixels through a device) or listened to (a state
+stream: a JSON object the game publishes over a WebSocket, an HTTP endpoint, a file, stdin, or an expression on
+its own page). Pixel reads and state reads land in the same `values`, so `locate`, `runs`, `around`, the rules and
+the paragraph do not know which one fed them, and a pack may use both (the board from the stream, a popup from
+the screen). Support is computed the same way: a state read is 1.0 when its path resolves and 0 when it does not,
+so a stream that goes quiet is a miss like any unreadable screen.
 
 ## 2. The structure: the pack
 
@@ -98,7 +105,17 @@ open a game ──▶ pool: known site or known screen? ──yes──▶ pack 
 In the extension the whole loop runs in the side panel (`play` with *keep learning* on): play, bank, revise,
 reload the tab, play again, forever until *stop*. In the CLI it is `anygame learn <pack> --device … --episodes N`.
 
-## 5. What this is, in SIMA terms
+## 5. How it ships
+
+| artifact | what it is | how it is made |
+|---|---|---|
+| `anygame` wheel | the CLI and the desktop application: every device, the author, the learning loop, the HUD; `[desktop]` adds the screen device, `[stream]` WebSocket streams | `scripts/dist.sh` → `dist/anygame-*.whl` |
+| the Chrome extension | the whole runtime in a side panel; frames and input through the debugger API; the pool, the author, the learning loop, the state expression | `scripts/dist.sh` → `ext/anygame-extension.zip` |
+| the pool | `packs/pool.json` on `main`: every pack with its site hints and screen fingerprints | `npm run build` in `ext/` after `anygame stamp` |
+
+The same pack plays in both: the YAML is the contract, the fixtures (screenshots or state JSON) are the tests.
+
+## 6. What this is, in SIMA terms
 
 SIMA 2 (DeepMind, 2025) is a generalist agent: it sees the screen, acts with keyboard and mouse, follows
 instructions, explains what it is doing, transfers to games it has not seen, and improves itself from its own
@@ -116,12 +133,13 @@ experience with a large model providing tasks and reward. anygame is the same sh
 The point of the split is speed and permanence: everything that can be compiled is compiled, the slow model is
 paid once per new thing, and every new thing becomes part of a pack that anyone can play from instantly.
 
-## 6. Reading the code
+## 7. Reading the code
 
 | file | what it holds |
 |---|---|
 | `anygame/loop.py`, `ext/src/core/loop.ts` | the tick: classify, observe, support, miss → fallback, questions, Jev, rules, act |
-| `anygame/perceive/`, `ext/src/core/reads.ts`, `color.ts`, `tetris.ts` | reads and derived reads |
+| `anygame/perceive/`, `ext/src/core/reads.ts`, `color.ts`, `tetris.ts` | reads and derived reads, including the state reads |
+| `anygame/device/` (`web.py`, `screen.py`, `stream.py`, …), `ext/src/device/tab.ts` | devices: frames, state, input |
 | `anygame/pack.py`, `ext/src/core/pack.ts` | the pack model, modes, dump/load |
 | `anygame/fallback.py`, `ext/src/core/fallback.ts` | the VLM fallback and its memo |
 | `anygame/demo.py`, `ext/src/core/demo.ts`, `explore.ts` | demonstrations: digest, explorer |

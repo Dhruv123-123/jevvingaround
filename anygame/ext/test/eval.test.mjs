@@ -17,14 +17,14 @@ function png(path) {
 for (const [name, text] of Object.entries(BUNDLED_PACKS)) {
   test(`pack ${name}: fixture tests pass in the TypeScript runtime`, () => {
     const pack = packFromText(text, name);
-    const frames = {};
+    const frames = {}, states = {};
     for (const t of pack.tests) {
-      const p = join(PACKS, name, t.frame);
-      if (existsSync(p) && p.endsWith(".png")) frames[t.frame] = png(p);
+      if (t.frame) { const p = join(PACKS, name, t.frame); if (existsSync(p) && p.endsWith(".png")) frames[t.frame] = png(p); }
+      if (t.state) { const p = join(PACKS, name, t.state); if (existsSync(p)) states[t.state] = JSON.parse(readFileSync(p, "utf8")); }
     }
-    const lines = evalPack(pack, frames).filter((l) => frames[l.frame]);
+    const lines = evalPack(pack, frames, states).filter((l) => frames[l.frame] || states[l.frame]);
     for (const l of lines) assert.ok(l.ok, `${name} ${l.frame}: ${JSON.stringify(l.misses).slice(0, 400)}`);
-    assert.ok(lines.length > 0 || pack.tests.every((t) => !t.frame.endsWith(".png")), `${name}: no decodable fixtures`);
+    assert.ok(lines.length > 0 || pack.tests.every((t) => !(t.frame ?? "").endsWith(".png")), `${name}: no decodable fixtures`);
   });
 }
 

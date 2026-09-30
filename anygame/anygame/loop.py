@@ -283,7 +283,7 @@ class Agent:
             cand = load_pack_text(dump_pack(raw), f"{self.base.name}+{name}")
             mp = cand.modes[name]
             probe = Agent(mp, self.device, None)
-            values, conf = probe.observe(frame, mp, want_conf=True)[0], probe.last_conf
+            values, conf = probe.observe(frame, mp, want_conf=True, state=getattr(self, "last_state", None))[0], probe.last_conf
             misses = [(k, v, values.get(k)) for k, v in expect.items() if json.dumps(values.get(k), sort_keys=True, default=str) != json.dumps(v, sort_keys=True, default=str)]
             sup = probe.support(conf, values, mp)
             if misses or sup < float(self.base.raw.get("support_threshold", 0.7)):
@@ -300,12 +300,12 @@ class Agent:
                 self.on_pack_change(dump_pack(self.base.raw), f"mode {name} invalid: {str(e)[:120]}")
             return False
 
-    def observe(self, frame, pack=None, want_conf: bool = False) -> tuple[dict[str, Any], list, dict[str, float]]:
+    def observe(self, frame, pack=None, want_conf: bool = False, state: Any = None) -> tuple[dict[str, Any], list, dict[str, float]]:
         """Frame → the state the model sees: the pack's reads, presented, plus history (<id>_prev/_moving/_reverse)
         and the derived reads computed here because they need per-run state (around, tetris)."""
         pack = pack or self.pack
         conf: dict[str, float] = {}
-        values, dets, timings = read_all(pack, frame, tick=self.tick, previous=self.last_values, pool=self.pool, pending=self.pending, conf=conf)
+        values, dets, timings = read_all(pack, frame, tick=self.tick, previous=self.last_values, pool=self.pool, pending=self.pending, conf=conf, state=state)
         self.last_conf = conf
         raw_values = values
         values = self._present(values, pack)
@@ -342,14 +342,16 @@ class Agent:
                 self.pack.rules = edit["rules"]
                 self.last_answers = None
         frame = self.device.frame()
+        state = self.device.state() if hasattr(self.device, "state") else None   # a game that tells us its state
+        self.last_state = state
         fp = fingerprint(frame)
-        values, dets, timings = self.observe(frame, self.base)
+        values, dets, timings = self.observe(frame, self.base, state=state)
         cls_mode, known = self.classify(values, fp)
         if cls_mode != self.mode:
             self.mode, self.trackers, self.last_answers, self.noops = cls_mode, {}, None, []
         self.pack = self.base if self.mode == "main" else self.base.modes[self.mode]
         if self.mode != "main":
-            values, dets, timings = self.observe(frame, self.pack)
+            values, dets, timings = self.observe(frame, self.pack, state=state)
         support = self.support(self.last_conf, values, self.pack)
         self.last_support = support
         supported = support >= float(self.base.raw.get("support_threshold", 0.7))

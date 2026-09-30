@@ -1,0 +1,1 @@
+{"snake": [[3, 8], [4, 8], [5, 8]], "food": [9, 2], "score": 0, "over": false, "won": false, "dir": [-1, 0], "started": true}

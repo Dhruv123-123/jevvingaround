@@ -1,0 +1,70 @@
+game: snake-state
+# Snake played from the game's own state, not its pixels: the page publishes window.__state() and the pack's
+# json / json_grid reads consume it. Everything after the matrix (locate, around, rules, the paragraph) is the
+# same as the pixel pack. Play it with --device "web://games/snake.html?seed=4&tick=700#state=window.__state()".
+screen: { orientation: portrait, size: [540, 560] }
+zones:
+  board: { rect: [0.0352, 0.0857, 0.9648, 0.9821], grid: [12, 12] }
+read:
+  cells:  { kind: json_grid, cols: 12, rows: 12, empty: ".", as: matrix, zone: board,
+            symbols: { F: { path: food }, s: { path: snake, slice: [1, null] }, H: { path: snake, index: 0 } } }
+  head:   { kind: locate, in: cells, symbol: H, history: 1 }
+  food:   { kind: locate, in: cells, symbol: F }
+  head_around: { kind: around, of: head, in: cells, free: [".", F] }
+  status: { kind: json, path: over, map: { "true": dead, "false": playing }, default: playing }
+  score:  { kind: json, path: score, parse: int, default: 0 }
+act:
+  - { id: up,    kind: key, key: ArrowUp,    description: "turn the snake to move up" }
+  - { id: down,  kind: key, key: ArrowDown,  description: "turn to move down" }
+  - { id: left,  kind: key, key: ArrowLeft,  description: "turn to move left" }
+  - { id: right, kind: key, key: ArrowRight, description: "turn to move right" }
+  - { id: keep,  kind: wait, description: "keep going straight" }
+tick_hz: 6
+sensor_timeout_s: 0.8
+settle: screen_change
+stop_when: { read: status, equals: dead }
+play: >
+  Snake on a 12x12 grid, cells c1..c12 (columns, left to right) by r1..r12 (rows, top to bottom). In `cells`,
+  '.' is empty, 'H' the head, 's' the body, 'F' the food. `head` and `food` give their cells; `head_moving` is
+  the current direction (if missing, assume right). `head_around` says what is next to the head in each
+  direction and straight `ahead` ('.' or 'F' is safe, 's' or wall is death), and `<direction>_free` counts the open
+  cells that way and `<direction>_space` how many cells are reachable that way; prefer larger counts, and never
+  enter a direction whose space is smaller than the snake. The snake moves one cell per game tick and cannot
+  reverse. Pick a safe direction that brings the head closer to the food: match the food's column first, then
+  its row. 'keep' only when `ahead` is safe and the current direction is toward the food.
+questions:
+  - id: food_reachable_safely
+    type: noul
+    instructions: Is there a clear path from the head to the food without passing through the body?
+    criteria: { true: "Open cells connect head and food.", false: "The body or walls block every route." }
+rules:
+  - { if: { read: head_around.up,    in: [s, wall] }, exclude: [up] }
+  - { if: { read: head_around.down,  in: [s, wall] }, exclude: [down] }
+  - { if: { read: head_around.left,  in: [s, wall] }, exclude: [left] }
+  - { if: { read: head_around.right, in: [s, wall] }, exclude: [right] }
+  - { if: { read: head_around.ahead, in: [s, wall] }, exclude: [keep] }
+  - { if: { read: head_around.ahead_free, lte: 1 }, exclude: [keep, $head_moving] }
+  - { if: { read: head_around.up_space,    lte: 6 }, exclude: [up] }
+  - { if: { read: head_around.down_space,  lte: 6 }, exclude: [down] }
+  - { if: { read: head_around.left_space,  lte: 6 }, exclude: [left] }
+  - { if: { read: head_around.right_space, lte: 6 }, exclude: [right] }
+  - { if: { read: head_moving, in: [up, down, left, right] }, exclude: [$head_reverse] }
+tests:
+- state: fixtures/start.json
+  frame: fixtures/start.png
+  expect:
+    status: playing
+    score: 0
+    head: c7r7
+    food: c10r3
+- state: fixtures/mid.json
+  frame: fixtures/mid.png
+  expect:
+    status: playing
+    head: c7r9
+    food: c10r3
+- state: fixtures/late.json
+  expect:
+    status: playing
+    head: c4r9
+    food: c10r3

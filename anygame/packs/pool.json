@@ -74,6 +74,13 @@
    }
   },
   {
+   "name": "snake-state",
+   "game": "snake-state",
+   "urls": [],
+   "yaml_url": "https://raw.githubusercontent.com/Dhruv123-123/jevvingaround/main/anygame/packs/snake-state/pack.yaml",
+   "fingerprints": {}
+  },
+  {
    "name": "tetris",
    "game": "tetris",
    "urls": [],

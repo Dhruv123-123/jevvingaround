@@ -1,4 +1,6 @@
-"""A browser page as a device: screenshots for frames, mouse for taps and drags. Runs anywhere Chromium runs."""
+"""A browser page as a device: screenshots for frames, mouse for taps and drags. Runs anywhere Chromium runs.
+`web://<url>#state=<js expression>` also gives state(): the expression evaluated on the page (e.g. a game's own
+`window.__state()`), for packs that read the stream instead of the pixels."""
 from __future__ import annotations
 import os
 import numpy as np
@@ -19,6 +21,9 @@ class WebDevice(Device):
         self._browser = self._pw.chromium.launch(**kwargs)
         self._page = self._browser.new_page(viewport={"width": size[0], "height": size[1]}, device_scale_factor=1)
         self._size = size
+        self._state_js = None
+        if "#state=" in url:
+            url, self._state_js = url.split("#state=", 1)
         self._page.goto(url if "://" in url else "file://" + os.path.abspath(url))
         self._page.wait_for_load_state("load")
 
@@ -48,6 +53,15 @@ class WebDevice(Device):
         """Reload the page: the cheapest restart for a browser game between episodes."""
         self._page.reload()
         self._page.wait_for_load_state("load")
+
+    def state(self):
+        """The page's own state when the URL named an expression, else None."""
+        if not self._state_js:
+            return None
+        try:
+            return self._page.evaluate(self._state_js)
+        except Exception:  # noqa: BLE001
+            return None
 
     def evaluate(self, js: str):
         """For tests: read the page's own truth to check perception against it."""

@@ -17,7 +17,7 @@ CONF: dict[int, dict[str, float]] = {}   # per-call confidences, keyed by id(val
 
 
 def read_all(pack: Pack, frame: np.ndarray, only: set[str] | None = None, tick: int = 0, previous: dict[str, Any] | None = None,
-             pool=None, pending: dict[str, Any] | None = None, conf: dict[str, float] | None = None) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, float]]:
+             pool=None, pending: dict[str, Any] | None = None, conf: dict[str, float] | None = None, state: Any = None) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, float]]:
     """Returns (values, detections, timings_ms). A read with `every: N` is refreshed every N ticks and otherwise carried
     over. Given a thread `pool`, such a slow read (OCR, a detector) runs in the background and the loop keeps its last
     value until the new one is ready, so a 1 s OCR never stalls a 300 ms decision loop."""
@@ -50,6 +50,15 @@ def read_all(pack: Pack, frame: np.ndarray, only: set[str] | None = None, tick: 
             continue
         t0 = time.perf_counter()
         kind = r["kind"]
+        if kind in ("json", "json_grid"):
+            # the game's own state, not its pixels
+            from .state import read_json, read_json_grid
+            v, c = (read_json if kind == "json" else read_json_grid)(state, r)
+            values[rid] = v
+            if conf is not None:
+                conf[rid] = c
+            timings[rid] = 0.0
+            continue
         if kind == "locate":
             src = values.get(r["in"], {})
             cells = [k for k, v in (src.items() if isinstance(src, dict) else []) if str(v) == str(r["symbol"])]

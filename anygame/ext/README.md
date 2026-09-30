@@ -25,7 +25,9 @@ anygame button, and the side panel opens for that tab:
    next episode plays with it on trial, and it is reverted if it plays worse than the incumbent's median episode.
    Episodes and incidents are banked per pack in extension storage.
 5. **record me** / **let the model explore**: a demonstration for the author, instead of the blind probe.
-6. **go**: one button. A pack from the pool (by site, or by what the screen looks like) or from the store plays
+6. **state expression**: if the game publishes its state (`window.__state()`, a global, a store), name it and the
+   pack's `json` / `json_grid` reads use it instead of pixels; the field is remembered per site.
+7. **go**: one button. A pack from the pool (by site, or by what the screen looks like) or from the store plays
    now; with none, the explorer plays a minute, the author writes the pack from that, and it plays, with the
    fallback and learning on, restarting until *stop*.
 

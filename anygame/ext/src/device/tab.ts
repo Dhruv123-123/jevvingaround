@@ -25,7 +25,7 @@ export class TabDevice implements Device {
   private sz: [number, number] = [0, 0];
   onError?: (e: Error) => void;
 
-  constructor(public tabId: number, public region: Region | null, public captureScale = 1, public jpegQuality = 80) {}
+  constructor(public tabId: number, public region: Region | null, public captureScale = 1, public jpegQuality = 80, public stateExpr: string | null = null) {}
 
   private send<T = any>(method: string, params: any = {}): Promise<T> {
     return new Promise((resolve, reject) => {
@@ -94,6 +94,16 @@ export class TabDevice implements Device {
     const base = { key: k.key, code: k.code, windowsVirtualKeyCode: k.vk, nativeVirtualKeyCode: k.vk };
     await this.send("Input.dispatchKeyEvent", { type: k.text ? "keyDown" : "rawKeyDown", ...base, text: k.text, unmodifiedText: k.text });
     await this.send("Input.dispatchKeyEvent", { type: "keyUp", ...base });
+  }
+
+  /** The page's own state, when an expression was given (e.g. `window.__state()`): what the json reads consume. */
+  async state(): Promise<any> {
+    if (!this.stateExpr) return undefined;
+    await this.attach();
+    try {
+      const res = await this.send("Runtime.evaluate", { expression: this.stateExpr, returnByValue: true, awaitPromise: true });
+      return res?.result?.value;
+    } catch { return undefined; }
   }
 
   /** Reload the page: the cheapest restart for a browser game between episodes. */

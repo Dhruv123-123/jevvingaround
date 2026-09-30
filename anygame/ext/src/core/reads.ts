@@ -155,7 +155,7 @@ export function aroundOf(cell: any, src: any, moving: string | null, r: ReadDef)
 /** The pixel and simple derived reads. Loop-state reads (around, tetris) are computed by the Agent. */
 /** Confidence per read, 0..1: how much of what the read looked for it actually found. The loop averages
  *  these into a support score; a screen the pack does not understand scores low. */
-export function readAll(pack: Pack, frame: Frame, only?: Set<string>): { values: Values; timings: Record<string, number>; conf: Record<string, number> } {
+export function readAll(pack: Pack, frame: Frame, only?: Set<string>, state?: any): { values: Values; timings: Record<string, number>; conf: Record<string, number> } {
   const values: Values = {};
   const timings: Record<string, number> = {};
   const conf: Record<string, number> = {};
@@ -163,6 +163,8 @@ export function readAll(pack: Pack, frame: Frame, only?: Set<string>): { values:
     if (only && !only.has(rid)) continue;
     const t0 = performance.now();
     switch (r.kind) {
+      case "json": { const [v, c] = readJson(state, r); values[rid] = v; conf[rid] = c; break; }
+      case "json_grid": { const [v, c] = readJsonGrid(state, r); values[rid] = v; conf[rid] = c; break; }
       case "color": { const hit = { n: 0, ok: 0 }; values[rid] = readColor(frame, pack, r, hit); if (hit.n) conf[rid] = hit.ok / hit.n; break; }
       case "bar": values[rid] = readBar(frame, pack, r); conf[rid] = 1; break;
       case "locate": values[rid] = locate(values[r.in], r); if (!r.many) conf[rid] = values[rid] ? 1 : 0; break;
@@ -173,4 +175,63 @@ export function readAll(pack: Pack, frame: Frame, only?: Set<string>): { values:
     timings[rid] = Math.round((performance.now() - t0) * 10) / 10;
   }
   return { values, timings, conf };
+}
+
+
+// ---- reads from a state stream: the game's own state instead of its pixels (same semantics as perceive/state.py) ----
+/** `a.b.0.c` into nested objects and arrays; undefined when anything along the way is missing. */
+export function getPath(state: any, path?: string | null): any {
+  if (path === undefined || path === null || path === "" || path === ".") return state;
+  let cur = state;
+  for (const part of String(path).split(".")) {
+    if (cur === null || cur === undefined) return undefined;
+    if (Array.isArray(cur)) { const i = Number(part); cur = Number.isInteger(i) ? cur[i] : undefined; }
+    else if (typeof cur === "object") cur = cur[part];
+    else return undefined;
+  }
+  return cur === null ? undefined : cur;
+}
+
+/** {kind: json, path, parse: int|float|str|bool, map: {value: label}, default} → [value, confidence]. */
+export function readJson(state: any, r: any): [any, number] {
+  let v = getPath(state, r.path);
+  if (v === undefined) return [r.default ?? null, 0];
+  if (r.parse === "int") { const n = Math.trunc(Number(v)); if (Number.isNaN(n)) return [r.default ?? null, 0]; v = n; }
+  else if (r.parse === "float") { const n = Number(v); if (Number.isNaN(n)) return [r.default ?? null, 0]; v = n; }
+  else if (r.parse === "str") v = String(v);
+  else if (r.parse === "bool") v = typeof v === "string" ? ["1", "true", "yes", "on"].includes(v.toLowerCase()) : Boolean(v);
+  if (r.map && typeof r.map === "object") { const key = v === true ? "true" : v === false ? "false" : String(v); v = key in r.map ? r.map[key] : (r.map.otherwise ?? v); }
+  return [v, 1];
+}
+
+function coords(v: any): [number, number][] {
+  if (v === null || v === undefined) return [];
+  if (Array.isArray(v)) {
+    if (v.length === 2 && v.every((a) => typeof a === "number")) return [[Math.trunc(v[0]), Math.trunc(v[1])]];
+    return v.flatMap((e) => coords(e));
+  }
+  if (typeof v === "object") {
+    if ("x" in v && "y" in v) return [[Math.trunc(v.x), Math.trunc(v.y)]];
+    if ("col" in v && "row" in v) return [[Math.trunc(v.col), Math.trunc(v.row)]];
+  }
+  return [];
+}
+
+/** {kind: json_grid, cols, rows, empty, one_based, symbols: {H: {path, index|slice}, …}} → [matrix, confidence]. */
+export function readJsonGrid(state: any, r: any): [Record<string, string>, number] {
+  const cols = Number(r.cols), rows = Number(r.rows), empty = String(r.empty ?? "."), off = r.one_based ? 0 : 1;
+  const grid: Record<string, string> = {};
+  for (let rw = 1; rw <= rows; rw++) for (let c = 1; c <= cols; c++) grid[`c${c}r${rw}`] = empty;
+  let found = 0;
+  for (const [sym, specRaw] of Object.entries<any>(r.symbols ?? {})) {
+    const spec = specRaw && typeof specRaw === "object" ? specRaw : { path: specRaw };
+    let v = getPath(state, spec.path);
+    if (v === undefined) continue;
+    if ("index" in spec && Array.isArray(v)) { v = v[Number(spec.index)]; if (v === undefined) continue; }
+    else if ("slice" in spec && Array.isArray(v)) { const [a, b] = spec.slice; v = v.slice(Number(a ?? 0), b === null || b === undefined ? undefined : Number(b)); }
+    const pts = coords(v);
+    if (pts.length) found++;
+    for (const [x, y] of pts) { const c = x + off, rw = y + off; if (c >= 1 && c <= cols && rw >= 1 && rw <= rows) grid[`c${c}r${rw}`] = r.chars === false ? String(sym) : String(sym).slice(0, 1); }
+  }
+  return [grid, found ? 1 : 0];
 }
