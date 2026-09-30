@@ -121,7 +121,7 @@ class VLMFallback:
                   "\"restart\": {\"kind\": \"key\", \"key\": \"...\"} or {\"kind\": \"tap\", \"at\": [x, y]} or null}"},
                  {"type": "image_url", "image_url": {"url": _data_url(frame)}}]
         try:
-            text = self.chat.complete([{"role": "user", "content": parts}], max_tokens=300, temperature=0.0)[0]
+            text = self.chat.complete([{"role": "user", "content": parts}], max_tokens=2000, temperature=0.0)[0]
             m = text[text.find("{"):text.rfind("}") + 1]
             j = _json.loads(m) if m else {}
         except Exception as e:  # noqa: BLE001
