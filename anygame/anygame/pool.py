@@ -93,3 +93,15 @@ def stamp(pack_dir: Path) -> int:
         block = yaml.safe_dump({"fingerprints": fps}, sort_keys=False, width=120)
         p.write_text(text.rstrip("\n") + "\n" + block)
     return n
+
+
+def pool_lessons(pool: dict[str, Any], exclude: str | None = None, limit: int = 24) -> list[dict[str, Any]]:
+    """Every lesson the pool's packs carry (rules and reads that survived trial), newest packs first, minus one pack."""
+    out: list[dict[str, Any]] = []
+    for p in pool.get("packs", []):
+        if p.get("name") == exclude:
+            continue
+        for l in p.get("lessons") or []:
+            if isinstance(l, dict) and l.get("yaml"):
+                out.append({**l, "from": p.get("name")})
+    return out[:limit]

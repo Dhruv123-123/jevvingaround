@@ -80,6 +80,15 @@ model: the gradient is a change to the typed frame, and the reward is an episode
 longer > higher score). The **bank** keeps the episodes and the last incidents per pack (`learn.py`,
 `learn.ts`), so what was learned survives a restart and the next revision sees how the pack has been playing.
 
+Two more things learn, and they are what separates this from a fixed self-improvement loop:
+
+| what | learns from | how |
+|---|---|---|
+| the **judge** (`Calibrator`) | the trial record: each accepted revision's shape and whether it was kept or reverted | a small logistic model, consulted before a revision goes on trial once six labelled revisions of both outcomes exist |
+| the **proposer** | lessons: the rules and reads that kept revisions added, on this pack and on others in the pool | shown in the revision prompt, filtered to the read kinds this pack has |
+
+Still fixed: Jev (or CLM), the chat model that proposes, and the set of read kinds and rule forms, which are code.
+
 ## 4. The application loop
 
 ```
@@ -125,9 +134,9 @@ experience with a large model providing tasks and reward. anygame is the same sh
 
 | SIMA 2 | anygame |
 |---|---|
-| Gemini as the cognitive core, seconds per decision | Jev on a typed frame, 200 ms per decision; a vision model only on a miss, while authoring, and after a loss |
+| Gemini as the cognitive core, seconds per decision | Jev on a typed frame, 200 ms per decision (CLM, the same protocol, 16–28 ms); a vision model only on a miss, while authoring, and after a loss |
 | a policy trained on demonstrations and self-play | a pack: the typed frame, the paragraph, the rules; grown, never trained |
-| Gemini generates tasks and estimates reward | the outcome of an episode is the reward; the chat model proposes the revision, the replay and the next episode judge it |
+| Gemini generates tasks and estimates reward | the outcome of an episode is the reward; the chat model proposes the revision, the replay and the next episode judge it, and the judge is calibrated from the trial record |
 | an experience bank feeding later generations | the bank: episodes and incidents per pack; each accepted revision is a generation |
 | transfer across games by concept | transfer by structure: `locate`, `runs`, `around` and the rules mean the same in every grid game |
 | explains its plan in language | intents from the explorer, Jev's beliefs and the rules that fired, shown every tick |

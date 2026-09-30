@@ -113,3 +113,33 @@ test("improve: the chat model's revision is taken only when it replays better", 
   const none = await improve(chatWith("no yaml here"), incumbent, inc, [], () => {});
   assert.equal(none.pack, null); assert.equal(none.verdict, null);
 });
+
+test("the calibrator learns from the trial record; lessons and hints; the bank keeps the record", async () => {
+  const { Calibrator, revisionFeatures, lessonsOf, hintsText, Bank, verifyRevision } = await import("../dist/core.js");
+  const hist = [];
+  for (let k = 0; k < 5; k++) {
+    hist.push({ version: k, features: { guarded: 1, distinguished: 0, overblocked: 0.25 + 0.02 * k, support: 1, rules_added: 1, reads_added: 0, questions_added: 0, play_changed: 0 }, kept: false, at: "" });
+    hist.push({ version: 10 + k, features: { guarded: 1, distinguished: 1, overblocked: 0, support: 1, rules_added: 1, reads_added: 1, questions_added: 0, play_changed: 0 }, kept: true, at: "" });
+  }
+  assert.ok(!new Calibrator(hist.slice(0, 3)).active);
+  const cal = new Calibrator(hist);
+  assert.ok(cal.active);
+  const loose = { ...hist[0].features, overblocked: 0.3 }, tight = { ...hist[1].features };
+  assert.ok(cal.pKeep(tight) > 0.6 && cal.pKeep(loose) < 0.35, `${cal.pKeep(tight)} ${cal.pKeep(loose)}`);
+  assert.ok(cal.judge(tight)[0] && !cal.judge(loose)[0]);
+  const inc = snakeIncident(); const incumbent = stripped(); const fullPack = packFromText(BUNDLED_PACKS.snake, "snake");
+  const v = verifyRevision(fullPack, incumbent, inc);
+  const f = revisionFeatures(v, fullPack, incumbent);
+  assert.equal(f.guarded, 1); assert.ok(f.rules_added >= 10); assert.equal(f.reads_added, 1); assert.equal(f.play_changed, 1);
+  const ls = lessonsOf(fullPack, incumbent, "status is dead");
+  assert.ok(ls.some((l) => l.kind === "rule") && ls.some((l) => l.kind === "read" && l.yaml.includes("head_around")));
+  const txt = hintsText(ls, new Set(["color", "locate", "around"]));
+  assert.match(txt, /PATTERNS THAT SURVIVED/); assert.ok(txt.includes("around"));
+  assert.ok(!hintsText(ls, new Set(["bar", "ocr"])).includes('"kind":"around"'));
+  assert.equal(hintsText([]), "");
+  const bank = new Bank();
+  bank.addRevision(2, f, "rule now excludes right");
+  assert.equal(bank.revisions[0].kept, null); assert.ok(!bank.calibrator().active);
+  const fresh = bank.recordTrial(2, true, fullPack, incumbent, "status is dead");
+  assert.equal(bank.revisions[0].kept, true); assert.ok(fresh.length >= 2 && bank.lessons.length === fresh.length);
+});

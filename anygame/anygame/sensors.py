@@ -21,12 +21,18 @@ def open_sensor(spec: str | None, timeout: float | None = None):
     if spec == "jev":
         from .jev import Jev
         return Jev(timeout=timeout)
+    if spec == "clm" or spec.startswith("clm:"):
+        # CLM (Stanford / NVIDIA's contrastive System One model): the same /v1/systemone protocol, ~10x faster. Served
+        # locally by `clm-serve` (port 8700) or by any TypeSafe-compatible host: CLM_BASE_URL, CLM_MODEL, CLM_API_KEY.
+        from .jev import Jev
+        base = spec[4:] if spec.startswith("clm:") else os.environ.get("CLM_BASE_URL", "http://127.0.0.1:8700")
+        return Jev(api_key=os.environ.get("CLM_API_KEY", "local"), base_url=base, model=os.environ.get("CLM_MODEL", "clm-latest"), timeout=timeout)
     if spec == "random" or spec.startswith("random:"):
         return RandomSensor(int(spec.split(":", 1)[1]) if ":" in spec else 0)
     if spec.startswith("llm:"):
         # a chat model answers in seconds, not milliseconds: the pack's Jev timeout would only make it fall back to rules
         return LLMSensor(spec[4:], timeout=max(float(timeout or 0), float(os.environ.get("ANYGAME_LLM_TIMEOUT", "60"))))
-    raise SystemExit(f"unknown sensor '{spec}': jev | none | random | llm:<model>")
+    raise SystemExit(f"unknown sensor '{spec}': jev | clm[:<base url>] | none | random | llm:<model>")
 
 
 class RandomSensor:

@@ -4,6 +4,9 @@ import type { Answer, Sensor, SensorResult } from "./loop.js";
 
 export interface Keys {
   openrouter?: string;            // Jev
+  clmBase?: string;               // CLM: a TypeSafe-compatible server (clm-serve on http://127.0.0.1:8700, or a host)
+  clmKey?: string;
+  clmModel?: string;
   llmBase?: string;               // everything that is not Jev
   llmKey?: string;
   llmModel?: string;
@@ -94,10 +97,11 @@ export class LLMSensor implements Sensor {
 export async function openSensor(spec: string, keys: Keys, timeoutMs?: number): Promise<Sensor | null> {
   if (!spec || spec === "none") return null;
   if (spec === "jev") return new Jev(keys.openrouter ?? "", undefined, undefined, timeoutMs);
+  if (spec === "clm") return new Jev(keys.clmKey ?? "local", keys.clmBase ?? "http://127.0.0.1:8700", keys.clmModel ?? "clm-latest", timeoutMs);   // CLM: the same protocol, a local or hosted server
   if (spec === "random" || spec.startsWith("random:")) return new RandomSensor(spec.includes(":") ? Number(spec.split(":")[1]) : 0);
   if (spec.startsWith("llm:") || spec === "llm") {
     const { Chat } = await import("./chat.js");
     return new LLMSensor(new Chat({ ...keys, llmModel: spec.startsWith("llm:") ? spec.slice(4) : keys.llmModel }, Math.max(timeoutMs ?? 0, 60000)));
   }
-  throw new Error(`unknown sensor '${spec}': jev | none | random | llm:<model>`);
+  throw new Error(`unknown sensor '${spec}': jev | clm | none | random | llm:<model>`);
 }

@@ -129,3 +129,74 @@ def test_improve_takes_the_revision_only_when_it_replays_better():
     assert bad["pack"] is None and not bad["verdict"]["ok"]
     none = improve(Stub("no yaml here"), incumbent, inc)
     assert none["pack"] is None and none["verdict"] is None
+
+
+def test_calibrator_learns_from_the_trial_record_and_rejects_what_reverted_before():
+    from anygame.learn import Calibrator, revision_features, FEATURES
+    # a history: revisions that block ordinary decisions were reverted on trial, tight ones were kept
+    hist = []
+    for k in range(5):
+        hist.append({"version": k, "features": {"guarded": 1, "distinguished": 0, "overblocked": 0.25 + 0.02 * k, "support": 1.0, "rules_added": 1, "reads_added": 0, "questions_added": 0, "play_changed": 0}, "kept": False})
+        hist.append({"version": 10 + k, "features": {"guarded": 1, "distinguished": 1, "overblocked": 0.0, "support": 1.0, "rules_added": 1, "reads_added": 1, "questions_added": 0, "play_changed": 0}, "kept": True})
+    idle = Calibrator(hist[:3])
+    assert not idle.active and idle.judge(hist[0]["features"])[0] is True
+    cal = Calibrator(hist)
+    assert cal.active
+    loose = dict(hist[0]["features"], overblocked=0.3)
+    tight = dict(hist[1]["features"])
+    assert cal.p_keep(tight) > 0.6 and cal.p_keep(loose) < 0.35
+    assert cal.judge(tight)[0] and not cal.judge(loose)[0]
+    # features of a real revision: the full snake pack against the stripped one
+    inc = snake_incident()
+    from anygame.learn import verify_revision
+    v = verify_revision(full(), stripped(), inc)
+    f = revision_features(v, full(), stripped())
+    assert set(f) == set(FEATURES) and f["guarded"] == 1 and f["rules_added"] >= 10 and f["reads_added"] == 1 and f["play_changed"] == 1
+
+
+def test_lessons_and_hints_and_the_bank_trial_record(tmp_path):
+    from anygame.learn import lessons_of, hints_text, Bank
+    ls = lessons_of(full(), stripped(), "status is dead")
+    assert any(l["kind"] == "rule" for l in ls) and any(l["kind"] == "read" and "head_around" in l["yaml"] for l in ls)
+    txt = hints_text(ls, {"color", "locate", "around"})
+    assert "PATTERNS THAT SURVIVED" in txt and "around" in txt
+    assert hints_text(ls, {"bar", "ocr"}).count("kind: around") == 0    # a read on a kind this pack lacks is left out
+    assert hints_text([]) == ""
+    bank = Bank(tmp_path / "bank")
+    bank.add_revision(2, {"guarded": 1, "overblocked": 0.0}, "rule now excludes right")
+    assert bank.revisions[-1]["kept"] is None and not bank.calibrator().active
+    bank.record_trial(2, True, kept_pack=full(), before=stripped(), reason="status is dead")
+    assert bank.revisions[-1]["kept"] is True and len(bank.lessons) >= 2
+    again = Bank(tmp_path / "bank")
+    assert again.revisions[-1]["kept"] is True and len(again.lessons) == len(bank.lessons)
+
+
+def test_clm_sensor_speaks_the_systemone_protocol_against_the_stub():
+    import subprocess, sys, time, socket
+    from anygame.sensors import open_sensor
+    port = 8790
+    srv = subprocess.Popen([sys.executable, os.path.join(ROOT, "test", "clm_stub.py"), str(port)], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    try:
+        for _ in range(50):
+            try:
+                socket.create_connection(("127.0.0.1", port), timeout=0.2).close(); break
+            except OSError:
+                time.sleep(0.1)
+        s = open_sensor(f"clm:http://127.0.0.1:{port}", timeout=2.0)
+        res = s.ask({"screen": {"head_around": {"right": "wall"}, "food": "up"}}, {
+            "action": {"type": "choice", "instructions": "which way", "criteria": {"up": "toward food", "right": "into the wall", "keep": "straight"}},
+            "danger": {"type": "noul", "instructions": "is death near?", "criteria": {"true": "yes", "false": "no"}}})
+        assert res["answers"]["action"]["choice"] == "up" and abs(sum(res["answers"]["action"]["probabilities"].values()) - 1) < 1e-6
+        assert res["answers"]["danger"]["type"] == "noul" and res["server_ms"] is not None and res["latency_ms"] < 2000
+        # the loop runs on it: the state-driven snake pack, three ticks, rules still guard the wall
+        pack = load_pack(os.path.join(ROOT, "packs", "snake-state"))
+        s1 = {"snake": [[6, 6], [5, 6], [4, 6]], "food": [9, 2], "score": 0, "over": False}
+        s2 = {"snake": [[11, 6], [10, 6], [9, 6]], "food": [9, 2], "score": 0, "over": False}
+        from test_state import StateDevice
+        from anygame.loop import Agent
+        dev = StateDevice([s1, s2, s2])
+        ag = Agent(pack, dev, s)
+        r1, r2 = ag.step(), ag.step()
+        assert r1["jev_ms"] is not None and r2["screen"]["head"] == "c12r7" and r2["choice"] != "right"
+    finally:
+        srv.terminate()

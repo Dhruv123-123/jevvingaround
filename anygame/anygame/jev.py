@@ -38,6 +38,7 @@ class Jev:
         return {
             "answers": j["answers"],
             "latency_ms": int((time.perf_counter() - t0) * 1000),
+            "server_ms": float(r.headers["X-CLM-Latency-Ms"]) if "X-CLM-Latency-Ms" in r.headers else None,   # CLM reports its own time
             "input_tokens": usage.get("input_tokens", 0),
             "cost_usd": usage.get("cost", usage.get("input_tokens", 0) * USD_PER_INPUT_TOKEN),
             "model": j.get("model", self.model),

@@ -1,7 +1,7 @@
 // The side panel is the whole runtime: it captures the game tab, runs the pack, calls the sensor, sends input,
 // and shows the decision panel. Packs are bundled or authored here and cached in extension storage.
 import yaml from "js-yaml";
-import { Agent, BUNDLED_PACKS, loadPack, dumpPack, openSensor, Chat, VLMFallback, explore, digest as demoDigest, fingerprint, fpDistance, fpFromBase64, type Frame, outcome, betterEpisode, medianEpisode, incidentOf, improve, LOST, type Decision, type Episode, type Incident, type Demo, type DemoEvent, type Keys, type Pack, type Rec, type Sensor } from "../core/index.js";
+import { Agent, BUNDLED_PACKS, loadPack, dumpPack, openSensor, Chat, VLMFallback, explore, digest as demoDigest, fingerprint, fpDistance, fpFromBase64, type Frame, outcome, Calibrator, hintsText, lessonsOf, type RevisionRecord, type Lesson, betterEpisode, medianEpisode, incidentOf, improve, LOST, type Decision, type Episode, type Incident, type Demo, type DemoEvent, type Keys, type Pack, type Rec, type Sensor } from "../core/index.js";
 import { author, checkPack, extractYaml, withFingerprints, frameToDataUrl } from "../core/author.js";
 import { TabDevice, type Region } from "../device/tab.js";
 
@@ -9,7 +9,7 @@ const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getEleme
 const log = (m: string) => { const el = $("log"); el.textContent = (el.textContent + "\n" + m).split("\n").slice(-200).join("\n"); el.scrollTop = el.scrollHeight; };
 
 interface StoredIncident { reason: string; tick: number; at: string; recs: Rec[]; frames: string[] }
-interface StoredBank { episodes: Episode[]; incidents: StoredIncident[]; version: number }
+interface StoredBank { episodes: Episode[]; incidents: StoredIncident[]; version: number; revisions?: RevisionRecord[]; lessons?: Lesson[] }
 interface Store { keys?: Keys; sensor?: string; regions?: Record<string, Region>; states?: Record<string, string>; packs?: Record<string, string>; packFor?: Record<string, string>; bank?: Record<string, StoredBank> }
 async function load(): Promise<Store> { return (await chrome.storage.local.get(null)) as Store; }
 async function save(patch: Partial<Store>) { await chrome.storage.local.set(patch); }
@@ -79,7 +79,8 @@ async function dataUrlToFrame(url: string, region: Region | null): Promise<Frame
   return { width: r.w, height: r.h, data: img.data };
 }
 
-interface PoolEntry { name: string; urls?: string[]; game?: string; yaml_url?: string; fingerprints?: Record<string, string> | number }
+interface PoolEntry { name: string; urls?: string[]; game?: string; yaml_url?: string; fingerprints?: Record<string, string> | number; lessons?: Lesson[] }
+let poolLessons: Lesson[] = [];     // rules and reads that survived trial on other packs in the pool: hints for the next revision
 
 /** The pool entry for this tab: by site first, then by what the screen looks like (nearest fingerprint under the threshold). */
 function poolMatch(pool: { packs: PoolEntry[] }, url: string, frame: Frame | null, threshold = 40): { hit: PoolEntry; how: string } | null {
@@ -105,6 +106,7 @@ async function checkPool(store: Store) {
     const r = await fetch(POOL_URL, { cache: "no-store" });
     if (!r.ok) throw new Error(String(r.status));
     const pool: { packs: PoolEntry[] } = await r.json();
+    poolLessons = pool.packs.flatMap((p) => (p.lessons ?? []).map((l) => ({ ...l, from: p.name }))).slice(0, 24);
     let frame: Frame | null = null;
     try {
       const shot = await new Promise<string>((res, rej) => chrome.tabs.captureVisibleTab({ format: "png" }, (u) => (chrome.runtime.lastError || !u ? rej(new Error(chrome.runtime.lastError?.message ?? "no capture")) : res(u))));
@@ -211,7 +213,9 @@ async function play() {
   const packKey = name.replace(" (authored)", "");
   const bank: StoredBank = (store.bank ?? {})[packKey] ?? { episodes: [], incidents: [], version: 1 };
   let version = bank.version;
-  let incumbent: { yaml: string; version: number } | null = null;     // set while a candidate revision is on trial
+  let incumbent: { yaml: string; version: number; reason: string } | null = null;     // set while a candidate revision is on trial
+  bank.revisions = bank.revisions ?? []; bank.lessons = bank.lessons ?? [];
+  const readKinds = new Set(Object.values(ag.base.reads).map((r) => String(r.kind)));
   const pastIncidents: Incident[] = [];                                 // this session's incidents with frames: a revision must not break them
   $("playtext").textContent = pack.play; ($("playtext") as HTMLTextAreaElement).value = pack.play;
   ($("rulestext") as HTMLTextAreaElement).value = pack.rules.length ? yaml.dump(pack.rules) : "";
@@ -241,8 +245,14 @@ async function play() {
       const ref = medianEpisode(bank.episodes.filter((e) => e.version === incumbent!.version));
       if (ref && !betterEpisode(ref, ep) && betterEpisode(ep, ref)) {
         log(`learn: pack v${version} played worse than v${incumbent.version} (${ep.ticks} vs ${ref.ticks} ticks); reverting`);
+        for (let i = bank.revisions!.length - 1; i >= 0; i--) if (bank.revisions![i].version === version && bank.revisions![i].kept === null) { bank.revisions![i].kept = false; break; }
         ag.swapPack(loadPack(incumbent.yaml, pack.name)); version = incumbent.version; ep.version = version;
-      } else log(`learn: pack v${version} stays (${ep.ticks} ticks vs the incumbent's median ${ref?.ticks ?? "n/a"})`);
+      } else {
+        log(`learn: pack v${version} stays (${ep.ticks} ticks vs the incumbent's median ${ref?.ticks ?? "n/a"})`);
+        for (let i = bank.revisions!.length - 1; i >= 0; i--) if (bank.revisions![i].version === version && bank.revisions![i].kept === null) { bank.revisions![i].kept = true; break; }
+        const fresh = lessonsOf(ag.base, loadPack(incumbent.yaml, pack.name), incumbent.reason);
+        if (fresh.length) { bank.lessons!.push(...fresh); ag.base.raw.lessons = [...(ag.base.raw.lessons ?? []), ...fresh]; ag.onPackChange?.(dumpPack(ag.base.raw), `learned ${fresh.length} lesson(s) from a kept revision`); log(`learn: ${fresh.length} lesson(s) kept in the pack`); }
+      }
       incumbent = null;
     }
     // ---- a loss becomes an incident; the chat model revises the pack; the revision must replay better
@@ -253,11 +263,13 @@ async function play() {
       bank.incidents.push(stored); if (bank.incidents.length > 4) bank.incidents.shift();
       try {
         const chat = new Chat(store.keys ?? {});
-        const res = await improve(chat, ag.base, inc, bank.episodes, log, { others: pastIncidents.slice() });
+        const hints = hintsText([...((ag.base.raw.lessons ?? []) as Lesson[]), ...poolLessons], readKinds);
+        const res = await improve(chat, ag.base, inc, bank.episodes, log, { others: pastIncidents.slice(), hints, calibrator: new Calibrator(bank.revisions!) });
         pastIncidents.push(inc); if (pastIncidents.length > 4) pastIncidents.shift();
         if (res.pack) {
-          incumbent = { yaml: dumpPack(ag.base.raw), version };
+          incumbent = { yaml: dumpPack(ag.base.raw), version, reason: ep.reason };
           version += 1; bank.version = version;
+          bank.revisions!.push({ version, features: res.features ?? {}, why: (res.verdict?.why ?? "").slice(0, 120), kept: null, at: new Date().toISOString() });
           ag.swapPack(res.pack);
           ($("playtext") as HTMLTextAreaElement).value = ag.base.play;
           ($("rulestext") as HTMLTextAreaElement).value = ag.base.rules.length ? yaml.dump(ag.base.rules) : "";
@@ -406,10 +418,10 @@ async function main() {
   $("regioninfo").textContent = region ? `${region.w}×${region.h} at (${region.x},${region.y})` : "whole page";
   ($("stateexpr") as HTMLInputElement).value = store.states?.[originOf(tabUrl)] ?? "";
   if (store.sensor) $<HTMLSelectElement>("sensor").value = store.sensor;
-  for (const k of ["openrouter", "llmBase", "llmKey", "llmModel"] as const) ($(`k_${k}`) as HTMLInputElement).value = (store.keys as any)?.[k] ?? "";
+  for (const k of ["openrouter", "llmBase", "llmKey", "llmModel", "clmBase", "clmKey"] as const) ($(`k_${k}`) as HTMLInputElement).value = (store.keys as any)?.[k] ?? "";
   $("savekeys").onclick = async () => {
     const keys: Keys = {};
-    for (const k of ["openrouter", "llmBase", "llmKey", "llmModel"] as const) { const v = ($(`k_${k}`) as HTMLInputElement).value.trim(); if (v) (keys as any)[k] = v; }
+    for (const k of ["openrouter", "llmBase", "llmKey", "llmModel", "clmBase", "clmKey"] as const) { const v = ($(`k_${k}`) as HTMLInputElement).value.trim(); if (v) (keys as any)[k] = v; }
     await save({ keys }); log("keys saved");
   };
   $("region").onclick = () => pickRegion().catch((e) => log(String(e)));

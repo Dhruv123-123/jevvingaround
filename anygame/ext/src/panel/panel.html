@@ -32,6 +32,7 @@
       <label>sensor
         <select id="sensor">
           <option value="jev">Jev (OpenRouter)</option>
+          <option value="clm">CLM (local or hosted server)</option>
           <option value="llm">chat model (settings)</option>
           <option value="random">random (no key)</option>
         </select>
@@ -60,6 +61,8 @@
     <details id="settings">
       <summary>keys and models</summary>
       <label>OpenRouter key (Jev) <input id="k_openrouter" type="password" placeholder="sk-or-…"></label>
+      <label>CLM server <input id="k_clmBase" placeholder="http://127.0.0.1:8700 (clm-serve) or a hosted /v1/systemone"></label>
+      <label>CLM key (if the host needs one) <input id="k_clmKey" type="password" placeholder="optional"></label>
       <label>chat model endpoint <input id="k_llmBase" placeholder="https://<resource>.services.ai.azure.com/openai/v1/responses or https://openrouter.ai/api/v1"></label>
       <label>chat model key <input id="k_llmKey" type="password"></label>
       <label>chat model / deployment <input id="k_llmModel" placeholder="gpt-5.6-luna or anthropic/claude-sonnet-5"></label>

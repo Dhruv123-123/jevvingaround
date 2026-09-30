@@ -383,7 +383,7 @@ def cmd_learn(a):
     from .chat import Chat
     from .device import open_device
     from .fallback import VLMFallback
-    from .learn import Bank, Decision, better_episode, improve, incident_of, median_episode, outcome
+    from .learn import Bank, Decision, better_episode, hints_text, improve, incident_of, median_episode, outcome
     from .loop import Agent
     from .pack import dump_pack, load_pack, load_pack_text
     from .sensors import open_sensor
@@ -402,6 +402,10 @@ def cmd_learn(a):
     score_read = pack.raw.get("score_read") or ("score" if "score" in pack.reads else None)
     version, incumbent = bank.version, None
     log = lambda m: print(m, file=sys.stderr)  # noqa: E731
+    # lessons: what survived trial here and on other packs in the pool, shown to the model when it revises
+    from .pool import fetch_pool, pool_lessons
+    pool_hints = pool_lessons(fetch_pool(), exclude=pack.name)
+    read_kinds = {str(r.get("kind")) for r in pack.reads.values()}
     try:
         import itertools
         first = len(bank.episodes) + 1
@@ -427,10 +431,17 @@ def cmd_learn(a):
                 ref = median_episode(bank.of_version(incumbent[1]))
                 if ref and better_episode(ep, ref) and not better_episode(ref, ep):
                     log(f"learn: v{version} played worse than v{incumbent[1]} ({ep['ticks']} vs {ref['ticks']} ticks); reverting")
+                    bank.record_trial(version, False)
                     pack, version = load_pack_text(incumbent[0], pack.name), incumbent[1]
                     ep["version"] = version
                 else:
                     log(f"learn: v{version} stays ({ep['ticks']} ticks vs the incumbent's median {ref['ticks'] if ref else 'n/a'})")
+                    before_pack = load_pack_text(incumbent[0], pack.name)
+                    bank.record_trial(version, True, kept_pack=pack, before=before_pack, reason=incumbent[2])
+                    new_lessons = bank.lessons[len(bank.lessons) - max(0, len(bank.lessons) - incumbent[3]):]
+                    if new_lessons:
+                        pack.raw["lessons"] = (pack.raw.get("lessons") or []) + new_lessons
+                        log(f"learn: {len(new_lessons)} lesson(s) kept in the pack")
                     learned.write_text(dump_pack(pack.raw))
                 incumbent = None
             bank.add_episode(ep)
@@ -440,14 +451,16 @@ def cmd_learn(a):
                 d = bank.add_incident(inc)
                 log(f"learn: incident saved to {d}")
                 try:
-                    res = improve(chat, pack, inc, bank.episodes, log, keep_rejected=bank.path / "rejected", others=earlier)
+                    hints = hints_text((pack.raw.get("lessons") or []) + pool_hints, read_kinds)
+                    res = improve(chat, pack, inc, bank.episodes, log, keep_rejected=bank.path / "rejected", others=earlier, hints=hints, calibrator=bank.calibrator())
                 except Exception as e:  # noqa: BLE001
                     res = {"pack": None}
                     log(f"learn: {str(e)[:140]}")
                 if res.get("pack") is not None:
-                    incumbent = (dump_pack(pack.raw), version)
+                    incumbent = (dump_pack(pack.raw), version, ep["reason"], len(bank.lessons))
                     version += 1
                     pack = res["pack"]
+                    bank.add_revision(version, res.get("features"), res["verdict"]["why"])
                     bank.save_version(version, dump_pack(pack.raw))
                     learned.write_text(dump_pack(pack.raw))
                     log(f"learn: v{version} on trial: {res['verdict']['why']}")
@@ -456,7 +469,9 @@ def cmd_learn(a):
     best = max(bank.episodes, key=lambda e: (e.get("won", False), not e.get("lost", True), e.get("ticks", 0), e.get("score") or 0))
     summary = {"episodes": len(bank.episodes), "version": version, "learned": str(learned) if learned.exists() else None,
                "best": {"n": best["n"], "ticks": best["ticks"], "reason": best["reason"], "score": best.get("score"), "version": best["version"]},
-               "by_version": {str(v): [e["ticks"] for e in bank.of_version(v)] for v in sorted({e["version"] for e in bank.episodes})}}
+               "by_version": {str(v): [e["ticks"] for e in bank.of_version(v)] for v in sorted({e["version"] for e in bank.episodes})},
+               "revisions": {"kept": sum(1 for r in bank.revisions if r.get("kept")), "reverted": sum(1 for r in bank.revisions if r.get("kept") is False), "on_trial": sum(1 for r in bank.revisions if r.get("kept") is None)},
+               "lessons": len(bank.lessons), "calibrator": "active" if bank.calibrator().active else "idle"}
     print(json.dumps(summary, indent=1))
 
 

@@ -67,6 +67,14 @@ call, so a bad revision is rejected in milliseconds, and it is checked against t
 rule that fits one loss and breaks the rest is out. [ARCHITECTURE.md](ARCHITECTURE.md) has the whole loop and
 its mapping onto SIMA 2.
 
+**The loop learns to judge.** Every revision that passes replay is recorded with its shape (guarded or visible,
+how many ordinary decisions it blocks, how many rules and reads it adds, whether the paragraph changed); the trial
+episode labels it kept or reverted. Once six revisions with both outcomes exist, a small logistic model on that
+record (`Calibrator`) is consulted before a new revision goes on trial, and rejects shapes that were reverted
+before; until then it is idle. Rules and reads a kept revision added become **lessons** in the pack (`lessons:`),
+travel with it into the pool, and are shown to the model when this or a similar game loses next. This is the
+part SIMA's loop does not have: the judge and the proposer improve from the record, not only the policy.
+
 Measured on Snake from a **naive pack** (no rules, no `around` read, a two-line paragraph), six episodes with
 GPT-5.6 revising and Jev playing: episode 1 died at tick 28; the first revision (a rule on free cells) was
 accepted by replay and played 136 ticks; four later revisions were accepted by replay but played worse on trial
@@ -144,6 +152,20 @@ keystrokes and score 40. Behind a proxy with its own CA: `docker build --secret 
 gives the `anygame` command: the CLI, the desktop device, the learning loop, the HUD) and the Chrome extension
 (`ext/anygame-extension.zip`, load it unpacked at `chrome://extensions`). No server, no Docker required; the
 Dockerfile is for the CLI on a machine without Python.
+
+### CLM: the same protocol, ten times faster
+
+Stanford and NVIDIA's [CLM-8B](https://github.com/Contrastive-LM/CLM) (September 2026, Apache 2.0) is a
+contrastive System One model: it embeds the state and each candidate action and ranks by similarity instead of
+generating, at about 16–28 ms per decision on one RTX 4090 against Jev's ~150–200 ms, with candidate actions
+cached across requests. It serves the same `/v1/systemone` protocol with the same `noul`, `choice` and `score`
+questions, so it is a sensor here, not a port: `--sensor clm` (or `clm:<base url>`) in the CLI, "CLM" in the
+extension's sensor list, `CLM_BASE_URL` / `CLM_MODEL` / `CLM_API_KEY` in the environment; run it with
+`vllm serve Qwen/Qwen3-8B --runner pooling --port 8090` and `clm-serve` from the `contrastive-lm` package. A pack's
+typed action set is exactly the stable candidate list CLM caches, so a 6 Hz game could tick at 20 Hz. Two
+differences to keep in mind: CLM only ranks the candidates it is given (every pack already offers `wait` or
+`keep`, and the rules guard the rest), and there is no hosted API yet, so it needs a GPU. This container has
+none, so the wiring is proven against `test/clm_stub.py`, a stand-in that speaks the protocol faithfully.
 
 ### Which model goes where
 

@@ -16,6 +16,8 @@ from typing import Any
 import cv2
 import numpy as np
 
+import yaml
+
 from .pack import Pack, dump_pack, load_pack_text
 
 LOST = re.compile(r"lost|dead|over|game_over|crash|died", re.I)
@@ -177,6 +179,67 @@ def verify_revision(candidate: Pack, incumbent: Pack, inc: Incident, threshold: 
     return {"ok": True, "why": why, "guarded": guarded, "distinguished": distinguished, "overblocked": overblocked, "support": support}
 
 
+FEATURES = ["guarded", "distinguished", "overblocked", "support", "rules_added", "reads_added", "questions_added", "play_changed"]
+
+
+def revision_features(verdict: dict[str, Any], candidate: Pack, incumbent: Pack) -> dict[str, float]:
+    """What a revision looks like before it plays: the replay verdict plus how much it changed. The trial record labels
+    these (kept or reverted), and the calibrator learns which shapes of revision survive."""
+    old_rules = {json.dumps(r, sort_keys=True) for r in incumbent.rules}
+    return {
+        "guarded": 1.0 if verdict.get("guarded") else 0.0,
+        "distinguished": float(len(verdict.get("distinguished") or [])),
+        "overblocked": float(verdict.get("overblocked") or 0.0),
+        "support": float(verdict.get("support") or 0.0),
+        "rules_added": float(sum(1 for r in candidate.rules if json.dumps(r, sort_keys=True) not in old_rules)),
+        "reads_added": float(len(set(candidate.reads) - set(incumbent.reads))),
+        "questions_added": float(max(0, len(candidate.questions) - len(incumbent.questions))),
+        "play_changed": 1.0 if candidate.play.strip() != incumbent.play.strip() else 0.0,
+    }
+
+
+class Calibrator:
+    """Learns, from revisions that were kept or reverted on trial, which revisions to let through. A small logistic
+    model on the revision features, fitted whenever there are enough labelled examples; until then it defers to the
+    fixed verifier. This is the loop learning to judge: the one thing a fixed judge never does."""
+
+    def __init__(self, history: list[dict[str, Any]], min_labelled: int = 6, floor: float = 0.35):
+        self.rows = [h for h in history if h.get("kept") is not None and h.get("features")]
+        self.min_labelled, self.floor = min_labelled, floor
+        self.w: np.ndarray | None = None
+        self.mu: np.ndarray | None = None
+        self.sd: np.ndarray | None = None
+        if len(self.rows) >= min_labelled and len({bool(h["kept"]) for h in self.rows}) == 2:
+            self._fit()
+
+    def _fit(self) -> None:
+        X = np.array([[float(h["features"].get(f, 0.0)) for f in FEATURES] for h in self.rows], dtype=float)
+        y = np.array([1.0 if h["kept"] else 0.0 for h in self.rows])
+        self.mu, self.sd = X.mean(0), X.std(0) + 1e-6
+        Z = np.hstack([(X - self.mu) / self.sd, np.ones((len(X), 1))])
+        w = np.zeros(Z.shape[1])
+        for _ in range(400):                      # gradient descent with a little L2: tiny data, no surprises
+            p = 1 / (1 + np.exp(-Z @ w))
+            w -= 0.5 * (Z.T @ (p - y) / len(y) + 0.01 * np.r_[w[:-1], 0.0])
+        self.w = w
+
+    @property
+    def active(self) -> bool:
+        return self.w is not None
+
+    def p_keep(self, features: dict[str, float]) -> float | None:
+        if not self.active:
+            return None
+        z = np.r_[(np.array([float(features.get(f, 0.0)) for f in FEATURES]) - self.mu) / self.sd, 1.0]
+        return float(1 / (1 + np.exp(-z @ self.w)))
+
+    def judge(self, features: dict[str, float]) -> tuple[bool, str]:
+        p = self.p_keep(features)
+        if p is None:
+            return True, f"calibrator idle ({len(self.rows)} labelled revisions, needs {self.min_labelled} with both outcomes)"
+        return p >= self.floor, f"calibrated keep probability {p:.2f} from {len(self.rows)} trials"
+
+
 def _trim(v: Any, n: int = 420) -> str:
     if isinstance(v, dict):
         v = {k: x for k, x in v.items() if not str(k).endswith("_prev")}
@@ -209,6 +272,33 @@ REVISION_RULES = (
     "<dir>_free, <dir>_space, runs, history). "
     "Return the whole pack.yaml in one fenced yaml block.")
 
+def lessons_of(kept: Pack, before: Pack, reason: str = "") -> list[dict[str, Any]]:
+    """The rules and reads a kept revision added: snippets that survived replay and a trial, worth showing the model
+    the next time this or a similar game loses. They live in the pack under `lessons:` and travel with it into the pool."""
+    old_rules = {json.dumps(r, sort_keys=True) for r in before.rules}
+    out: list[dict[str, Any]] = []
+    for r in kept.rules:
+        if json.dumps(r, sort_keys=True) not in old_rules:
+            out.append({"kind": "rule", "yaml": yaml.safe_dump(r, default_flow_style=True, width=200).strip(), "reason": reason[:80]})
+    for rid in set(kept.reads) - set(before.reads):
+        out.append({"kind": "read", "yaml": yaml.safe_dump({rid: kept.reads[rid]}, default_flow_style=True, width=200).strip(), "reason": reason[:80]})
+    return out
+
+
+def hints_text(lessons: list[dict[str, Any]], read_kinds: set[str] | None = None, limit: int = 12) -> str:
+    """Lessons as a prompt section: only those built on read kinds this pack has (a grid game's around-rules mean
+    nothing to a bar-and-OCR game)."""
+    keep = []
+    for l in lessons:
+        y = str(l.get("yaml", ""))
+        if read_kinds and l.get("kind") == "read" and not any(f"kind: {k}" in y for k in read_kinds):
+            continue
+        keep.append(f"- {l.get('kind')}: {y}" + (f"   # after: {l['reason']}" if l.get("reason") else ""))
+    if not keep:
+        return ""
+    return "PATTERNS THAT SURVIVED TRIAL on this or similar games (reuse the shape, adapt the read names):\n" + "\n".join(keep[:limit])
+
+
 PACK_SCHEMA_HINT = (
     "Exact syntax (anything else fails to load):\n"
     "- locate: { kind: locate, in: <matrix read id>, symbol: \"<char>\", many: true|false, row: N, col: N } → a cell \"c<col>r<row>\" (a list with many)\n"
@@ -221,23 +311,25 @@ PACK_SCHEMA_HINT = (
 
 
 def improve(chat, pack: Pack, inc: Incident, episodes: list[dict[str, Any]] | None = None, log=lambda m: None, threshold: float | None = None,
-            rounds: int = 2, keep_rejected: Path | None = None, others: list[Incident] | None = None) -> dict[str, Any]:
-    """A revision: incident → chat model → candidate → replay verdict, with one repair round when the candidate does not
-    load or the replay rejects it. Returns {pack|None, verdict, yaml}."""
+            rounds: int = 2, keep_rejected: Path | None = None, others: list[Incident] | None = None,
+            hints: str = "", calibrator: "Calibrator | None" = None) -> dict[str, Any]:
+    """A revision: incident → chat model → candidate → replay verdict → the calibrator's verdict (when it has learned
+    from enough trials), with one repair round when the candidate does not load or is rejected.
+    Returns {pack|None, verdict, yaml, features}."""
     from .author import _b64, extract_yaml
-    parts: list[dict[str, Any]] = [{"type": "text", "text": REVISION_RULES + "\n\n" + PACK_SCHEMA_HINT + "\n\n" + incident_digest(inc, episodes) + "\n\n```yaml\n" + dump_pack(pack.raw) + "\n```"}]
+    parts: list[dict[str, Any]] = [{"type": "text", "text": REVISION_RULES + "\n\n" + PACK_SCHEMA_HINT + ("\n\n" + hints if hints else "") + "\n\n" + incident_digest(inc, episodes) + "\n\n```yaml\n" + dump_pack(pack.raw) + "\n```"}]
     n = len(inc.decisions)
     for k in ([n - 2, n - 1] if n > 1 else [n - 1]):
         parts.append({"type": "text", "text": f"{'the fatal' if k == n - 1 else 'the previous'} decision's frame (tick {inc.decisions[k].rec.get('tick')}):"})
         parts.append({"type": "image_url", "image_url": {"url": _b64(inc.decisions[k].frame)}})
     thr = threshold if threshold is not None else float(pack.raw.get("support_threshold", 0.7))
     messages: list[dict[str, Any]] = [{"role": "user", "content": parts}]
-    last_yaml, last_verdict = None, None
+    last_yaml, last_verdict, feats = None, None, None
     log(f"learn: asking {chat.model} about the loss at tick {inc.tick} …")
     for rnd in range(1, rounds + 1):
         text = chat.complete(messages, max_tokens=12000, temperature=0.2)[0]
         y = extract_yaml(text)
-        problem, cand, v = None, None, None
+        problem, cand, v, feats = None, None, None, None
         if not y:
             problem = "there was no ```yaml block"
         else:
@@ -252,17 +344,24 @@ def improve(chat, pack: Pack, inc: Incident, episodes: list[dict[str, Any]] | No
                 last_verdict = v
                 if not v["ok"]:
                     problem = f"replaying the loss through it: {v['why']}"
+                else:
+                    feats = revision_features(v, cand, pack)
+                    if calibrator is not None:
+                        ok, why = calibrator.judge(feats)
+                        v["calibration"] = why
+                        if not ok:
+                            problem = f"revisions shaped like this were reverted on trial before ({why}); change the approach"
             except Exception as e:  # noqa: BLE001
                 problem = f"it does not load: {str(e)[:200]}"
         if problem is None and cand is not None and v is not None:
-            log(f"learn: accepted (round {rnd}): {v['why']}")
-            return {"pack": cand, "verdict": v, "yaml": y}
+            log(f"learn: accepted (round {rnd}): {v['why']}" + (f" · {v['calibration']}" if v.get("calibration") else ""))
+            return {"pack": cand, "verdict": v, "yaml": y, "features": feats}
         log(f"learn: round {rnd} rejected: {problem}")
         if keep_rejected is not None and y:
             keep_rejected.mkdir(parents=True, exist_ok=True)
             (keep_rejected / f"rejected-{time.strftime('%H%M%S')}-{rnd}.yaml").write_text(y)
         messages = messages + [{"role": "assistant", "content": text}, {"role": "user", "content": f"That revision was rejected: {problem}.\n{PACK_SCHEMA_HINT}\nReturn the whole corrected pack.yaml in one fenced yaml block."}]
-    return {"pack": None, "verdict": last_verdict, "yaml": last_yaml}
+    return {"pack": None, "verdict": last_verdict, "yaml": last_yaml, "features": None}
 
 
 class Bank:
@@ -276,6 +375,34 @@ class Bank:
         ep = self.path / "episodes.jsonl"
         self.episodes: list[dict[str, Any]] = [json.loads(l) for l in ep.read_text().splitlines() if l.strip()] if ep.exists() else []
         self.version = max([e.get("version", 1) for e in self.episodes] + [1])
+        rv = self.path / "revisions.jsonl"
+        self.revisions: list[dict[str, Any]] = [json.loads(l) for l in rv.read_text().splitlines() if l.strip()] if rv.exists() else []
+        ls = self.path / "lessons.jsonl"
+        self.lessons: list[dict[str, Any]] = [json.loads(l) for l in ls.read_text().splitlines() if l.strip()] if ls.exists() else []
+
+    def _rewrite(self, name: str, rows: list[dict[str, Any]]) -> None:
+        (self.path / name).write_text("".join(json.dumps(r) + "\n" for r in rows))
+
+    def add_revision(self, version: int, features: dict[str, float] | None, why: str) -> None:
+        """A revision accepted by replay goes on trial: recorded now, labelled when the trial episode ends."""
+        self.revisions.append({"version": version, "features": features or {}, "why": why[:120], "kept": None, "at": time.strftime("%Y-%m-%dT%H:%M:%S")})
+        self._rewrite("revisions.jsonl", self.revisions)
+
+    def record_trial(self, version: int, kept: bool, kept_pack: Pack | None = None, before: Pack | None = None, reason: str = "") -> None:
+        """The trial's verdict labels the revision; a kept revision's new rules and reads become lessons."""
+        for r in reversed(self.revisions):
+            if r.get("version") == version and r.get("kept") is None:
+                r["kept"] = bool(kept)
+                break
+        self._rewrite("revisions.jsonl", self.revisions)
+        if kept and kept_pack is not None and before is not None:
+            new = lessons_of(kept_pack, before, reason)
+            if new:
+                self.lessons.extend(new)
+                self._rewrite("lessons.jsonl", self.lessons)
+
+    def calibrator(self) -> "Calibrator":
+        return Calibrator(self.revisions)
 
     def add_episode(self, e: dict[str, Any]) -> None:
         self.episodes.append(e)
