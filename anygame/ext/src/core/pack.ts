@@ -47,7 +47,7 @@ export function dumpPack(raw: Record<string, any>): string {
 
 export class PackError extends Error {}
 
-export const READ_KINDS = new Set(["bar", "templates", "ocr", "vocab", "blobs", "color", "locate", "runs", "around", "tetris", "json", "json_grid"]);
+export const READ_KINDS = new Set(["bar", "templates", "ocr", "vocab", "blobs", "color", "locate", "runs", "around", "tetris", "json", "json_grid", "predict"]);
 export const QUESTION_TYPES = new Set(["noul", "choice", "score"]);
 
 function parseRect(v: any): Rect {
@@ -90,6 +90,8 @@ export function loadPack(text: string, name = "pack"): Pack {
       if (!(r.of in reads) || !(r.in in reads)) throw new PackError(`${name}: read '${rid}': around needs 'of' and 'in'`);
     } else if (r.kind === "tetris") {
       if (!(r.in in reads)) throw new PackError(`${name}: read '${rid}': tetris needs 'in'`);
+    } else if (r.kind === "predict") {
+      if (!(r.of in reads) || !reads[r.of].history) throw new PackError(`${name}: read '${rid}': predict needs 'of' (a locate read with history: 1)`);
     } else if (r.kind === "json_grid") {
       if (r.cols === undefined || r.rows === undefined || !r.symbols || typeof r.symbols !== "object") throw new PackError(`${name}: read '${rid}': json_grid needs cols, rows and symbols`);
     } else if (r.kind === "json") {

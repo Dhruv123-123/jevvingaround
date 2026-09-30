@@ -37,6 +37,14 @@ export function get(values: any, path: string): any {
   return cur;
 }
 
+/** c<col>r<row> moved by (cur - prev) * steps: where a located thing will be when the action lands. */
+export function predictCell(cur: any, prev: any, steps = 1): string | null {
+  const m1 = /^c(\d+)r(\d+)$/.exec(String(cur ?? "")), m0 = /^c(\d+)r(\d+)$/.exec(String(prev ?? ""));
+  if (!m1 || !m0) return null;
+  const c1 = +m1[1], r1 = +m1[2], c0 = +m0[1], r0 = +m0[2];
+  return `c${c1 + (c1 - c0) * steps}r${r1 + (r1 - r0) * steps}`;
+}
+
 export function direction(prev: string, cur: string): string {
   const m0 = /c(\d+)r(\d+)/.exec(prev ?? ""), m1 = /c(\d+)r(\d+)/.exec(cur ?? "");
   if (!m0 || !m1) return "none";
@@ -250,6 +258,7 @@ export class Agent {
       }
     }
     for (const [rid, r] of Object.entries(pack.reads)) {
+      if (r.kind === "predict") values[rid] = predictCell(values[r.of], values[`${r.of}_prev`], Number(r.steps ?? 1));
       if (r.kind === "around") values[rid] = aroundOf(values[r.of], raw[r.in], values[`${r.of}_moving`] ?? null, r);
       else if (r.kind === "tetris") {
         if (!this.trackers[rid]) this.trackers[rid] = new TetrisTracker(r);

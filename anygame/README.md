@@ -75,6 +75,18 @@ before; until then it is idle. Rules and reads a kept revision added become **le
 travel with it into the pool, and are shown to the model when this or a similar game loses next. This is the
 part SIMA's loop does not have: the judge and the proposer improve from the record, not only the policy.
 
+**The method behind it** is written up in [METHOD.md](METHOD.md), synthesised from five research notes in
+`docs/research/` (representation learning, off-policy evaluation, control theory, decision science, evolutionary
+search). Its core: a frozen decider that can be re-asked offline turns "improve the decisions" into a search over
+its inputs with an exact oracle. Implemented so far: **re-query** (a revision is judged by what the decider now
+answers on the banked states under the new frame, not only by replaying its old answers; on by default in
+`anygame learn`), a **value-of-information audit** of every question (forced through the rules on banked
+decisions; a question no rule consumes cannot change the action), a **relevance audit** (mutual information of
+each read with the coming loss and with the decider's choice; the gap names what the decider ignores), and the
+**`predict`** read (a located thing shifted by its last displacement, for the action that lands late). The audits
+feed the revision prompt. On the eight-episode Snake run's own bank, the audit found that the learned pack's only
+question, `food_reachable_safely`, is consumed by no rule and so never changed an action in forty decisions.
+
 Measured on Snake from a **naive pack** (no rules, no `around` read, a two-line paragraph), eight episodes with
 GPT-5.6 revising and Jev playing, the trial record and lessons on: episode 1 died at tick 51; v2 (rules on free
 cells) played 365 ticks; v3 381; v4 408 with score 1500, which is where the hand-written Snake pack sits. Eight

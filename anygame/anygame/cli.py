@@ -283,7 +283,7 @@ def cmd_go(a):
         # the application loop: episodes with the fallback on, a replay-verified revision after every loss, restarts
         import argparse as _ap
         print(f"learning {known} over {a.learn or 'endless'} episodes", file=sys.stderr)
-        return cmd_learn(_ap.Namespace(pack=str(known), device=a.device, sensor=a.sensor, episodes=a.learn, max_ticks=a.max_ticks, goal=a.game, fallback=True, bank=None, out=None, fresh=a.fresh))
+        return cmd_learn(_ap.Namespace(pack=str(known), device=a.device, sensor=a.sensor, episodes=a.learn, max_ticks=a.max_ticks, goal=a.game, fallback=True, bank=None, out=None, fresh=a.fresh, requery=True))
     pack = load_pack(known)
     device = open_device(a.device, pack.size)
     hud = Hud(a.hud) if a.hud else None
@@ -397,7 +397,7 @@ def cmd_learn(a):
     from .chat import Chat
     from .device import open_device
     from .fallback import VLMFallback
-    from .learn import Bank, Decision, better_episode, hints_text, improve, incident_of, median_episode, outcome
+    from .learn import Bank, Decision, better_episode, hints_text, improve, incident_of, median_episode, outcome, relevance, relevance_text, audit_questions
     from .loop import Agent
     from .pack import dump_pack, load_pack, load_pack_text
     from .sensors import open_sensor
@@ -477,7 +477,20 @@ def cmd_learn(a):
                 log(f"learn: incident saved to {d}")
                 try:
                     hints = hints_text((pack.raw.get("lessons") or []) + pool_hints, read_kinds)
-                    res = improve(chat, pack, inc, bank.episodes, log, keep_rejected=bank.path / "rejected", others=earlier, hints=hints, calibrator=bank.calibrator())
+                    # the audits: reads that predict the loss but the decider ignores, and questions that never change the action
+                    try:
+                        rel = relevance_text(relevance(recs))
+                        aud = audit_questions(pack, decisions)
+                        idle = [q for q, a in aud.items() if a["verdict"] != "earns its place"]
+                        if idle:
+                            rel += ("\n" if rel else "") + "QUESTIONS THAT NEVER CHANGE THE ACTION (no rule consumes them): " + ", ".join(f"{q} ({aud[q]['verdict']})" for q in idle) + ". Either add a rule that acts on the answer or drop the question."
+                        if rel:
+                            hints = (hints + "\n\n" + rel) if hints else rel
+                            log("learn: audit: " + rel.replace("\n", " | ")[:300])
+                    except Exception as e:  # noqa: BLE001
+                        log(f"learn: audit skipped ({str(e)[:80]})")
+                    res = improve(chat, pack, inc, bank.episodes, log, keep_rejected=bank.path / "rejected", others=earlier, hints=hints, calibrator=bank.calibrator(),
+                                  sensor=jev if a.requery else None)
                 except Exception as e:  # noqa: BLE001
                     res = {"pack": None}
                     log(f"learn: {str(e)[:140]}")
@@ -586,7 +599,7 @@ def main(argv=None):
     ln.add_argument("--episodes", type=int, default=5, help="0 = forever"); ln.add_argument("--max-ticks", type=int, default=None); ln.add_argument("--goal", default=None)
     ln.add_argument("--fallback", action="store_true", help="VLM fallback on screens the pack cannot read (restart prompts, game-over cards)")
     ln.add_argument("--bank", default=None, help="where episodes and incidents go (default <pack>/bank)"); ln.add_argument("--out", default=None, help="the learned pack (default <pack>/pack.learned.yaml)")
-    ln.add_argument("--fresh", action="store_true", help="ignore an existing learned pack"); ln.set_defaults(fn=cmd_learn)
+    ln.add_argument("--fresh", action="store_true", help="ignore an existing learned pack"); ln.add_argument("--no-requery", dest="requery", action="store_false", help="do not re-ask the decider on banked states when judging a revision"); ln.set_defaults(fn=cmd_learn, requery=True)
     st = sub.add_parser("stamp", help="write fixture fingerprints into pack.yaml (all packs, or the ones named)"); st.add_argument("packs", nargs="*"); st.set_defaults(fn=cmd_stamp)
     rd = sub.add_parser("render"); rd.add_argument("dir"); rd.add_argument("--out", default="demo.mp4"); rd.add_argument("--fps", type=float, default=4); rd.add_argument("--log", default=None, help="the run's --log file: draws a side panel per tick"); rd.set_defaults(fn=cmd_render)
     ev = sub.add_parser("eval"); ev.add_argument("pack"); ev.add_argument("--sensor", default="none", help="jev | none | random | llm:<model>"); ev.set_defaults(fn=cmd_eval)

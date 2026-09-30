@@ -150,6 +150,109 @@ def requery(sensor, pack: Pack, inc: Incident, log=lambda m: None) -> dict[str, 
     return {"choices": choices, "probs": probs, "fatal_avoided": choices[n] is not None and choices[n] != fatal, "agreement": agreement, "cost_usd": round(cost, 6)}
 
 
+def audit_questions(pack: Pack, decisions: list[Decision]) -> dict[str, dict[str, Any]]:
+    """Value of information of every noul question: on each banked decision, force the answer to 0 and to 1 and run the
+    rules; a question whose forced answers never change the action is not earning its place (it costs batch accuracy
+    and buys nothing), and one that changes it often is doing policy work the rules could do explicitly."""
+    from .loop import Agent
+    from .device.base import Device
+
+    class _Still(Device):
+        def size(self):
+            return pack.size
+
+    ag = Agent(pack, _Still(), None)
+    out: dict[str, dict[str, Any]] = {}
+    try:
+        nouls = [q["id"] for q in pack.questions if q.get("type") == "noul"]
+        for qid in nouls:
+            flips, n = 0, 0
+            for d in decisions:
+                v, _, _ = ag.observe(d.frame, pack, want_conf=True, state=d.state)
+                ag.last_values = v
+                base = answers_of(d.rec)
+                if qid not in base:
+                    continue
+                n += 1
+                got = set()
+                for forced in (0.0, 1.0):
+                    a = json.loads(json.dumps(base))
+                    a[qid] = {"type": "noul", "noul": forced}
+                    ag._apply_rules(a, v)
+                    got.add((a.get("action") or {}).get("choice"))
+                if len(got) > 1:
+                    flips += 1
+            consumed = any(qid == (r.get("if") or {}).get("noul") for r in pack.rules)
+            out[qid] = {"decisions": n, "changes_action": flips, "voi": (flips / n) if n else 0.0, "consumed_by_a_rule": consumed,
+                        "verdict": "no rule reads it: it cannot change the action" if not consumed else ("never changes the action" if n and not flips else "earns its place")}
+    finally:
+        if ag.pool is not None:
+            ag.pool.shutdown(wait=False)
+    return out
+
+
+def _mi(xs: list[Any], ys: list[Any]) -> float:
+    """Mutual information in bits between two discrete sequences (plug-in estimate)."""
+    import math
+    from collections import Counter
+    n = len(xs)
+    if n == 0:
+        return 0.0
+    cx, cy, cxy = Counter(xs), Counter(ys), Counter(zip(xs, ys))
+    return sum((c / n) * math.log2((c / n) / ((cx[x] / n) * (cy[y] / n))) for (x, y), c in cxy.items())
+
+
+def _bin(v: Any) -> Any:
+    if isinstance(v, bool) or v is None:
+        return v
+    if isinstance(v, (int, float)):
+        return "0" if v == 0 else "1" if v == 1 else "2-3" if v <= 3 else "4-8" if v <= 8 else "9+"
+    if isinstance(v, (list, dict)):
+        return f"len{min(len(v), 5)}"
+    return str(v)[:24]
+
+
+def relevance(records: list[dict[str, Any]], k: int = 4) -> list[dict[str, Any]]:
+    """Which reads matter, and to whom. For every scalar path in the typed frame: its mutual information with
+    loss-within-k-ticks (danger) and with the decider's choice (attention). A read high on danger and low on
+    attention is one the decider ignores: promote it to a rule or a question. Uses whole-episode records, which
+    the learn command logs per episode."""
+    dec = [r for r in records if "jev_ms" in r and isinstance(r.get("screen"), dict)]
+    if len(dec) < 8:
+        return []
+    last = records[-1]
+    lost = bool(LOST.search(str(last.get("reason") or "")))
+    ticks = [r.get("tick", i) for i, r in enumerate(dec)]
+    end_tick = last.get("tick", ticks[-1])
+    danger = [1 if (lost and end_tick - t <= k) else 0 for t in ticks]
+    choice = [str(r.get("choice")) for r in dec]
+    paths: dict[str, list[Any]] = {}
+    for r in dec:
+        flat = _flat({kk: vv for kk, vv in r["screen"].items() if not str(kk).endswith("_prev")})
+        for kk, vv in flat.items():
+            paths.setdefault(kk, []).append(vv)
+    out = []
+    for path, vals in paths.items():
+        if len(vals) != len(dec):
+            continue
+        xs = [_bin(json.loads(v) if isinstance(v, str) and v[:1] in "[{\"0123456789tfn-" else v) for v in vals]
+        if len(set(xs)) < 2:
+            continue
+        d, a = _mi(xs, danger), _mi(xs, choice)
+        out.append({"read": path, "danger": round(d, 3), "attention": round(a, 3), "gap": round(d - a, 3), "distinct": len(set(xs))})
+    out.sort(key=lambda o: -o["gap"])
+    return out
+
+
+def relevance_text(rel: list[dict[str, Any]], limit: int = 8) -> str:
+    """The audit as a prompt section: the reads that predict the loss and that the decider does not act on."""
+    top = [o for o in rel if o["danger"] > 0.05][:limit]
+    if not top:
+        return ""
+    return "READS THAT PREDICT THE LOSS (mutual information with loss-within-4-ticks, and with the decider's choice; a large gap means the decider ignores it: put it in a rule):\n" + "\n".join(
+        f"- {o['read']}: danger {o['danger']:.2f}, attention {o['attention']:.2f}" for o in top)
+
+
 def _get_path(values: dict[str, Any], path: str | None) -> Any:
     cur: Any = values
     for part in str(path or "").split("."):
@@ -243,7 +346,7 @@ def verify_revision(candidate: Pack, incumbent: Pack, inc: Incident, threshold: 
     return {"ok": True, "why": why, "guarded": guarded, "distinguished": distinguished, "overblocked": overblocked, "support": support}
 
 
-FEATURES = ["guarded", "distinguished", "overblocked", "support", "rules_added", "reads_added", "questions_added", "play_changed"]
+FEATURES = ["guarded", "distinguished", "overblocked", "support", "rules_added", "reads_added", "questions_added", "play_changed", "requery_avoided", "requery_agreement"]
 
 
 def revision_features(verdict: dict[str, Any], candidate: Pack, incumbent: Pack) -> dict[str, float]:
@@ -259,6 +362,7 @@ def revision_features(verdict: dict[str, Any], candidate: Pack, incumbent: Pack)
         "reads_added": float(len(set(candidate.reads) - set(incumbent.reads))),
         "questions_added": float(max(0, len(candidate.questions) - len(incumbent.questions))),
         "play_changed": 1.0 if candidate.play.strip() != incumbent.play.strip() else 0.0,
+        "requery_avoided": 0.0, "requery_agreement": 0.0,      # filled in when the decider was re-asked
     }
 
 
@@ -381,7 +485,7 @@ PACK_SCHEMA_HINT = (
 
 def improve(chat, pack: Pack, inc: Incident, episodes: list[dict[str, Any]] | None = None, log=lambda m: None, threshold: float | None = None,
             rounds: int = 2, keep_rejected: Path | None = None, others: list[Incident] | None = None,
-            hints: str = "", calibrator: "Calibrator | None" = None) -> dict[str, Any]:
+            hints: str = "", calibrator: "Calibrator | None" = None, sensor=None, min_agreement: float = 0.5) -> dict[str, Any]:
     """A revision: incident → chat model → candidate → replay verdict → the calibrator's verdict (when it has learned
     from enough trials), with one repair round when the candidate does not load or is rejected.
     Returns {pack|None, verdict, yaml, features}."""
@@ -415,7 +519,17 @@ def improve(chat, pack: Pack, inc: Incident, episodes: list[dict[str, Any]] | No
                     problem = f"replaying the loss through it: {v['why']}"
                 else:
                     feats = revision_features(v, cand, pack)
-                    if calibrator is not None:
+                    if sensor is not None:
+                        # the decider itself, re-asked on the banked states under the candidate frame
+                        rq = requery(sensor, cand, inc, log)
+                        v["requery"] = {"fatal_avoided": rq["fatal_avoided"], "agreement": round(rq["agreement"], 2), "cost_usd": rq["cost_usd"]}
+                        feats["requery_avoided"] = 1.0 if rq["fatal_avoided"] else 0.0
+                        feats["requery_agreement"] = rq["agreement"]
+                        if not rq["fatal_avoided"] and not v.get("guarded"):
+                            problem = f"re-asked on the fatal state with this frame, the decider still picks {inc.decisions[-1].rec.get('choice')}; a rule must guard it or the frame must show why"
+                        elif rq["agreement"] < min_agreement:
+                            problem = f"with this frame the decider changes its mind on {int((1 - rq['agreement']) * 100)}% of the ordinary decisions too; the frame drifted"
+                    if problem is None and calibrator is not None:
                         ok, why = calibrator.judge(feats)
                         v["calibration"] = why
                         if not ok:

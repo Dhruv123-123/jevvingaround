@@ -3,6 +3,7 @@ is accepted. Snake boards are painted with the pack's own colours, so the reads 
 import os
 import numpy as np
 import yaml
+import pytest
 from anygame.pack import load_pack, load_pack_text, dump_pack
 from anygame.learn import (outcome, better_episode, median_episode, answers_of, incident_of, replay, verify_revision, improve,
                            incident_digest, Bank, Decision)
@@ -223,3 +224,35 @@ def test_requery_asks_the_decider_again_with_the_candidate_frame():
         assert 0.0 <= r_full["agreement"] <= 1.0 and r_full["cost_usd"] >= 0
     finally:
         srv.terminate()
+
+
+def test_question_audit_and_relevance_and_predict_read():
+    from anygame.learn import audit_questions, relevance, relevance_text
+    inc = snake_incident()
+    aud = audit_questions(full(), inc.decisions)
+    assert "head_will_hit_something_if_straight" in aud and aud["head_will_hit_something_if_straight"]["consumed_by_a_rule"] is False
+    assert aud["head_will_hit_something_if_straight"]["verdict"].startswith("no rule reads it")
+    # a pack whose rule consumes the noul: forcing it changes the action on the healthy ticks
+    raw = yaml.safe_load(dump_pack(full().raw)); raw["rules"].append({"if": {"noul": "head_will_hit_something_if_straight", "gte": 0.5}, "exclude": ["keep", "$head_moving"]})
+    aud2 = audit_questions(load_pack_text(dump_pack(raw), "snake"), inc.decisions)
+    assert aud2["head_will_hit_something_if_straight"]["consumed_by_a_rule"] and aud2["head_will_hit_something_if_straight"]["changes_action"] >= 1
+    # relevance: a read that tracks the coming loss and that the decider never acts on scores a large gap
+    recs = []
+    for t in range(1, 31):
+        near = t >= 27
+        recs.append({"tick": t, "jev_ms": 100, "choice": "right", "screen": {"wall_ahead": near, "food": "c3r3", "noise": t % 2}})
+    recs.append({"tick": 31, "action": "stop", "reason": "status is dead", "screen": {}})
+    rel = relevance(recs)
+    top = rel[0]
+    assert top["read"] == "wall_ahead" and top["danger"] > 0.3 and top["attention"] == 0.0
+    assert "wall_ahead" in relevance_text(rel) and relevance([]) == []
+    # predict: the head's next cell from its last displacement
+    from anygame.loop import _predict
+    assert _predict("c7r7", "c6r7") == "c8r7" and _predict("c7r7", "c7r8", 2) == "c7r5" and _predict("c7r7", None) is None
+    raw3 = yaml.safe_load(dump_pack(full().raw)); raw3["read"]["head_next"] = {"kind": "predict", "of": "head"}
+    pk = load_pack_text(dump_pack(raw3), "snake")
+    from anygame.learn import replay
+    r = replay(pk, inc)
+    assert r["values"][1]["head_next"] == "c8r6" and r["values"][0].get("head_next") is None
+    with pytest.raises(Exception):
+        raw4 = yaml.safe_load(dump_pack(full().raw)); raw4["read"]["food_next"] = {"kind": "predict", "of": "food"}; load_pack_text(dump_pack(raw4), "x")

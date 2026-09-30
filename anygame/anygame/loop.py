@@ -29,6 +29,16 @@ def _get(values: dict[str, Any], path: str) -> Any:
     return cur
 
 
+def _predict(cur: Any, prev: Any, steps: int = 1) -> str | None:
+    """c<col>r<row> moved by (cur - prev) * steps; None when either is missing or not a cell."""
+    import re as _re
+    m1 = _re.fullmatch(r"c(\d+)r(\d+)", str(cur or "")); m0 = _re.fullmatch(r"c(\d+)r(\d+)", str(prev or ""))
+    if not m1 or not m0:
+        return None
+    c1, r1, c0, r0 = int(m1.group(1)), int(m1.group(2)), int(m0.group(1)), int(m0.group(2))
+    return f"c{c1 + (c1 - c0) * steps}r{r1 + (r1 - r0) * steps}"
+
+
 def _direction(prev: str, cur: str) -> str:
     """'c3r5' → 'c3r4' is 'up'. Works on c<n>r<m> cell names; anything else is 'none'."""
     import re
@@ -321,6 +331,10 @@ class Agent:
                     values[f"{rid}_moving"] = _direction(self.prev_distinct[rid], cur)
                     values[f"{rid}_reverse"] = {"up": "down", "down": "up", "left": "right", "right": "left"}.get(values[f"{rid}_moving"], "none")
         for rid, r in pack.reads.items():
+            if r.get("kind") == "predict":
+                # where a located thing will be when the action lands: its cell shifted by its last displacement,
+                # `steps` ticks ahead (the Smith predictor's idea, one cell at a time); null until it has moved
+                values[rid] = _predict(values.get(r["of"]), values.get(f"{r['of']}_prev"), int(r.get("steps", 1)))
             if r.get("kind") == "around":
                 values[rid] = around_of(values.get(r["of"]), raw_values.get(r["in"]), values.get(f"{r['of']}_moving"), r)
             elif r.get("kind") == "tetris":

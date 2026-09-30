@@ -88,6 +88,8 @@ Two more things learn, and they are what separates this from a fixed self-improv
 | the **proposer** | lessons: the rules and reads that kept revisions added, on this pack and on others in the pool | shown in the revision prompt, filtered to the read kinds this pack has |
 
 Still fixed: Jev (or CLM), the chat model that proposes, and the set of read kinds and rule forms, which are code.
+[METHOD.md](METHOD.md) is the fuller account: why a re-queryable frozen decider makes the search over its inputs
+exact, and which audits and estimates follow from that.
 
 ## 4. The application loop
 
