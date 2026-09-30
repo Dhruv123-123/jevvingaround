@@ -411,7 +411,7 @@ def cmd_learn(a):
                 recs.append(rec)
                 if rec.get("choice") and rec.get("choice") != "fallback":
                     decisions.append(Decision(rec, frame.copy()))
-                    del decisions[:-8]
+                    del decisions[:-12]
             agent.on_record = _rec
             if hasattr(device, "reload"):
                 device.reload()          # after the agent is built (its OCR worker is warm), so the game does not run unattended
@@ -434,10 +434,11 @@ def cmd_learn(a):
             bank.add_episode(ep)
             if ep["lost"] and decisions:
                 inc = incident_of(decisions, ep["reason"], agent.tick)
+                earlier = bank.incidents()
                 d = bank.add_incident(inc)
                 log(f"learn: incident saved to {d}")
                 try:
-                    res = improve(chat, pack, inc, bank.episodes, log, keep_rejected=bank.path / "rejected")
+                    res = improve(chat, pack, inc, bank.episodes, log, keep_rejected=bank.path / "rejected", others=earlier)
                 except Exception as e:  # noqa: BLE001
                     res = {"pack": None}
                     log(f"learn: {str(e)[:140]}")

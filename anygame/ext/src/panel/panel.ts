@@ -210,6 +210,7 @@ async function play() {
   const bank: StoredBank = (store.bank ?? {})[packKey] ?? { episodes: [], incidents: [], version: 1 };
   let version = bank.version;
   let incumbent: { yaml: string; version: number } | null = null;     // set while a candidate revision is on trial
+  const pastIncidents: Incident[] = [];                                 // this session's incidents with frames: a revision must not break them
   $("playtext").textContent = pack.play; ($("playtext") as HTMLTextAreaElement).value = pack.play;
   ($("rulestext") as HTMLTextAreaElement).value = pack.rules.length ? yaml.dump(pack.rules) : "";
   $<HTMLButtonElement>("play").disabled = true; $<HTMLButtonElement>("stop").disabled = false; $<HTMLButtonElement>("author").disabled = true;
@@ -224,7 +225,7 @@ async function play() {
     ag.onRecord = (rec, frame) => {
       showRec(rec);
       records.push(rec); if (records.length > 2000) records.shift();
-      if (rec.choice && rec.choice !== "fallback") { decisions.push({ rec, frame }); if (decisions.length > 8) decisions.shift(); }
+      if (rec.choice && rec.choice !== "fallback") { decisions.push({ rec, frame }); if (decisions.length > 12) decisions.shift(); }
     };
     let last: Rec | null = null;
     try { last = await ag.run(() => stopping); }
@@ -250,7 +251,8 @@ async function play() {
       bank.incidents.push(stored); if (bank.incidents.length > 4) bank.incidents.shift();
       try {
         const chat = new Chat(store.keys ?? {});
-        const res = await improve(chat, ag.base, inc, bank.episodes, log);
+        const res = await improve(chat, ag.base, inc, bank.episodes, log, { others: pastIncidents.slice() });
+        pastIncidents.push(inc); if (pastIncidents.length > 4) pastIncidents.shift();
         if (res.pack) {
           incumbent = { yaml: dumpPack(ag.base.raw), version };
           version += 1; bank.version = version;

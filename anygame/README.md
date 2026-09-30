@@ -63,8 +63,17 @@ excluded by a rule or separated by a new read, the ordinary decisions must stay 
 still read (`anygame/learn.py`, `ext/src/core/learn.ts`). A revision then plays on trial: if its episode is
 worse than the incumbent's median episode it is reverted. The game restarts by reloading the tab. In the
 extension this is *keep learning* on the play button; in the CLI it is `anygame learn`. Replay costs no model
-call, so a bad revision is rejected in milliseconds. [ARCHITECTURE.md](ARCHITECTURE.md) has the whole loop and
+call, so a bad revision is rejected in milliseconds, and it is checked against the earlier incidents too, so a
+rule that fits one loss and breaks the rest is out. [ARCHITECTURE.md](ARCHITECTURE.md) has the whole loop and
 its mapping onto SIMA 2.
+
+Measured on Snake from a **naive pack** (no rules, no `around` read, a two-line paragraph), six episodes with
+GPT-5.6 revising and Jev playing: episode 1 died at tick 28; the first revision (a rule on free cells) was
+accepted by replay and played 136 ticks; four later revisions were accepted by replay but played worse on trial
+and were reverted, two were rejected by replay outright, and the pack stayed at v2, dying at 131–140 ticks with
+the food eaten. The bundled Snake pack, with the `_space` and `ahead` rules a person wrote, survives 400+ ticks:
+the loop closes part of that gap on its own and the trial guards against the rest. Total model spend for the six
+episodes and seven revisions: about four cents.
 
 The **pool** (`packs/pool.json`) indexes every pack by site and by the fingerprints of its screens
 (`anygame stamp` writes them into the packs). The extension checks it when the panel opens, matching the visible

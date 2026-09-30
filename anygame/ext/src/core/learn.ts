@@ -61,7 +61,7 @@ export function answersOf(rec: Rec): Record<string, Answer> {
 }
 
 /** Cut the fatal window out of an episode: the last `window` decisions before the end, with their frames. */
-export function incidentOf(decisions: Decision[], reason: string, tick: number, window = 6): Incident {
+export function incidentOf(decisions: Decision[], reason: string, tick: number, window = 10): Incident {
   return { reason, tick, decisions: decisions.slice(-window), at: new Date().toISOString() };
 }
 
@@ -108,8 +108,9 @@ export function cellRule(candidate: Pack, incumbent: Pack): string {
   return "";
 }
 
-/** Does the candidate handle the incident better than the incumbent, by replay alone? */
-export function verifyRevision(candidate: Pack, incumbent: Pack, inc: Incident, threshold = 0.7, maxOverblock = 0.34): Verdict {
+/** Does the candidate handle the incident better than the incumbent, by replay alone? `others` are earlier incidents:
+ *  the candidate must not block their ordinary decisions either (a rule that fits one loss and breaks the rest is out). */
+export function verifyRevision(candidate: Pack, incumbent: Pack, inc: Incident, threshold = 0.7, maxOverblock = 0.34, others: Incident[] = []): Verdict {
   if (!inc.decisions.length) return { ok: false, why: "no decisions to replay", guarded: false, distinguished: [], overblocked: 0, support: 0 };
   const narrow = cellRule(candidate, incumbent);
   if (narrow) return { ok: false, why: `rule on ${narrow} tests the exact cell of a located read; it would fire only there`, guarded: false, distinguished: [], overblocked: 0, support: 0 };
@@ -124,10 +125,16 @@ export function verifyRevision(candidate: Pack, incumbent: Pack, inc: Incident, 
   // the candidate's frame tells the fatal tick apart where the incumbent's did not
   const sepI = new Set(separators(i.values));
   const distinguished = separators(c.values).filter((k) => !sepI.has(k));
-  let changed = 0;
+  let changed = 0, total = n;
   for (let k = 0; k < n; k++) if (c.choices[k] !== inc.decisions[k].rec.choice && i.choices[k] === inc.decisions[k].rec.choice) changed++;
-  const overblocked = n ? changed / n : 0;
-  if (overblocked > maxOverblock) return { ok: false, why: `blocks ${changed} of ${n} ordinary decisions too`, guarded, distinguished, overblocked, support };
+  for (const o of others) {
+    if (!o.decisions.length) continue;
+    const oc = replay(candidate, o), oi = replay(incumbent, o), m = o.decisions.length - 1;
+    for (let k = 0; k < m; k++) if (oc.choices[k] !== o.decisions[k].rec.choice && oi.choices[k] === o.decisions[k].rec.choice) changed++;
+    total += m;
+  }
+  const overblocked = total ? changed / total : 0;
+  if (overblocked > maxOverblock) return { ok: false, why: `blocks ${changed} of ${total} ordinary decisions too`, guarded, distinguished, overblocked, support };
   if (!guarded && !distinguished.length) return { ok: false, why: "the fatal decision is neither excluded by a rule nor visible in the typed frame", guarded, distinguished, overblocked, support };
   return { ok: true, why: guarded ? `rule now excludes ${fatalRec.choice} at the fatal tick` : `typed frame now separates the fatal tick: ${distinguished.slice(0, 4).join(", ")}`, guarded, distinguished, overblocked, support };
 }
@@ -172,7 +179,7 @@ export const PACK_SCHEMA_HINT =
 
 /** A revision: incident → chat model → candidate → replay verdict, with one repair round when the candidate does not
  *  load or the replay rejects it. Returns the accepted pack or null. */
-export async function improve(chat: Chat, pack: Pack, inc: Incident, episodes: Episode[] = [], log: (m: string) => void = () => {}, opts: { threshold?: number; maxTokens?: number; rounds?: number } = {}): Promise<{ pack: Pack | null; verdict: Verdict | null; yaml: string | null }> {
+export async function improve(chat: Chat, pack: Pack, inc: Incident, episodes: Episode[] = [], log: (m: string) => void = () => {}, opts: { threshold?: number; maxTokens?: number; rounds?: number; others?: Incident[] } = {}): Promise<{ pack: Pack | null; verdict: Verdict | null; yaml: string | null }> {
   const parts: any[] = [{ type: "text", text: REVISION_RULES + "\n\n" + PACK_SCHEMA_HINT + "\n\n" + incidentDigest(inc, episodes) + "\n\n```yaml\n" + dumpPack(pack.raw) + "\n```" }];
   const n = inc.decisions.length;
   for (const k of n > 1 ? [n - 2, n - 1] : [n - 1]) {
@@ -195,7 +202,7 @@ export async function improve(chat: Chat, pack: Pack, inc: Incident, episodes: E
         cand.raw.fingerprints = { ...(pack.raw.fingerprints ?? {}), ...(cand.raw.fingerprints ?? {}) };
         cand.raw.modes = cand.raw.modes ?? pack.raw.modes;
         cand = loadPack(dumpPack(cand.raw), pack.name);
-        v = verifyRevision(cand, pack, inc, threshold);
+        v = verifyRevision(cand, pack, inc, threshold, 0.34, opts.others ?? []);
         lastVerdict = v;
         if (!v.ok) problem = `replaying the loss through it: ${v.why}`;
       } catch (e) { problem = `it does not load: ${(e as Error).message.slice(0, 200)}`; }

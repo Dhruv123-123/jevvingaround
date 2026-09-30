@@ -76,7 +76,7 @@ def answers_of(rec: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def incident_of(decisions: list[Decision], reason: str, tick: int, window: int = 6) -> Incident:
+def incident_of(decisions: list[Decision], reason: str, tick: int, window: int = 10) -> Incident:
     """Cut the fatal window out of an episode: the last `window` decisions before the end, with their frames."""
     return Incident(reason, tick, decisions[-window:])
 
@@ -137,8 +137,10 @@ def cell_rule(candidate: Pack, incumbent: Pack) -> str:
     return ""
 
 
-def verify_revision(candidate: Pack, incumbent: Pack, inc: Incident, threshold: float = 0.7, max_overblock: float = 0.34) -> dict[str, Any]:
-    """Does the candidate handle the incident better than the incumbent, by replay alone?"""
+def verify_revision(candidate: Pack, incumbent: Pack, inc: Incident, threshold: float = 0.7, max_overblock: float = 0.34,
+                    others: list[Incident] | None = None) -> dict[str, Any]:
+    """Does the candidate handle the incident better than the incumbent, by replay alone? `others` are earlier incidents:
+    the candidate must not block their ordinary decisions either (a rule that fits one loss and breaks the rest is out)."""
     if not inc.decisions:
         return {"ok": False, "why": "no decisions to replay", "guarded": False, "distinguished": [], "overblocked": 0.0, "support": 0.0}
     narrow = cell_rule(candidate, incumbent)
@@ -157,9 +159,17 @@ def verify_revision(candidate: Pack, incumbent: Pack, inc: Incident, threshold: 
     sep_i = set(separators(i["values"]))
     distinguished = [k for k in separators(c["values"]) if k not in sep_i]
     changed = sum(1 for k in range(n) if c["choices"][k] != inc.decisions[k].rec.get("choice") and i["choices"][k] == inc.decisions[k].rec.get("choice"))
-    overblocked = changed / n if n else 0.0
+    total = n
+    for o in others or []:
+        if not o.decisions:
+            continue
+        oc, oi = replay(candidate, o), replay(incumbent, o)
+        m = len(o.decisions) - 1
+        changed += sum(1 for k in range(m) if oc["choices"][k] != o.decisions[k].rec.get("choice") and oi["choices"][k] == o.decisions[k].rec.get("choice"))
+        total += m
+    overblocked = changed / total if total else 0.0
     if overblocked > max_overblock:
-        return {"ok": False, "why": f"blocks {changed} of {n} ordinary decisions too", "guarded": guarded, "distinguished": distinguished, "overblocked": overblocked, "support": support}
+        return {"ok": False, "why": f"blocks {changed} of {total} ordinary decisions too", "guarded": guarded, "distinguished": distinguished, "overblocked": overblocked, "support": support}
     if not guarded and not distinguished:
         return {"ok": False, "why": "the fatal decision is neither excluded by a rule nor visible in the typed frame", "guarded": False, "distinguished": [], "overblocked": overblocked, "support": support}
     why = f"rule now excludes {fatal} at the fatal tick" if guarded else "typed frame now separates the fatal tick: " + ", ".join(distinguished[:4])
@@ -210,7 +220,7 @@ PACK_SCHEMA_HINT = (
 
 
 def improve(chat, pack: Pack, inc: Incident, episodes: list[dict[str, Any]] | None = None, log=lambda m: None, threshold: float | None = None,
-            rounds: int = 2, keep_rejected: Path | None = None) -> dict[str, Any]:
+            rounds: int = 2, keep_rejected: Path | None = None, others: list[Incident] | None = None) -> dict[str, Any]:
     """A revision: incident → chat model → candidate → replay verdict, with one repair round when the candidate does not
     load or the replay rejects it. Returns {pack|None, verdict, yaml}."""
     from .author import _b64, extract_yaml
@@ -237,7 +247,7 @@ def improve(chat, pack: Pack, inc: Incident, episodes: list[dict[str, Any]] | No
                 if "modes" not in cand.raw and pack.raw.get("modes"):
                     cand.raw["modes"] = pack.raw["modes"]
                 cand = load_pack_text(dump_pack(cand.raw), pack.name)
-                v = verify_revision(cand, pack, inc, thr)
+                v = verify_revision(cand, pack, inc, thr, others=others)
                 last_verdict = v
                 if not v["ok"]:
                     problem = f"replaying the loss through it: {v['why']}"
@@ -272,7 +282,7 @@ class Bank:
             f.write(json.dumps(e) + "\n")
 
     def add_incident(self, inc: Incident) -> Path:
-        n = len(list(self.path.glob("incident-*"))) + 1
+        n = max([int(q.name.split("-")[1]) for q in self.path.glob("incident-*")] + [0]) + 1
         d = self.path / f"incident-{n}"
         d.mkdir()
         for k, dec in enumerate(inc.decisions):
@@ -284,6 +294,10 @@ class Bank:
                 f.unlink()
             p.rmdir()
         return d
+
+    def incidents(self) -> list[Incident]:
+        """The banked incidents, oldest first, with their frames."""
+        return [self.load_incident(d) for d in sorted(self.path.glob("incident-*"), key=lambda p: int(p.name.split("-")[1])) if (d / "incident.json").exists()]
 
     def load_incident(self, d: Path) -> Incident:
         j = json.loads((d / "incident.json").read_text())
