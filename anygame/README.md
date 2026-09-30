@@ -120,7 +120,7 @@ that does not still gets played from pixels. Both end in the same typed frame, s
 plays it through `stream://ws://127.0.0.1:8765` with nothing but the state (passes: 40 ticks, support 1.0, keys
 on the socket). `test/e2e_screen.py` is the desktop device live: a virtual display, a real Chromium window in
 kiosk mode, frames from the X framebuffer, keys through X; with Jev it played 200 ticks alive with score 60
-(`xvfb-run -a -s "-screen 0 1024x768x24" python test/e2e_screen.py jev 200`). Measured:
+(`python test/e2e_screen.py jev 200`; it starts an Xvfb when there is no display). Measured:
 `snake-state` with Jev, 400 ticks, alive at the cap with score 140, 108 decisions, perception 27 ms p50 (the
 page expression), Jev 190 ms p50; no pixel was read.
 

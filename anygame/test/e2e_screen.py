@@ -1,14 +1,24 @@
 """The desktop device, live: a virtual display (Xvfb), a real Chromium window in kiosk mode showing Snake at (0,0), and
 anygame playing it through screen:// (mss grabs the X framebuffer, pynput sends X key events). No Playwright input,
 no page hooks: exactly what a user's desktop looks like to the runtime. Needs xvfb-run (or a DISPLAY) and the
-[desktop] extras. `xvfb-run -a -s "-screen 0 1024x768x24" python test/e2e_screen.py [sensor] [ticks]`."""
+[desktop] extras; without a DISPLAY it starts its own Xvfb. `python test/e2e_screen.py [sensor] [ticks]`."""
 import json, os, subprocess, sys, time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CHROME = next((c for c in [os.environ.get("CHROMIUM_PATH", ""), "/opt/pw-browsers/chromium-1194/chrome-linux/chrome", "/ms-playwright/chromium-1194/chrome-linux/chrome"] if c and os.path.exists(c)), None)
 SENSOR = sys.argv[1] if len(sys.argv) > 1 else "random:3"
 TICKS = int(sys.argv[2]) if len(sys.argv) > 2 else 40
-assert os.environ.get("DISPLAY"), "needs a DISPLAY (run under xvfb-run)"
+xvfb = None
+if not os.environ.get("DISPLAY"):
+    # no display: start a virtual one ourselves (xvfb-run's readiness check hangs in some containers)
+    os.environ["DISPLAY"] = ":99"
+    xvfb = subprocess.Popen(["Xvfb", ":99", "-screen", "0", "1024x768x24", "-nolisten", "tcp"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    for _ in range(50):
+        if os.path.exists("/tmp/.X11-unix/X99"):
+            break
+        time.sleep(0.1)
+    else:
+        raise SystemExit("Xvfb did not come up")
 if CHROME is None:
     from playwright.sync_api import sync_playwright
     with sync_playwright() as p:
@@ -41,9 +51,12 @@ try:
     assert ag.tick >= 5 and (last.get("screen") or {}).get("head"), "no ticks played"
     print("RESULT PASS" if moves else "RESULT PASS (no turns issued)")
     ag.close(); dev.close()
+    del ag, dev; import gc; gc.collect()     # pynput's controllers must go before the display does
 finally:
     chrome.terminate()
     try:
         chrome.wait(timeout=5)
     except subprocess.TimeoutExpired:
         chrome.kill()
+    if xvfb is not None:
+        xvfb.terminate()
