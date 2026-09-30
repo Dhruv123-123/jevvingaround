@@ -327,6 +327,19 @@ def _panel(frame, rec, total_cost, width=330):
         text("action", grey, 0.45, 18)
         for k, v in sorted(rec["action_probs"].items(), key=lambda kv: -kv[1])[:6]:
             bar(k, float(v), green if k == rec.get("choice") else (90, 90, 96))
+    # a macro action's computed options (e.g. Tetris landings): list them, the chosen one in green
+    for qk, chosen in (rec.get("choices") or {}).items():
+        if not qk.endswith("__option"):
+            continue
+        rid = next((k for k, v in (rec.get("screen") or {}).items() if isinstance(v, dict) and isinstance(v.get("landings"), dict)), None)
+        landings = (rec["screen"][rid]["landings"] if rid else {}) or {}
+        if not landings:
+            continue
+        y += 6
+        text("computed options", grey, 0.45, 18)
+        for lab, desc in list(landings.items())[:6]:
+            short = str(desc).replace("bumpiness", "bump").replace("keeps well", "well ok").replace("FILLS the well", "fills well")
+            text(f"{lab}  {short[:44]}", green if lab == chosen else grey, 0.38, 16, 1)
     if rec.get("nouls"):
         y += 6
         text("beliefs", grey, 0.45, 18)
