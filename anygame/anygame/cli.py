@@ -242,6 +242,24 @@ def cmd_go(a):
     slug = _re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")[:40] + "-" + hashlib.sha1(base.encode()).hexdigest()[:6]
     pack_dir = Path(a.packs) / slug
     known = Path(find_pack(a.pack)).parent if a.pack else (pack_dir if (pack_dir / "pack.yaml").exists() and not a.fresh else None)
+    if known is None and not a.fresh:
+        # the pool first: a game somebody already learned starts now, by site or by what the screen looks like
+        from .pool import fetch_pool, install, match
+        pool = fetch_pool()
+        hit = match(pool, a.device)
+        if hit is None and a.device.startswith("web://"):
+            try:
+                probe_dev = open_device(a.device, tuple(int(v) for v in a.size.split("x")))
+                try:
+                    hit = match(pool, a.device, probe_dev.frame())
+                finally:
+                    probe_dev.close()
+            except Exception as e:  # noqa: BLE001
+                print(f"pool: could not look at the screen ({str(e)[:80]})", file=sys.stderr)
+        if hit is not None:
+            local = Path(a.packs) / hit["name"]
+            known = local if (local / "pack.yaml").exists() else (Path(find_pack(hit["name"])).parent if any(os.path.exists(os.path.join(d or "", hit["name"], "pack.yaml")) for d in PACKS_DIRS if d) else install(hit, Path(a.packs)))
+            print(f"pool: \"{hit['name']}\" matches this {'site' if hit['how'] == 'url' else 'screen (distance ' + str(hit['distance']) + ')'}: playing it from {known}", file=sys.stderr)
     if known is None:
         print(f"no pack for {base}: authoring one into {pack_dir} …", file=sys.stderr)
         size = tuple(int(v) for v in a.size.split("x"))
@@ -369,7 +387,7 @@ def cmd_learn(a):
     from .sensors import open_sensor
     src = Path(find_pack(a.pack))
     pack = load_pack(src)
-    pack_dir = src.parent
+    pack_dir = src if src.is_dir() else src.parent
     bank = Bank(a.bank or (pack_dir / "bank"))
     learned = Path(a.out or (pack_dir / "pack.learned.yaml"))
     if learned.exists() and not a.fresh:
@@ -393,6 +411,8 @@ def cmd_learn(a):
                     decisions.append(Decision(rec, frame.copy()))
                     del decisions[:-8]
             agent.on_record = _rec
+            if n > 1 and hasattr(device, "reload"):
+                device.reload()          # after the agent is built (its OCR worker is warm), so the game does not run unattended
             try:
                 last = agent.run()
             finally:
@@ -415,7 +435,7 @@ def cmd_learn(a):
                 d = bank.add_incident(inc)
                 log(f"learn: incident saved to {d}")
                 try:
-                    res = improve(chat, pack, inc, bank.episodes, log)
+                    res = improve(chat, pack, inc, bank.episodes, log, keep_rejected=bank.path / "rejected")
                 except Exception as e:  # noqa: BLE001
                     res = {"pack": None}
                     log(f"learn: {str(e)[:140]}")
@@ -426,8 +446,6 @@ def cmd_learn(a):
                     bank.save_version(version, dump_pack(pack.raw))
                     learned.write_text(dump_pack(pack.raw))
                     log(f"learn: v{version} on trial: {res['verdict']['why']}")
-            if n < len(bank.episodes) + a.episodes and hasattr(device, "reload"):
-                device.reload()
     finally:
         device.close()
     best = max(bank.episodes, key=lambda e: (e.get("won", False), not e.get("lost", True), e.get("ticks", 0), e.get("score") or 0))
@@ -435,6 +453,15 @@ def cmd_learn(a):
                "best": {"n": best["n"], "ticks": best["ticks"], "reason": best["reason"], "score": best.get("score"), "version": best["version"]},
                "by_version": {str(v): [e["ticks"] for e in bank.of_version(v)] for v in sorted({e["version"] for e in bank.episodes})}}
     print(json.dumps(summary, indent=1))
+
+
+def cmd_stamp(a):
+    """Write each pack's fixture fingerprints into its pack.yaml, so the pool can match a screen without images."""
+    from .pool import stamp
+    dirs = [Path(find_pack(n)).parent for n in a.packs] if a.packs else [Path(d) / e for d in PACKS_DIRS if d and os.path.isdir(d) for e in sorted(os.listdir(d)) if os.path.exists(os.path.join(d, e, "pack.yaml"))]
+    for d in dirs:
+        n = stamp(d)
+        print(f"{d.name}: {n} screen(s) stamped" if n else f"{d.name}: no fixtures")
 
 def cmd_render(a):
     """Frames from --record → an MP4 (ffmpeg from Playwright's bundle or PATH). With --log, each frame gets a
@@ -515,6 +542,7 @@ def main(argv=None):
     ln.add_argument("--fallback", action="store_true", help="VLM fallback on screens the pack cannot read (restart prompts, game-over cards)")
     ln.add_argument("--bank", default=None, help="where episodes and incidents go (default <pack>/bank)"); ln.add_argument("--out", default=None, help="the learned pack (default <pack>/pack.learned.yaml)")
     ln.add_argument("--fresh", action="store_true", help="ignore an existing learned pack"); ln.set_defaults(fn=cmd_learn)
+    st = sub.add_parser("stamp", help="write fixture fingerprints into pack.yaml (all packs, or the ones named)"); st.add_argument("packs", nargs="*"); st.set_defaults(fn=cmd_stamp)
     rd = sub.add_parser("render"); rd.add_argument("dir"); rd.add_argument("--out", default="demo.mp4"); rd.add_argument("--fps", type=float, default=4); rd.add_argument("--log", default=None, help="the run's --log file: draws a side panel per tick"); rd.set_defaults(fn=cmd_render)
     ev = sub.add_parser("eval"); ev.add_argument("pack"); ev.add_argument("--sensor", default="none", help="jev | none | random | llm:<model>"); ev.set_defaults(fn=cmd_eval)
     au = sub.add_parser("author", help="a slow model writes the pack from probe frames; the runtime checks it")

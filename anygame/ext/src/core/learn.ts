@@ -141,26 +141,51 @@ export const REVISION_RULES =
   "and the ordinary decisions in the window must stay allowed. Every rule must only name reads that exist. " +
   "Return the whole pack.yaml in one fenced yaml block.";
 
-/** One revision round: incident → chat model → candidate → replay verdict. Returns the accepted pack or null. */
-export async function improve(chat: Chat, pack: Pack, inc: Incident, episodes: Episode[] = [], log: (m: string) => void = () => {}, opts: { threshold?: number; maxTokens?: number } = {}): Promise<{ pack: Pack | null; verdict: Verdict | null; yaml: string | null }> {
-  const parts: any[] = [{ type: "text", text: REVISION_RULES + "\n\n" + incidentDigest(inc, episodes) + "\n\n```yaml\n" + dumpPack(pack.raw) + "\n```" }];
+export const PACK_SCHEMA_HINT =
+  "Exact syntax (anything else fails to load):\n" +
+  "- locate: { kind: locate, in: <matrix read id>, symbol: \"<char>\", many: true|false, row: N, col: N } → a cell \"c<col>r<row>\" (a list with many)\n" +
+  "- runs: { kind: runs, in: <matrix read id>, symbol: \"<char>\", length: N, gravity: down } → the empty cells that would complete N in a line\n" +
+  "- around: { kind: around, of: <locate read id>, in: <matrix read id>, free: [\"<char>\", …] } → { up, down, left, right, ahead, <dir>_free, <dir>_space }\n" +
+  "- history: put `history: 1` on a read → <id>_prev; on a locate also <id>_moving and <id>_reverse\n" +
+  "- rule: { if: { read: <id or id.path>, equals|in|not|gte|lte: v }, exclude: [<action id or $read>] } or { if: { noul: <question id>, gte|lte: p }, set: { <action>__cell: <choice question id> } }; avoid/only: { <action>__cell: <read id> }\n" +
+  "- question: { id, type: noul|choice|score, instructions, criteria: { <option>: <meaning> } }\n" +
+  "No other keys. YAML with a duplicated key does not load.";
+
+/** A revision: incident → chat model → candidate → replay verdict, with one repair round when the candidate does not
+ *  load or the replay rejects it. Returns the accepted pack or null. */
+export async function improve(chat: Chat, pack: Pack, inc: Incident, episodes: Episode[] = [], log: (m: string) => void = () => {}, opts: { threshold?: number; maxTokens?: number; rounds?: number } = {}): Promise<{ pack: Pack | null; verdict: Verdict | null; yaml: string | null }> {
+  const parts: any[] = [{ type: "text", text: REVISION_RULES + "\n\n" + PACK_SCHEMA_HINT + "\n\n" + incidentDigest(inc, episodes) + "\n\n```yaml\n" + dumpPack(pack.raw) + "\n```" }];
   const n = inc.decisions.length;
   for (const k of n > 1 ? [n - 2, n - 1] : [n - 1]) {
     parts.push({ type: "text", text: `${k === n - 1 ? "the fatal" : "the previous"} decision's frame (tick ${inc.decisions[k].rec.tick}):` });
     parts.push({ type: "image_url", image_url: { url: await frameToDataUrl(inc.decisions[k].frame) } });
   }
+  const threshold = opts.threshold ?? Number(pack.raw.support_threshold ?? 0.7);
+  let messages: any[] = [{ role: "user", content: parts }];
+  let lastYaml: string | null = null, lastVerdict: Verdict | null = null;
   log(`learn: asking ${chat.model} about the loss at tick ${inc.tick} …`);
-  const { text } = await chat.complete([{ role: "user", content: parts }], opts.maxTokens ?? 12000, 0.2);
-  const y = extractYaml(text);
-  if (!y) { log("learn: no pack returned"); return { pack: null, verdict: null, yaml: null }; }
-  let cand: Pack;
-  try { cand = loadPack(y, pack.name); } catch (e) { log(`learn: revision does not load (${(e as Error).message.slice(0, 100)})`); return { pack: null, verdict: null, yaml: y }; }
-  cand.raw.fingerprints = { ...(pack.raw.fingerprints ?? {}), ...(cand.raw.fingerprints ?? {}) };
-  cand.raw.modes = cand.raw.modes ?? pack.raw.modes;
-  cand = loadPack(dumpPack(cand.raw), pack.name);
-  const v = verifyRevision(cand, pack, inc, opts.threshold ?? Number(pack.raw.support_threshold ?? 0.7));
-  log(`learn: ${v.ok ? "accepted" : "rejected"}: ${v.why}`);
-  return { pack: v.ok ? cand : null, verdict: v, yaml: y };
+  for (let round = 1; round <= (opts.rounds ?? 2); round++) {
+    const { text } = await chat.complete(messages, opts.maxTokens ?? 12000, 0.2);
+    const y = extractYaml(text);
+    let problem: string | null = null, cand: Pack | null = null, v: Verdict | null = null;
+    if (!y) problem = "there was no ```yaml block";
+    else {
+      lastYaml = y;
+      try {
+        cand = loadPack(y, pack.name);
+        cand.raw.fingerprints = { ...(pack.raw.fingerprints ?? {}), ...(cand.raw.fingerprints ?? {}) };
+        cand.raw.modes = cand.raw.modes ?? pack.raw.modes;
+        cand = loadPack(dumpPack(cand.raw), pack.name);
+        v = verifyRevision(cand, pack, inc, threshold);
+        lastVerdict = v;
+        if (!v.ok) problem = `replaying the loss through it: ${v.why}`;
+      } catch (e) { problem = `it does not load: ${(e as Error).message.slice(0, 200)}`; }
+    }
+    if (!problem && cand && v) { log(`learn: accepted (round ${round}): ${v.why}`); return { pack: cand, verdict: v, yaml: y }; }
+    log(`learn: round ${round} rejected: ${problem}`);
+    messages = [...messages, { role: "assistant", content: text }, { role: "user", content: `That revision was rejected: ${problem}.\n${PACK_SCHEMA_HINT}\nReturn the whole corrected pack.yaml in one fenced yaml block.` }];
+  }
+  return { pack: null, verdict: lastVerdict, yaml: lastYaml };
 }
 
 /** The bank: what the runtime remembers about a pack across episodes. Frames are kept for the last few incidents only. */

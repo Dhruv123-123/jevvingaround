@@ -1,7 +1,7 @@
 // The side panel is the whole runtime: it captures the game tab, runs the pack, calls the sensor, sends input,
 // and shows the decision panel. Packs are bundled or authored here and cached in extension storage.
 import yaml from "js-yaml";
-import { Agent, BUNDLED_PACKS, loadPack, dumpPack, openSensor, Chat, VLMFallback, explore, digest as demoDigest, outcome, betterEpisode, medianEpisode, incidentOf, improve, LOST, type Decision, type Episode, type Incident, type Demo, type DemoEvent, type Keys, type Pack, type Rec, type Sensor } from "../core/index.js";
+import { Agent, BUNDLED_PACKS, loadPack, dumpPack, openSensor, Chat, VLMFallback, explore, digest as demoDigest, fingerprint, fpDistance, fpFromBase64, type Frame, outcome, betterEpisode, medianEpisode, incidentOf, improve, LOST, type Decision, type Episode, type Incident, type Demo, type DemoEvent, type Keys, type Pack, type Rec, type Sensor } from "../core/index.js";
 import { author, checkPack, extractYaml, withFingerprints, frameToDataUrl } from "../core/author.js";
 import { TabDevice, type Region } from "../device/tab.js";
 
@@ -68,24 +68,59 @@ function showRec(rec: Rec) {
 
 const POOL_URL = "https://raw.githubusercontent.com/Dhruv123-123/jevvingaround/main/anygame/packs/pool.json";
 
+/** A screenshot data URL (from chrome.tabs.captureVisibleTab) as a frame, cropped to the remembered region if any. */
+async function dataUrlToFrame(url: string, region: Region | null): Promise<Frame> {
+  const bmp = await createImageBitmap(await (await fetch(url)).blob());
+  const r = region ?? { x: 0, y: 0, w: bmp.width, h: bmp.height };
+  const canvas = new OffscreenCanvas(r.w, r.h);
+  const ctx = canvas.getContext("2d")!;
+  ctx.drawImage(bmp, r.x, r.y, r.w, r.h, 0, 0, r.w, r.h);
+  const img = ctx.getImageData(0, 0, r.w, r.h);
+  return { width: r.w, height: r.h, data: img.data };
+}
+
+interface PoolEntry { name: string; urls?: string[]; game?: string; yaml_url?: string; fingerprints?: Record<string, string> | number }
+
+/** The pool entry for this tab: by site first, then by what the screen looks like (nearest fingerprint under the threshold). */
+function poolMatch(pool: { packs: PoolEntry[] }, url: string, frame: Frame | null, threshold = 40): { hit: PoolEntry; how: string } | null {
+  const here = url.toLowerCase();
+  const byUrl = pool.packs.find((p) => (p.urls ?? []).some((u) => u && here.includes(u.toLowerCase())));
+  if (byUrl) return { hit: byUrl, how: "site" };
+  if (!frame) return null;
+  const fp = fingerprint(frame);
+  let best: { d: number; p: PoolEntry } | null = null;
+  for (const p of pool.packs) {
+    if (!p.fingerprints || typeof p.fingerprints !== "object") continue;
+    for (const b64 of Object.values(p.fingerprints)) {
+      try { const d = fpDistance(fp, fpFromBase64(b64)); if (!best || d < best.d) best = { d, p }; } catch { /* a bad entry */ }
+    }
+  }
+  return best && best.d <= threshold ? { hit: best.p, how: `screen, distance ${best.d.toFixed(0)}` } : null;
+}
+
 /** The pool: packs the project (and later, everyone) has already learned, matched to this tab by URL or fingerprint. */
 async function checkPool(store: Store) {
   const el = $("poolinfo");
   try {
     const r = await fetch(POOL_URL, { cache: "no-store" });
     if (!r.ok) throw new Error(String(r.status));
-    const pool: { packs: { name: string; urls?: string[]; game?: string; yaml_url?: string }[] } = await r.json();
-    const here = tabUrl.toLowerCase();
-    const hit = pool.packs.find((p) => (p.urls ?? []).some((u) => here.includes(u.toLowerCase())));
-    if (!hit) { el.textContent = `pool: ${pool.packs.length} packs, none for this site`; return; }
-    if (BUNDLED_PACKS[hit.name] || store.packs?.[hit.name]) { el.textContent = `pool: "${hit.name}" matches this site`; $<HTMLSelectElement>("pack").value = BUNDLED_PACKS[hit.name] ? hit.name : `${hit.name} (authored)`; return; }
+    const pool: { packs: PoolEntry[] } = await r.json();
+    let frame: Frame | null = null;
+    try {
+      const shot = await new Promise<string>((res, rej) => chrome.tabs.captureVisibleTab({ format: "png" }, (u) => (chrome.runtime.lastError || !u ? rej(new Error(chrome.runtime.lastError?.message ?? "no capture")) : res(u))));
+      frame = await dataUrlToFrame(shot, store.regions?.[originOf(tabUrl)] ?? null);
+    } catch { /* the tab is not visible: match by site only */ }
+    const m = poolMatch(pool, tabUrl, frame);
+    if (!m) { el.textContent = `pool: ${pool.packs.length} packs, none for this site or screen`; return; }
+    const hit = m.hit;
+    if (BUNDLED_PACKS[hit.name] || store.packs?.[hit.name]) { el.textContent = `pool: "${hit.name}" matches this ${m.how}`; $<HTMLSelectElement>("pack").value = BUNDLED_PACKS[hit.name] ? hit.name : `${hit.name} (authored)`; return; }
     if (hit.yaml_url) {
       const y = await (await fetch(hit.yaml_url, { cache: "no-store" })).text();
       loadPack(y, hit.name);
       await save({ packs: { ...(store.packs ?? {}), [hit.name]: y } });
       await refreshPacks(await load());
       $<HTMLSelectElement>("pack").value = `${hit.name} (authored)`;
-      el.textContent = `pool: installed "${hit.name}" for this site`;
+      el.textContent = `pool: installed "${hit.name}" for this ${m.how}`;
     }
   } catch (e) { el.textContent = `pool: unreachable (${(e as Error).message.slice(0, 40)})`; }
 }

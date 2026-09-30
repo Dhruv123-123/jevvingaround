@@ -13,6 +13,8 @@ GAME = sys.argv[3] if len(sys.argv) > 3 else "Flappy Bird. Click (or press Space
 REGION = sys.argv[4] if len(sys.argv) > 4 else "188,0,525,650"
 EXPLORE_SECONDS = int(os.environ.get("EXPLORE_SECONDS", "75"))
 PLAY_SECONDS = int(os.environ.get("PLAY_SECONDS", "150"))
+LEARN = os.environ.get("LEARN", "") == "1"          # keep learning: episodes, revisions, restarts
+SKIP_AUTHOR = os.environ.get("SKIP_AUTHOR", "") == "1"   # a pack authored in an earlier run is in the profile: play it
 keys = {"openrouter": os.environ.get("OPENROUTER_API_KEY", ""), "llmBase": os.environ["ANYGAME_LLM_BASE"], "llmKey": os.environ["ANYGAME_LLM_KEY"], "llmModel": os.environ["ANYGAME_LLM_MODEL"]}
 
 
@@ -77,27 +79,31 @@ with sync_playwright() as p:
     sh.shot("open")
     print("pool:", (panel.text_content("#poolinfo") or "").strip())
     panel.click("#authorbox summary"); panel.fill("#game", GAME); sh.shot("describe")
-    # --- the explorer plays first: that is the demonstration ---
-    game.bring_to_front(); panel.click("#explore")
-    sh.run_until(lambda: "explored" in (panel.text_content("#demoinfo") or "") or "explore:" in (panel.text_content("#log") or "").split("\n")[-1], EXPLORE_SECONDS + 60, period=1.0, note="exploring")
-    print("explore:", (panel.text_content("#demoinfo") or "").strip())
-    # --- author from it ---
-    game.reload(); time.sleep(4); game.bring_to_front()
-    panel.select_option("#sensor", "jev")
     info = ""
-    for attempt in range(3):   # a gateway blip on the authoring model is not a reason to play the wrong pack
-        panel.click("#author")
-        seen = len((panel.text_content("#log") or "").split("\n"))
-        sh.run_until(lambda: any(l.startswith(("author done", "author:")) for l in (panel.text_content("#log") or "").split("\n")[seen:]), 1800, period=1.5, note="authoring")
-        info = (panel.text_content("#authorinfo") or "").strip()
-        if "passes" in info or "saved" in info: break
-        print("author attempt", attempt + 1, "failed:", (panel.text_content("#log") or "").strip().split("\n")[-1][:160]); time.sleep(5)
-    if not info: print("author never produced a pack; not playing"); sh.save(); ctx.close(); sys.exit(2)
-    print("author:", info, [l for l in (panel.text_content("#log") or "").split("\n") if l.startswith(("using a", "round", "play", "tune"))])
+    if SKIP_AUTHOR and "(authored)" in (panel.locator("#pack").input_value() or ""):
+        info = "pack passes its tests (authored earlier)"; print("using", panel.locator("#pack").input_value())
+    else:
+      # --- the explorer plays first: that is the demonstration ---
+      game.bring_to_front(); panel.click("#explore")
+      sh.run_until(lambda: "explored" in (panel.text_content("#demoinfo") or "") or "explore:" in (panel.text_content("#log") or "").split("\n")[-1], EXPLORE_SECONDS + 60, period=1.0, note="exploring")
+      print("explore:", (panel.text_content("#demoinfo") or "").strip())
+      # --- author from it ---
+      game.reload(); time.sleep(4); game.bring_to_front()
+      panel.select_option("#sensor", "jev")
+      for attempt in range(3):   # a gateway blip on the authoring model is not a reason to play the wrong pack
+          panel.click("#author")
+          seen = len((panel.text_content("#log") or "").split("\n"))
+          sh.run_until(lambda: any(l.startswith(("author done", "author:")) for l in (panel.text_content("#log") or "").split("\n")[seen:]), 1800, period=1.5, note="authoring")
+          info = (panel.text_content("#authorinfo") or "").strip()
+          if "passes" in info or "saved" in info: break
+          print("author attempt", attempt + 1, "failed:", (panel.text_content("#log") or "").strip().split("\n")[-1][:160]); time.sleep(5)
+      if not info: print("author never produced a pack; not playing"); sh.save(); ctx.close(); sys.exit(2)
+      print("author:", info, [l for l in (panel.text_content("#log") or "").split("\n") if l.startswith(("using a", "round", "play", "tune"))])
     # --- Jev plays it, fallback on ---
     game.reload(); time.sleep(4); game.bring_to_front()
+    if LEARN: panel.check("#improve")
     panel.click("#play")
-    sh.run_until(lambda: False, PLAY_SECONDS, period=0.4, note="playing")
+    sh.run_until(lambda: not LEARN and "done:" in (panel.text_content("#log") or "").split("\n")[-1], PLAY_SECONDS, period=0.4, note="playing")
     if panel.is_enabled("#stop"): panel.click("#stop")
     sh.shot("stopped"); sh.save()
     # --- export the authored pack for the pool ---

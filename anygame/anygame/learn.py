@@ -176,33 +176,60 @@ REVISION_RULES = (
     "and the ordinary decisions in the window must stay allowed. Every rule must only name reads that exist. "
     "Return the whole pack.yaml in one fenced yaml block.")
 
+PACK_SCHEMA_HINT = (
+    "Exact syntax (anything else fails to load):\n"
+    "- locate: { kind: locate, in: <matrix read id>, symbol: \"<char>\", many: true|false, row: N, col: N } → a cell \"c<col>r<row>\" (a list with many)\n"
+    "- runs: { kind: runs, in: <matrix read id>, symbol: \"<char>\", length: N, gravity: down } → the empty cells that would complete N in a line\n"
+    "- around: { kind: around, of: <locate read id>, in: <matrix read id>, free: [\"<char>\", …] } → { up, down, left, right, ahead, <dir>_free, <dir>_space }\n"
+    "- history: put `history: 1` on a read → <id>_prev; on a locate also <id>_moving and <id>_reverse\n"
+    "- rule: { if: { read: <id or id.path>, equals|in|not|gte|lte: v }, exclude: [<action id or $read>] } or { if: { noul: <question id>, gte|lte: p }, set: { <action>__cell: <choice question id> } }; avoid/only: { <action>__cell: <read id> }\n"
+    "- question: { id, type: noul|choice|score, instructions, criteria: { <option>: <meaning> } }\n"
+    "No other keys. YAML with a duplicated key does not load.")
 
-def improve(chat, pack: Pack, inc: Incident, episodes: list[dict[str, Any]] | None = None, log=lambda m: None, threshold: float | None = None) -> dict[str, Any]:
-    """One revision round: incident → chat model → candidate → replay verdict. Returns {pack|None, verdict, yaml}."""
+
+def improve(chat, pack: Pack, inc: Incident, episodes: list[dict[str, Any]] | None = None, log=lambda m: None, threshold: float | None = None,
+            rounds: int = 2, keep_rejected: Path | None = None) -> dict[str, Any]:
+    """A revision: incident → chat model → candidate → replay verdict, with one repair round when the candidate does not
+    load or the replay rejects it. Returns {pack|None, verdict, yaml}."""
     from .author import _b64, extract_yaml
-    parts: list[dict[str, Any]] = [{"type": "text", "text": REVISION_RULES + "\n\n" + incident_digest(inc, episodes) + "\n\n```yaml\n" + dump_pack(pack.raw) + "\n```"}]
+    parts: list[dict[str, Any]] = [{"type": "text", "text": REVISION_RULES + "\n\n" + PACK_SCHEMA_HINT + "\n\n" + incident_digest(inc, episodes) + "\n\n```yaml\n" + dump_pack(pack.raw) + "\n```"}]
     n = len(inc.decisions)
     for k in ([n - 2, n - 1] if n > 1 else [n - 1]):
         parts.append({"type": "text", "text": f"{'the fatal' if k == n - 1 else 'the previous'} decision's frame (tick {inc.decisions[k].rec.get('tick')}):"})
         parts.append({"type": "image_url", "image_url": {"url": _b64(inc.decisions[k].frame)}})
+    thr = threshold if threshold is not None else float(pack.raw.get("support_threshold", 0.7))
+    messages: list[dict[str, Any]] = [{"role": "user", "content": parts}]
+    last_yaml, last_verdict = None, None
     log(f"learn: asking {chat.model} about the loss at tick {inc.tick} …")
-    text = chat.complete([{"role": "user", "content": parts}], max_tokens=12000, temperature=0.2)[0]
-    y = extract_yaml(text)
-    if not y:
-        log("learn: no pack returned")
-        return {"pack": None, "verdict": None, "yaml": None}
-    try:
-        cand = load_pack_text(y, pack.name)
-    except Exception as e:  # noqa: BLE001
-        log(f"learn: revision does not load ({str(e)[:100]})")
-        return {"pack": None, "verdict": None, "yaml": y}
-    cand.raw["fingerprints"] = {**(pack.raw.get("fingerprints") or {}), **(cand.raw.get("fingerprints") or {})}
-    if "modes" not in cand.raw and pack.raw.get("modes"):
-        cand.raw["modes"] = pack.raw["modes"]
-    cand = load_pack_text(dump_pack(cand.raw), pack.name)
-    v = verify_revision(cand, pack, inc, threshold if threshold is not None else float(pack.raw.get("support_threshold", 0.7)))
-    log(f"learn: {'accepted' if v['ok'] else 'rejected'}: {v['why']}")
-    return {"pack": cand if v["ok"] else None, "verdict": v, "yaml": y}
+    for rnd in range(1, rounds + 1):
+        text = chat.complete(messages, max_tokens=12000, temperature=0.2)[0]
+        y = extract_yaml(text)
+        problem, cand, v = None, None, None
+        if not y:
+            problem = "there was no ```yaml block"
+        else:
+            last_yaml = y
+            try:
+                cand = load_pack_text(y, pack.name)
+                cand.raw["fingerprints"] = {**(pack.raw.get("fingerprints") or {}), **(cand.raw.get("fingerprints") or {})}
+                if "modes" not in cand.raw and pack.raw.get("modes"):
+                    cand.raw["modes"] = pack.raw["modes"]
+                cand = load_pack_text(dump_pack(cand.raw), pack.name)
+                v = verify_revision(cand, pack, inc, thr)
+                last_verdict = v
+                if not v["ok"]:
+                    problem = f"replaying the loss through it: {v['why']}"
+            except Exception as e:  # noqa: BLE001
+                problem = f"it does not load: {str(e)[:200]}"
+        if problem is None and cand is not None and v is not None:
+            log(f"learn: accepted (round {rnd}): {v['why']}")
+            return {"pack": cand, "verdict": v, "yaml": y}
+        log(f"learn: round {rnd} rejected: {problem}")
+        if keep_rejected is not None and y:
+            keep_rejected.mkdir(parents=True, exist_ok=True)
+            (keep_rejected / f"rejected-{time.strftime('%H%M%S')}-{rnd}.yaml").write_text(y)
+        messages = messages + [{"role": "assistant", "content": text}, {"role": "user", "content": f"That revision was rejected: {problem}.\n{PACK_SCHEMA_HINT}\nReturn the whole corrected pack.yaml in one fenced yaml block."}]
+    return {"pack": None, "verdict": last_verdict, "yaml": last_yaml}
 
 
 class Bank:
