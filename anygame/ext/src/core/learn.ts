@@ -97,12 +97,27 @@ function separators(values: Values[]): string[] {
   return out;
 }
 
+/** A rule the candidate adds that tests a located read for an exact cell (equals/in on a locate read), or "". */
+export function cellRule(candidate: Pack, incumbent: Pack): string {
+  const old = new Set(incumbent.rules.map((r) => JSON.stringify(r)));
+  for (const r of candidate.rules) {
+    if (old.has(JSON.stringify(r))) continue;
+    const read = r.if?.read;
+    if (typeof read === "string" && candidate.reads[read]?.kind === "locate" && ("equals" in r.if || "in" in r.if)) return read;
+  }
+  return "";
+}
+
 /** Does the candidate handle the incident better than the incumbent, by replay alone? */
 export function verifyRevision(candidate: Pack, incumbent: Pack, inc: Incident, threshold = 0.7, maxOverblock = 0.34): Verdict {
   if (!inc.decisions.length) return { ok: false, why: "no decisions to replay", guarded: false, distinguished: [], overblocked: 0, support: 0 };
+  const narrow = cellRule(candidate, incumbent);
+  if (narrow) return { ok: false, why: `rule on ${narrow} tests the exact cell of a located read; it would fire only there`, guarded: false, distinguished: [], overblocked: 0, support: 0 };
   const c = replay(candidate, inc), i = replay(incumbent, inc);
   const support = Math.min(...c.support);
-  if (support < threshold) return { ok: false, why: `reads the incident screens worse (support ${support.toFixed(2)})`, guarded: false, distinguished: [], overblocked: 0, support };
+  // the candidate must read every incident frame at least as well as the incumbent did (or above the threshold)
+  const worse = c.support.findIndex((s, k) => s < Math.min(threshold, i.support[k] - 0.05));
+  if (worse >= 0) return { ok: false, why: `reads the incident screens worse (support ${c.support[worse].toFixed(2)} vs ${i.support[worse].toFixed(2)} at tick ${inc.decisions[worse].rec.tick})`, guarded: false, distinguished: [], overblocked: 0, support };
   const n = inc.decisions.length - 1;
   const fatalRec = inc.decisions[n].rec;
   const guarded = c.choices[n] !== (fatalRec.choice ?? "wait") && i.choices[n] === (fatalRec.choice ?? "wait");
@@ -135,10 +150,14 @@ export function incidentDigest(inc: Incident, episodes: Episode[] = []): string 
 export const REVISION_RULES =
   "Revise the pack so this loss cannot happen again, without a model being trained: grow the TYPED FRAME. You may add or " +
   "change derived reads (locate, runs, around, history on a read), questions, rules (exclude/set with if: {read…} or {noul…}), " +
-  "act_when/settle/stop_when and the play paragraph. Do not change zones or the pixel reads (color, ocr, templates, vocab, blobs) " +
-  "unless a frame shows one is wrong, and never remove a rule that fired correctly. The fatal decision must become impossible " +
+  "act_when/settle/stop_when and the play paragraph. You may ADD options to a colour read (a new symbol for something the frame " +
+  "shows that the typed frame is blind to, e.g. the player, an enemy, a gap, with its measured hex colour) and put locate/around/runs " +
+  "reads on it: that is how the typed frame gains a pattern it lacked. Do not remove or re-colour existing options, do not change zones, " +
+  "and never remove a rule that fired correctly. The fatal decision must become impossible " +
   "(a rule excludes it from the values the reads had at that tick) or visible (a new read separates that tick from the ordinary ones), " +
-  "and the ordinary decisions in the window must stay allowed. Every rule must only name reads that exist. " +
+  "and the ordinary decisions in the window must stay allowed. Every rule must only name reads that exist. A rule must " +
+  "generalise: never test the exact cell of a located read (it would fire only there); test relations instead (around, " +
+  "<dir>_free, <dir>_space, runs, history). " +
   "Return the whole pack.yaml in one fenced yaml block.";
 
 export const PACK_SCHEMA_HINT =

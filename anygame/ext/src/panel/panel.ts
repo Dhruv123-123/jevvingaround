@@ -320,6 +320,30 @@ async function runExplore() {
   $<HTMLButtonElement>("explore").disabled = false;
 }
 
+let userStopped = false;      // the stop button: ends the whole go sequence, not just the current phase
+
+/** One button. A pack from the pool or the store: play it. None: the explorer plays a minute, the author writes the
+ *  pack from that demonstration, then play. The fallback and learning are on, so the loop runs until stop. */
+async function go() {
+  userStopped = false;
+  ($("fallback") as HTMLInputElement).checked = true; ($("improve") as HTMLInputElement).checked = true;
+  const store = await load();
+  if (!packText(store, $<HTMLSelectElement>("pack").value)) {
+    const t = await currentTab();
+    if (!($("game") as HTMLInputElement).value.trim()) ($("game") as HTMLInputElement).value = (t.title ?? tabUrl).replace(/[|·—-].*$/, "").trim().slice(0, 80);
+    ($("authorbox") as HTMLDetailsElement).open = true;
+    log(`go: no pack for this tab: the explorer plays first, then the author writes the pack`);
+    await runExplore();
+    if (userStopped) return;
+    if (!demo || !demo.frames.length) { log("go: no demonstration; nothing to author from"); return; }
+    if ($<HTMLSelectElement>("sensor").value === "none") $<HTMLSelectElement>("sensor").value = "jev";
+    await runAuthor();
+    if (userStopped) return;
+    if (!$<HTMLSelectElement>("pack").value.endsWith(" (authored)")) { log("go: the author did not produce a pack"); return; }
+  }
+  await play();
+}
+
 async function stop() {
   stopping = true;
   await device?.close().catch(() => {});
@@ -389,7 +413,8 @@ async function main() {
   if (region) ($("regiontext") as HTMLInputElement).value = `${region.x},${region.y},${region.w},${region.h}`;
   checkPool(store);
   $("play").onclick = () => play().catch((e) => log(String(e)));
-  $("stop").onclick = () => stop();
+  $("stop").onclick = () => { userStopped = true; stop(); };
+  $("go").onclick = () => go().catch((e) => log(String(e)));
   $("apply").onclick = applyEdits;
   $("author").onclick = () => runAuthor().catch((e) => log(String(e)));
   $("record").onclick = () => toggleRecord().catch((e) => log(String(e)));

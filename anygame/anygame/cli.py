@@ -401,7 +401,9 @@ def cmd_learn(a):
     version, incumbent = bank.version, None
     log = lambda m: print(m, file=sys.stderr)  # noqa: E731
     try:
-        for n in range(len(bank.episodes) + 1, len(bank.episodes) + 1 + a.episodes):
+        import itertools
+        first = len(bank.episodes) + 1
+        for n in (itertools.count(first) if a.episodes <= 0 else range(first, first + a.episodes)):
             agent = Agent(pack, device, jev, None, log_path=str(bank.path / f"episode-{n}.jsonl"), max_ticks=a.max_ticks)
             agent.fallback, agent.goal = fallback, a.goal or ""
             recs, decisions = [], []
@@ -411,7 +413,7 @@ def cmd_learn(a):
                     decisions.append(Decision(rec, frame.copy()))
                     del decisions[:-8]
             agent.on_record = _rec
-            if n > 1 and hasattr(device, "reload"):
+            if hasattr(device, "reload"):
                 device.reload()          # after the agent is built (its OCR worker is warm), so the game does not run unattended
             try:
                 last = agent.run()
@@ -538,7 +540,7 @@ def main(argv=None):
     pl.add_argument("--record", help="save annotated frames here (then `anygame render`)"); pl.set_defaults(fn=cmd_play)
     ln = sub.add_parser("learn", help="play episode after episode; a loss becomes a revision that must replay better; keep what plays better")
     ln.add_argument("pack"); ln.add_argument("--device", default=os.environ.get("DEVICE", "adb")); ln.add_argument("--sensor", default="jev")
-    ln.add_argument("--episodes", type=int, default=5); ln.add_argument("--max-ticks", type=int, default=None); ln.add_argument("--goal", default=None)
+    ln.add_argument("--episodes", type=int, default=5, help="0 = forever"); ln.add_argument("--max-ticks", type=int, default=None); ln.add_argument("--goal", default=None)
     ln.add_argument("--fallback", action="store_true", help="VLM fallback on screens the pack cannot read (restart prompts, game-over cards)")
     ln.add_argument("--bank", default=None, help="where episodes and incidents go (default <pack>/bank)"); ln.add_argument("--out", default=None, help="the learned pack (default <pack>/pack.learned.yaml)")
     ln.add_argument("--fresh", action="store_true", help="ignore an existing learned pack"); ln.set_defaults(fn=cmd_learn)
@@ -559,6 +561,7 @@ def main(argv=None):
     ex.add_argument("--device", required=True); ex.add_argument("--out", required=True); ex.add_argument("--seconds", type=int, default=90)
     ex.add_argument("--game", default=""); ex.add_argument("--size", default="540x560"); ex.set_defaults(fn=cmd_explore)
     go = sub.add_parser("go", help="point it at a game: author a pack if none exists, then play with the HUD")
+    go.add_argument("--learn", type=int, default=None, metavar="EPISODES", help="after the pack is known: play episode after episode, learn from every loss (0 = forever)")
     go.add_argument("device", help="web://<url or file>, pyboy://<rom>, adb://<host:port>"); go.add_argument("--game", default=None, help="the game's name and anything the model should know")
     go.add_argument("--play", default=None, help="how you want it played"); go.add_argument("--packs", default=os.environ.get("ANYGAME_HOME", os.path.expanduser("~/.anygame/packs")))
     go.add_argument("--hud", type=int, default=int(os.environ.get("HUD_PORT", "8080"))); go.add_argument("--max-ticks", type=int, default=None); go.add_argument("--size", default="540x560")

@@ -125,14 +125,32 @@ def separators(values: list[dict[str, Any]]) -> list[str]:
     return [k for k, v in ff.items() if all(h.get(k) != v for h in hh)]
 
 
+def cell_rule(candidate: Pack, incumbent: Pack) -> str:
+    """A rule the candidate adds that tests a located read for an exact cell (equals/in on a locate read), or ''."""
+    old = {json.dumps(r, sort_keys=True) for r in incumbent.rules}
+    for r in candidate.rules:
+        if json.dumps(r, sort_keys=True) in old:
+            continue
+        read = (r.get("if") or {}).get("read")
+        if isinstance(read, str) and (candidate.reads.get(read) or {}).get("kind") == "locate" and ("equals" in r["if"] or "in" in r["if"]):
+            return read
+    return ""
+
+
 def verify_revision(candidate: Pack, incumbent: Pack, inc: Incident, threshold: float = 0.7, max_overblock: float = 0.34) -> dict[str, Any]:
     """Does the candidate handle the incident better than the incumbent, by replay alone?"""
     if not inc.decisions:
         return {"ok": False, "why": "no decisions to replay", "guarded": False, "distinguished": [], "overblocked": 0.0, "support": 0.0}
+    narrow = cell_rule(candidate, incumbent)
+    if narrow:
+        return {"ok": False, "why": f"rule on {narrow} tests the exact cell of a located read; it would fire only there", "guarded": False, "distinguished": [], "overblocked": 0.0, "support": 0.0}
     c, i = replay(candidate, inc), replay(incumbent, inc)
     support = min(c["support"])
-    if support < threshold:
-        return {"ok": False, "why": f"reads the incident screens worse (support {support:.2f})", "guarded": False, "distinguished": [], "overblocked": 0.0, "support": support}
+    # the candidate must read every incident frame at least as well as the incumbent did (or above the threshold)
+    worse = next((k for k, s in enumerate(c["support"]) if s < min(threshold, i["support"][k] - 0.05)), None)
+    if worse is not None:
+        return {"ok": False, "why": f"reads the incident screens worse (support {c['support'][worse]:.2f} vs {i['support'][worse]:.2f} at tick {inc.decisions[worse].rec.get('tick')})",
+                "guarded": False, "distinguished": [], "overblocked": 0.0, "support": support}
     n = len(inc.decisions) - 1
     fatal = inc.decisions[n].rec.get("choice") or "wait"
     guarded = c["choices"][n] != fatal and i["choices"][n] == fatal
@@ -170,10 +188,14 @@ def incident_digest(inc: Incident, episodes: list[dict[str, Any]] | None = None)
 REVISION_RULES = (
     "Revise the pack so this loss cannot happen again, without a model being trained: grow the TYPED FRAME. You may add or "
     "change derived reads (locate, runs, around, history on a read), questions, rules (exclude/set with if: {read…} or {noul…}), "
-    "act_when/settle/stop_when and the play paragraph. Do not change zones or the pixel reads (color, ocr, templates, vocab, blobs) "
-    "unless a frame shows one is wrong, and never remove a rule that fired correctly. The fatal decision must become impossible "
+    "act_when/settle/stop_when and the play paragraph. You may ADD options to a colour read (a new symbol for something the frame "
+    "shows that the typed frame is blind to, e.g. the player, an enemy, a gap, with its measured hex colour) and put locate/around/runs "
+    "reads on it: that is how the typed frame gains a pattern it lacked. Do not remove or re-colour existing options, do not change zones, "
+    "and never remove a rule that fired correctly. The fatal decision must become impossible "
     "(a rule excludes it from the values the reads had at that tick) or visible (a new read separates that tick from the ordinary ones), "
-    "and the ordinary decisions in the window must stay allowed. Every rule must only name reads that exist. "
+    "and the ordinary decisions in the window must stay allowed. Every rule must only name reads that exist. A rule must "
+    "generalise: never test the exact cell of a located read (it would fire only there); test relations instead (around, "
+    "<dir>_free, <dir>_space, runs, history). "
     "Return the whole pack.yaml in one fenced yaml block.")
 
 PACK_SCHEMA_HINT = (

@@ -41,13 +41,9 @@ def read_all(pack: Pack, frame: np.ndarray, only: set[str] | None = None, tick: 
             if fut is None and (tick % every == 1 or not have_prev):
                 fut = pool.submit(_read_one, pack, frame, rid, tick)
                 pending[rid] = fut
-                if not have_prev:
-                    v, d, t = fut.result()   # first value: wait once so the state is complete
-                    del pending[rid]
-                    values[rid] = v.get(rid)
-                    timings[rid] = t.get(rid, 0.0)
-                    continue
-            values[rid] = previous[rid]
+            # never wait: the first OCR of a run can take seconds (the model loads on the first real frame), and a
+            # real-time game does not pause for it; until the value arrives the read is its `otherwise` (or null)
+            values[rid] = previous[rid] if have_prev else r.get("otherwise")
             continue
         if every > 1 and tick % every != 1 and previous is not None and rid in previous:
             values[rid] = previous[rid]

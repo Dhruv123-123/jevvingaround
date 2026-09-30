@@ -50,8 +50,25 @@ minute or two, from one of three sources: the human (*record me* in the extensio
 and clicks while the panel captures frames), the **explorer** (the VLM plays slowly, one input every few seconds,
 each with a one-line intent), or the probe. The digest hands the author the action set as used, click clusters as
 candidate zones, the regions that change after inputs, before/after frame pairs, and the intents as raw material
-for the paragraph. *Keep improving* runs a tune round in the background every forty decisions or on a loss and
-hot-swaps the pack when the revision still reads the current screens.
+for the paragraph.
+
+## Learning from experience
+
+No model is trained, so the runtime grows the **typed frame** instead. Every game played is an **episode** in a
+bank. A loss becomes an **incident**: the last decisions with their frames, Jev's probabilities and the rules
+that fired. The chat model revises the pack (derived reads, rules, questions, paragraph; never the zones or the
+pixel reads), and the revision is accepted only if it **replays** better than the incumbent on that incident:
+Jev's recorded answers go back through the candidate's reads and rules, and the fatal decision must now be
+excluded by a rule or separated by a new read, the ordinary decisions must stay allowed, and the screens must
+still read (`anygame/learn.py`, `ext/src/core/learn.ts`). A revision then plays on trial: if its episode is
+worse than the incumbent's median episode it is reverted. The game restarts by reloading the tab. In the
+extension this is *keep learning* on the play button; in the CLI it is `anygame learn`. Replay costs no model
+call, so a bad revision is rejected in milliseconds. [ARCHITECTURE.md](ARCHITECTURE.md) has the whole loop and
+its mapping onto SIMA 2.
+
+The **pool** (`packs/pool.json`) indexes every pack by site and by the fingerprints of its screens
+(`anygame stamp` writes them into the packs). The extension checks it when the panel opens, matching the visible
+tab by screen when the site is unknown; `anygame go` does the same before authoring anything.
 
 ## Point it at a game
 
@@ -349,6 +366,8 @@ anygame go <device> [--game "…"] [--play "…"] [--pack <bundled>]        # au
 anygame author --device <url> --game "<name>" --out packs/<name> [--play "…"] [--rounds 3] [--play-ticks 40 --tune 2] [--demo <dir>]
 anygame explore --device <url> --out <dir> --seconds 90 --game "…"        # the vision model plays and writes a demonstration
 anygame play <pack> --device <url> --fallback [--goal "…"]                # VLM on unknown screens; learned pack written next to the original
+anygame learn <pack> --device <url> --episodes 5 [--fallback] [--max-ticks N]   # episodes; a loss → a replay-verified revision; keep what plays better
+anygame stamp [pack …]                                                    # fixture fingerprints into pack.yaml, for the pool
 anygame battle <pack-a> <pack-b> --device <url> [--sensor-a …] [--sensor-b …]
 anygame bench <pack> --device "<url with {seed}>" --sensor jev|random|llm:<model> --seeds 1,2,3 [--score-read score]
 ```
