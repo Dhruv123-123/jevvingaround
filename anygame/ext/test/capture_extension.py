@@ -63,7 +63,7 @@ with sync_playwright() as p:
     game.goto("file://" + os.path.join(GAMES, "snake.html") + "?seed=4&tick=900&menu=1"); game.wait_for_load_state("load")
     tab_id = sw.evaluate("async () => { const [t] = await chrome.tabs.query({}); return t.id; }")
     panel = ctx.new_page()
-    panel.set_viewport_size({"width": 420, "height": 900})
+    panel.set_viewport_size({"width": 480, "height": 680})
     panel.goto(f"chrome-extension://{ext_id}/panel.html?tab={tab_id}")
     assert wait_text(panel, "#log", "ready", 15)
     panel.click("#settings summary")
