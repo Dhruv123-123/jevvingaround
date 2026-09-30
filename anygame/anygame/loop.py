@@ -77,6 +77,16 @@ class Agent:
         from concurrent.futures import ProcessPoolExecutor
         self.pool = ProcessPoolExecutor(max_workers=1, mp_context=multiprocessing.get_context("fork")) if any(int(r.get("every", 1)) > 1 for r in self.pack.reads.values()) else None
         self.pending: dict[str, Any] = {}
+        if self.pool is not None:
+            # warm the worker (fork + OCR model load, ~2 s) before the first tick, so a real-time game does not run
+            # unattended while the first slow read blocks
+            import numpy as _np
+            from .perceive import _read_one
+            slow = next(rid for rid, r in self.pack.reads.items() if int(r.get("every", 1)) > 1)
+            try:
+                self.pool.submit(_read_one, self.pack, _np.zeros((self.pack.size[1], self.pack.size[0], 3), _np.uint8), slow, 1).result(timeout=60)
+            except Exception:  # noqa: BLE001
+                pass
         self.tick = 0
         self.total_cost = 0.0
         self.last_hash = None
