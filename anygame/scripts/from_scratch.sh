@@ -6,7 +6,7 @@ set -uo pipefail
 NAME="$1"; URL="$2"; GAME="$3"; EPISODES="${4:-6}"; MAX="${5:-400}"; OUT="${6:-/tmp/anygame-scratch}"
 cd "$(dirname "$0")/.."
 mkdir -p "$OUT/$NAME"
-anygame go "$URL" --game "$GAME" --fresh --explore "${EXPLORE_SECONDS:-60}" --learn "$EPISODES" --max-ticks "$MAX" --packs "$OUT/$NAME/packs" --hud 0 --sensor jev 2>&1 | grep --line-buffered -vE "^\s*(-|[0-9]+ ×)|Warning" | tee "$OUT/$NAME/log.txt"
+anygame go "$URL" --game "$GAME" --fresh --explore "${EXPLORE_SECONDS:-60}" --learn "$EPISODES" --rounds "${ROUNDS:-3}" --max-ticks "$MAX" --packs "$OUT/$NAME/packs" --hud 0 --sensor jev 2>&1 | grep --line-buffered -vE "^\s*(-|[0-9]+ ×)|Warning" | tee "$OUT/$NAME/log.txt"
 # a clip with whatever the loop ended with
 LEARNED=$(ls "$OUT/$NAME"/packs/*/pack.learned.yaml 2>/dev/null | head -1); PACK="${LEARNED:-$(ls "$OUT/$NAME"/packs/*/pack.yaml 2>/dev/null | head -1)}"
 if [ -n "$PACK" ]; then
