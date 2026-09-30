@@ -200,3 +200,26 @@ def test_clm_sensor_speaks_the_systemone_protocol_against_the_stub():
         assert r1["jev_ms"] is not None and r2["screen"]["head"] == "c12r7" and r2["choice"] != "right"
     finally:
         srv.terminate()
+
+
+def test_requery_asks_the_decider_again_with_the_candidate_frame():
+    import subprocess, sys, time, socket
+    from anygame.sensors import open_sensor
+    from anygame.learn import requery
+    port = 8791
+    srv = subprocess.Popen([sys.executable, os.path.join(ROOT, "test", "clm_stub.py"), str(port)], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    try:
+        for _ in range(50):
+            try:
+                socket.create_connection(("127.0.0.1", port), timeout=0.2).close(); break
+            except OSError:
+                time.sleep(0.1)
+        s = open_sensor(f"clm:http://127.0.0.1:{port}", timeout=2.0)
+        inc = snake_incident()
+        # the stub picks the first option named in the state text: with the stripped pack the frame has no "wall"/"up"
+        # cue, so it keeps choosing the first option; with the full pack the rules exclude "right" at the wall
+        r_full = requery(s, full(), inc)
+        assert len(r_full["choices"]) == 3 and r_full["fatal_avoided"] and r_full["choices"][2] != "right"
+        assert 0.0 <= r_full["agreement"] <= 1.0 and r_full["cost_usd"] >= 0
+    finally:
+        srv.terminate()

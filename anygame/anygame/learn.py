@@ -108,6 +108,48 @@ def replay(pack: Pack, inc: Incident) -> dict[str, list]:
     return {"values": values, "choices": choices, "applied": applied, "support": support}
 
 
+def requery(sensor, pack: Pack, inc: Incident, log=lambda m: None) -> dict[str, Any]:
+    """Ask the frozen decider again, offline, on the incident's banked states, with THIS pack's typed frame, paragraph
+    and questions, then run this pack's rules on the fresh answers. The decider cannot be trained, but it can be
+    re-asked: this scores a revision by what it would decide now, not only by replaying what it decided then.
+    Returns {choices, probs, fatal_avoided, agreement (fraction of ordinary ticks where the fresh choice equals the
+    recorded one), cost_usd}."""
+    from .loop import Agent
+    from .device.base import Device
+
+    class _Still(Device):
+        def size(self):
+            return pack.size
+
+    ag = Agent(pack, _Still(), None)
+    choices, probs, cost = [], [], 0.0
+    try:
+        for k, d in enumerate(inc.decisions):
+            v, _, _ = ag.observe(d.frame, pack, want_conf=True, state=d.state)
+            ag.last_values = v
+            st = {"game": pack.name, "tick": d.rec.get("tick", k), "how_to_play": pack.play, "screen": v,
+                  "recent_actions": [x.rec.get("action") for x in inc.decisions[max(0, k - 6):k]], "last_action_changed_screen": True, "actions_that_did_nothing_since_last_change": []}
+            try:
+                res = sensor.ask(st, ag.questions(v))
+            except Exception as e:  # noqa: BLE001
+                log(f"requery: sensor failed at tick {d.rec.get('tick')}: {str(e)[:80]}")
+                choices.append(None); probs.append(None)
+                continue
+            answers = res["answers"]
+            ag._apply_rules(answers, v)
+            choices.append((answers.get("action") or {}).get("choice"))
+            probs.append((answers.get("action") or {}).get("probabilities"))
+            cost += float(res.get("cost_usd") or 0.0)
+    finally:
+        if ag.pool is not None:
+            ag.pool.shutdown(wait=False)
+    n = len(inc.decisions) - 1
+    fatal = inc.decisions[n].rec.get("choice")
+    ordinary = [k for k in range(n) if choices[k] is not None]
+    agreement = (sum(1 for k in ordinary if choices[k] == inc.decisions[k].rec.get("choice")) / len(ordinary)) if ordinary else 1.0
+    return {"choices": choices, "probs": probs, "fatal_avoided": choices[n] is not None and choices[n] != fatal, "agreement": agreement, "cost_usd": round(cost, 6)}
+
+
 def _get_path(values: dict[str, Any], path: str | None) -> Any:
     cur: Any = values
     for part in str(path or "").split("."):
