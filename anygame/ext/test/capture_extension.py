@@ -9,6 +9,7 @@ EXT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "dist"))
 GAMES = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "games"))
 CHROME = "/opt/pw-browsers/chromium-1194/chrome-linux/chrome"
 OUT = sys.argv[1] if len(sys.argv) > 1 else "capture"
+SCENES = sys.argv[2].split(",") if len(sys.argv) > 2 else ["hybrid", "author"]
 keys = {"openrouter": os.environ.get("OPENROUTER_API_KEY", ""), "llmBase": os.environ["ANYGAME_LLM_BASE"], "llmKey": os.environ["ANYGAME_LLM_KEY"], "llmModel": os.environ["ANYGAME_LLM_MODEL"]}
 
 
@@ -71,22 +72,27 @@ with sync_playwright() as p:
     panel.click("#settings summary")
 
     # ---- scene 1: Jev plays Snake; the start prompt and the game-over card go to the VLM fallback ----
-    sh = Shooter(game, panel, "hybrid")
-    panel.select_option("#pack", "snake"); panel.select_option("#sensor", "jev")
-    sh.shot("setup"); time.sleep(0.5); sh.shot("setup")
-    game.bring_to_front(); panel.click("#play")
-    started = {"v": False}; over = {"v": False}; restarted = {"v": False}
-    def prog():
-        s = game.evaluate("window.__state()")
-        if s.get("started"): started["v"] = True
-        if started["v"] and s.get("over"): over["v"] = True
-        if over["v"] and s.get("started") and not s.get("over"): restarted["v"] = True
-        return restarted["v"]
-    sh.run_until(prog, 200, note="playing")
-    sh.run_until(lambda: False, 12, note="after restart")
-    if panel.is_enabled("#stop"): panel.click("#stop")
-    sh.shot("stopped"); sh.save()
-    print("scene hybrid:", {"started": started["v"], "over": over["v"], "restarted": restarted["v"], "frames": sh.n})
+    if "hybrid" in SCENES:
+        sh = Shooter(game, panel, "hybrid")
+        panel.select_option("#pack", "snake"); panel.select_option("#sensor", "jev")
+        sh.shot("setup"); time.sleep(0.5); sh.shot("setup")
+        game.bring_to_front(); panel.click("#play")
+        started = {"v": False}; over = {"v": False}; restarted = {"v": False}
+
+        def prog():
+            s = game.evaluate("window.__state()")
+            if s.get("started"): started["v"] = True
+            if started["v"] and s.get("over"): over["v"] = True
+            if over["v"] and s.get("started") and not s.get("over"): restarted["v"] = True
+            return restarted["v"]
+
+        sh.run_until(prog, 200, note="playing")
+        sh.run_until(lambda: False, 12, note="after restart")
+        if panel.is_enabled("#stop"): panel.click("#stop")
+        sh.shot("stopped"); sh.save()
+        print("scene hybrid:", {"started": started["v"], "over": over["v"], "restarted": restarted["v"], "frames": sh.n})
+    if "author" not in SCENES:
+        ctx.close(); sys.exit(0)
 
     # ---- scene 2: record me on tic-tac-toe, then author from the recording ----
     game.goto("file://" + os.path.join(GAMES, "tictactoe.html") + "?seed=8"); game.wait_for_load_state("load")

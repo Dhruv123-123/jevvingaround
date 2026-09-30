@@ -397,6 +397,28 @@ export class Agent {
       const d = this.fallback.recall(fp);
       if (d) { rec.action = await this.actFallback(d.now); rec.fallback = `memo transient: ${JSON.stringify(d.now)}`; rec.reason = "known transient screen"; return done(rec); }
     }
+    // ---- the hybrid: a screen the pack cannot read goes to the VLM, which acts now and may define a mode
+    if (!supported && !cls.known) {
+      this.missTicks++;
+      if (this.fallback && this.missTicks >= Number(this.base.raw.miss_ticks ?? 2)) {
+        const d = await this.fallback.decide(frame, this.pack, this.goal || this.base.play.slice(0, 300), this.history.slice(-6).map((x) => x.action), palette(frame, 8));
+        rec.fallback = `${d.memo ? "memo" : "vlm"} ${d.screen}${d.name ? " " + d.name : ""}: ${JSON.stringify(d.now)}${d.note ? " — " + d.note : ""}`;
+        if (!d.memo) this.fallbackCalls++;
+        rec.action = await this.actFallback(d.now);
+        rec.reason = `unsupported screen (support ${rec.support}) → fallback`;
+        if (d.screen === "mode" && d.mode && d.name) this.mergeMode(d.name, d.mode, d.expect ?? {}, frame, fp);
+        else if (d.screen === "transient" && d.name) { this.fps.add(`transient:${d.name}`, fp); this.base.fingerprints[`transient:${d.name}`] = fpToBase64(fp); this.base.raw.fingerprints = this.base.fingerprints; this.onPackChange?.(dumpPack(this.base.raw), `learned transient screen ${d.name}`); }
+        this.history.push({ tick: this.tick, action: rec.action, choice: "fallback", key: "fallback" });
+        this.missTicks = 0;
+        return done(rec);
+      }
+      if (this.fallback) { rec.action = "wait"; rec.reason = `unsupported screen (support ${rec.support}), ${this.missTicks} tick(s)`; return done(rec); }
+    } else this.missTicks = 0;
+    if (cls.known?.startsWith("transient:") && this.fallback) {
+      // a remembered dismissable screen: replay its memoised input without a model call
+      const d = this.fallback.recall(fp);
+      if (d) { rec.action = await this.actFallback(d.now); rec.fallback = `memo transient: ${JSON.stringify(d.now)}`; rec.reason = "known transient screen"; return done(rec); }
+    }
     const stop = this.pack.raw.stop_when;
     if (stop && this.cond(stop, values)) { rec.action = "stop"; rec.reason = `${stop.read} is ${get(values, stop.read)}`; return done(rec); }
     const gate = this.pack.raw.act_when;
