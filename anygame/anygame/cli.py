@@ -356,6 +356,86 @@ def _panel(frame, rec, total_cost, width=330):
     return out
 
 
+
+def cmd_learn(a):
+    """Episodes: play until the game ends, bank the episode, learn from a loss (a revision that must replay better than
+    the pack it replaces), restart, and keep the revision only if it plays better than the incumbent's median episode."""
+    from .chat import Chat
+    from .device import open_device
+    from .fallback import VLMFallback
+    from .learn import Bank, Decision, better_episode, improve, incident_of, median_episode, outcome
+    from .loop import Agent
+    from .pack import dump_pack, load_pack, load_pack_text
+    from .sensors import open_sensor
+    src = Path(find_pack(a.pack))
+    pack = load_pack(src)
+    pack_dir = src.parent
+    bank = Bank(a.bank or (pack_dir / "bank"))
+    learned = Path(a.out or (pack_dir / "pack.learned.yaml"))
+    if learned.exists() and not a.fresh:
+        pack = load_pack_text(learned.read_text(), pack.name)
+        print(f"continuing from {learned} (v{bank.version})", file=sys.stderr)
+    chat = Chat()
+    device = open_device(a.device, pack.size)
+    jev = open_sensor(a.sensor, timeout=float(pack.raw.get("sensor_timeout_s", os.environ.get("ANYGAME_JEV_TIMEOUT", "4"))))
+    fallback = VLMFallback(chat) if a.fallback else None
+    score_read = pack.raw.get("score_read") or ("score" if "score" in pack.reads else None)
+    version, incumbent = bank.version, None
+    log = lambda m: print(m, file=sys.stderr)  # noqa: E731
+    try:
+        for n in range(len(bank.episodes) + 1, len(bank.episodes) + 1 + a.episodes):
+            agent = Agent(pack, device, jev, None, log_path=str(bank.path / f"episode-{n}.jsonl"), max_ticks=a.max_ticks)
+            agent.fallback, agent.goal = fallback, a.goal or ""
+            recs, decisions = [], []
+            def _rec(rec, frame):
+                recs.append(rec)
+                if rec.get("choice") and rec.get("choice") != "fallback":
+                    decisions.append(Decision(rec, frame.copy()))
+                    del decisions[:-8]
+            agent.on_record = _rec
+            try:
+                last = agent.run()
+            finally:
+                agent.close()
+            ep = outcome(recs, n, version, score_read)
+            log(f"episode {n}: {last.get('action')}{' · ' + str(last.get('reason')) if last.get('reason') else ''} after {agent.tick} ticks, ${agent.total_cost:.4f}" + (f", score {ep['score']}" if ep["score"] is not None else ""))
+            if incumbent is not None:
+                ref = median_episode(bank.of_version(incumbent[1]))
+                if ref and better_episode(ep, ref) and not better_episode(ref, ep):
+                    log(f"learn: v{version} played worse than v{incumbent[1]} ({ep['ticks']} vs {ref['ticks']} ticks); reverting")
+                    pack, version = load_pack_text(incumbent[0], pack.name), incumbent[1]
+                    ep["version"] = version
+                else:
+                    log(f"learn: v{version} stays ({ep['ticks']} ticks vs the incumbent's median {ref['ticks'] if ref else 'n/a'})")
+                    learned.write_text(dump_pack(pack.raw))
+                incumbent = None
+            bank.add_episode(ep)
+            if ep["lost"] and decisions:
+                inc = incident_of(decisions, ep["reason"], agent.tick)
+                d = bank.add_incident(inc)
+                log(f"learn: incident saved to {d}")
+                try:
+                    res = improve(chat, pack, inc, bank.episodes, log)
+                except Exception as e:  # noqa: BLE001
+                    res = {"pack": None}
+                    log(f"learn: {str(e)[:140]}")
+                if res.get("pack") is not None:
+                    incumbent = (dump_pack(pack.raw), version)
+                    version += 1
+                    pack = res["pack"]
+                    bank.save_version(version, dump_pack(pack.raw))
+                    learned.write_text(dump_pack(pack.raw))
+                    log(f"learn: v{version} on trial: {res['verdict']['why']}")
+            if n < len(bank.episodes) + a.episodes and hasattr(device, "reload"):
+                device.reload()
+    finally:
+        device.close()
+    best = max(bank.episodes, key=lambda e: (e.get("won", False), not e.get("lost", True), e.get("ticks", 0), e.get("score") or 0))
+    summary = {"episodes": len(bank.episodes), "version": version, "learned": str(learned) if learned.exists() else None,
+               "best": {"n": best["n"], "ticks": best["ticks"], "reason": best["reason"], "score": best.get("score"), "version": best["version"]},
+               "by_version": {str(v): [e["ticks"] for e in bank.of_version(v)] for v in sorted({e["version"] for e in bank.episodes})}}
+    print(json.dumps(summary, indent=1))
+
 def cmd_render(a):
     """Frames from --record → an MP4 (ffmpeg from Playwright's bundle or PATH). With --log, each frame gets a
     side panel with that tick's action, probabilities, beliefs, rules, latency and cost."""
@@ -429,6 +509,12 @@ def main(argv=None):
     pl.add_argument("--hud", type=int, default=int(os.environ.get("HUD_PORT", "8080"))); pl.add_argument("--no-hud", dest="hud", action="store_const", const=0); pl.add_argument("--log", default="anygame.log.jsonl")
     pl.add_argument("--max-ticks", type=int); pl.add_argument("--hold", action="store_true", help="keep the HUD up after the game ends")
     pl.add_argument("--record", help="save annotated frames here (then `anygame render`)"); pl.set_defaults(fn=cmd_play)
+    ln = sub.add_parser("learn", help="play episode after episode; a loss becomes a revision that must replay better; keep what plays better")
+    ln.add_argument("pack"); ln.add_argument("--device", default=os.environ.get("DEVICE", "adb")); ln.add_argument("--sensor", default="jev")
+    ln.add_argument("--episodes", type=int, default=5); ln.add_argument("--max-ticks", type=int, default=None); ln.add_argument("--goal", default=None)
+    ln.add_argument("--fallback", action="store_true", help="VLM fallback on screens the pack cannot read (restart prompts, game-over cards)")
+    ln.add_argument("--bank", default=None, help="where episodes and incidents go (default <pack>/bank)"); ln.add_argument("--out", default=None, help="the learned pack (default <pack>/pack.learned.yaml)")
+    ln.add_argument("--fresh", action="store_true", help="ignore an existing learned pack"); ln.set_defaults(fn=cmd_learn)
     rd = sub.add_parser("render"); rd.add_argument("dir"); rd.add_argument("--out", default="demo.mp4"); rd.add_argument("--fps", type=float, default=4); rd.add_argument("--log", default=None, help="the run's --log file: draws a side panel per tick"); rd.set_defaults(fn=cmd_render)
     ev = sub.add_parser("eval"); ev.add_argument("pack"); ev.add_argument("--sensor", default="none", help="jev | none | random | llm:<model>"); ev.set_defaults(fn=cmd_eval)
     au = sub.add_parser("author", help="a slow model writes the pack from probe frames; the runtime checks it")

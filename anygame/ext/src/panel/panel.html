@@ -40,7 +40,7 @@
       <label><input type="checkbox" id="fallback" checked> VLM fallback on screens the pack cannot read (learns them)</label>
     </div>
     <div class="row">
-      <label><input type="checkbox" id="improve"> keep improving the pack while it plays (a tune round every 40 decisions or on a loss)</label>
+      <label><input type="checkbox" id="improve"> keep learning: after a loss the model revises the pack, the revision must replay better on that loss, the game restarts, and a revision that plays worse is reverted</label>
     </div>
     <details id="authorbox">
       <summary>no pack for this game? write one</summary>

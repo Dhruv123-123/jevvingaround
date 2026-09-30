@@ -50,7 +50,7 @@ export class Chat {
         throw new Error(`${this.base}: ${(e as Error).message}`);
       }
       clearTimeout(timer);
-      if (r.status === 429 && attempt < 3) { await new Promise((res) => setTimeout(res, 8000 * (attempt + 1))); continue; }
+      if ((r.status === 429 || r.status >= 500) && attempt < 3) { await new Promise((res) => setTimeout(res, (r!.status === 429 ? 8000 : 4000) * (attempt + 1))); continue; }   // rate limit or a gateway blip: the run is worth more than a retry
       if (r.status === 402) throw new Error(`${this.base} refused the call (402): add credits or point the model settings at another endpoint`);
       if (r.status !== 200) throw new Error(`${this.api} ${r.status}: ${(await r.text()).slice(0, 300)}`);
       break;

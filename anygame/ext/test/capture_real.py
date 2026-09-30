@@ -35,6 +35,7 @@ class Shooter:
         try:
             self.game.screenshot(path=os.path.join(self.dir, f"g{self.n:05d}.png"))
             self.panel.screenshot(path=os.path.join(self.dir, f"p{self.n:05d}.png"))
+            open(os.path.join(self.dir, "panel.log"), "w").write(self.panel.text_content("#log") or "")
             self.meta.append({"n": self.n, "t": round(time.time() - self.t0, 2), "hybrid": (self.panel.text_content("#hybrid") or "").strip(),
                               "action": (self.panel.text_content("#action") or "").strip(), "note": note,
                               "log_tail": (self.panel.text_content("#log") or "").strip().split("\n")[-1],
@@ -82,9 +83,16 @@ with sync_playwright() as p:
     print("explore:", (panel.text_content("#demoinfo") or "").strip())
     # --- author from it ---
     game.reload(); time.sleep(4); game.bring_to_front()
-    panel.select_option("#sensor", "jev"); panel.click("#author")
-    sh.run_until(lambda: "author done" in (panel.text_content("#log") or ""), 1800, period=1.5, note="authoring")
-    info = (panel.text_content("#authorinfo") or "").strip()
+    panel.select_option("#sensor", "jev")
+    info = ""
+    for attempt in range(3):   # a gateway blip on the authoring model is not a reason to play the wrong pack
+        panel.click("#author")
+        seen = len((panel.text_content("#log") or "").split("\n"))
+        sh.run_until(lambda: any(l.startswith(("author done", "author:")) for l in (panel.text_content("#log") or "").split("\n")[seen:]), 1800, period=1.5, note="authoring")
+        info = (panel.text_content("#authorinfo") or "").strip()
+        if "passes" in info or "saved" in info: break
+        print("author attempt", attempt + 1, "failed:", (panel.text_content("#log") or "").strip().split("\n")[-1][:160]); time.sleep(5)
+    if not info: print("author never produced a pack; not playing"); sh.save(); ctx.close(); sys.exit(2)
     print("author:", info, [l for l in (panel.text_content("#log") or "").split("\n") if l.startswith(("using a", "round", "play", "tune"))])
     # --- Jev plays it, fallback on ---
     game.reload(); time.sleep(4); game.bring_to_front()

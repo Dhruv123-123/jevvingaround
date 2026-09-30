@@ -23,7 +23,10 @@ typed actions); it has hit a screen it cannot read. You see the frame. Answer wi
   "name": "<short snake_case name for this screen>",
   "note": "<one line: what this screen is and why that input>",
   "mode": { ... }           // only for "mode": how to play THIS screen, same keys as a pack (zones with rect_px, read with
-                            // colour options, act, play, questions, rules, act_when, stop_when), as a JSON object
+                            // colour options, act, play, questions, rules, act_when, stop_when), as a JSON object.
+                            // Read kinds that exist, nothing else: color {zone, options: {name: "#hex"}, max_dist, otherwise},
+                            // ocr {zone, parse: int}, locate {in: <matrix read>, symbol}, around {of, in, free}, runs {in, symbol},
+                            // bar {zone, color}, templates. A read with any other kind is rejected and the mode is lost.
   "expect": { "<read id>": <value>, ... }   // for "mode": what the mode's reads must return on this exact frame
 }
 "transient" is a dialog, overlay or animation that one input dismisses: give the input in "now" and no mode. "mode" is

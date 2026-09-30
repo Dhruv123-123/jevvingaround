@@ -96,6 +96,13 @@ export class TabDevice implements Device {
     await this.send("Input.dispatchKeyEvent", { type: "keyUp", ...base });
   }
 
+  /** Reload the page: the cheapest restart for a browser game between episodes. */
+  async reload(): Promise<void> {
+    await this.attach();
+    await this.send("Page.reload", { ignoreCache: false });
+    await new Promise((r) => setTimeout(r, 2500));
+  }
+
   async close(): Promise<void> {
     if (!this.attached) return;
     this.attached = false;

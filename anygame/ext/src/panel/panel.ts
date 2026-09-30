@@ -1,14 +1,16 @@
 // The side panel is the whole runtime: it captures the game tab, runs the pack, calls the sensor, sends input,
 // and shows the decision panel. Packs are bundled or authored here and cached in extension storage.
 import yaml from "js-yaml";
-import { Agent, BUNDLED_PACKS, loadPack, openSensor, Chat, VLMFallback, explore, digest as demoDigest, type Demo, type DemoEvent, type Keys, type Pack, type Rec, type Sensor } from "../core/index.js";
+import { Agent, BUNDLED_PACKS, loadPack, dumpPack, openSensor, Chat, VLMFallback, explore, digest as demoDigest, outcome, betterEpisode, medianEpisode, incidentOf, improve, LOST, type Decision, type Episode, type Incident, type Demo, type DemoEvent, type Keys, type Pack, type Rec, type Sensor } from "../core/index.js";
 import { author, checkPack, extractYaml, withFingerprints, frameToDataUrl } from "../core/author.js";
 import { TabDevice, type Region } from "../device/tab.js";
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const log = (m: string) => { const el = $("log"); el.textContent = (el.textContent + "\n" + m).split("\n").slice(-200).join("\n"); el.scrollTop = el.scrollHeight; };
 
-interface Store { keys?: Keys; sensor?: string; regions?: Record<string, Region>; packs?: Record<string, string>; packFor?: Record<string, string> }
+interface StoredIncident { reason: string; tick: number; at: string; recs: Rec[]; frames: string[] }
+interface StoredBank { episodes: Episode[]; incidents: StoredIncident[]; version: number }
+interface Store { keys?: Keys; sensor?: string; regions?: Record<string, Region>; packs?: Record<string, string>; packFor?: Record<string, string>; bank?: Record<string, StoredBank> }
 async function load(): Promise<Store> { return (await chrome.storage.local.get(null)) as Store; }
 async function save(patch: Partial<Store>) { await chrome.storage.local.set(patch); }
 
@@ -167,63 +169,73 @@ async function play() {
     await save({ packs: { ...(s.packs ?? {}), [key]: y }, packFor: { ...(s.packFor ?? {}), [originOf(tabUrl)]: `${key} (authored)` } });
     if (!name.endsWith(" (authored)")) { currentPackName = `${key} (authored)`; await refreshPacks(await load()); $<HTMLSelectElement>("pack").value = currentPackName; }
   };
-  const records: Rec[] = [];
-  const shots: import("../core/geometry.js").Frame[] = [];
-  let sinceTune = 0, tuning = false;
-  agent.onRecord = (rec, frame) => {
-    showRec(rec);
-    records.push(rec); if (records.length > 400) records.shift();
-    if (rec.choice) { shots.push(frame); if (shots.length > 30) shots.shift(); sinceTune++; }
-    const lost = /lost|dead|over/.test(String(rec.reason ?? ""));
-    if (($("improve") as HTMLInputElement).checked && !tuning && (sinceTune >= 40 || (lost && sinceTune > 5))) { sinceTune = 0; tuning = true; improveOnce(records.slice(), shots.slice()).finally(() => { tuning = false; }); }
-  };
+  let ag: Agent = agent;
+  const learning = ($("improve") as HTMLInputElement).checked;
+  const packKey = name.replace(" (authored)", "");
+  const bank: StoredBank = (store.bank ?? {})[packKey] ?? { episodes: [], incidents: [], version: 1 };
+  let version = bank.version;
+  let incumbent: { yaml: string; version: number } | null = null;     // set while a candidate revision is on trial
   $("playtext").textContent = pack.play; ($("playtext") as HTMLTextAreaElement).value = pack.play;
   ($("rulestext") as HTMLTextAreaElement).value = pack.rules.length ? yaml.dump(pack.rules) : "";
   $<HTMLButtonElement>("play").disabled = true; $<HTMLButtonElement>("stop").disabled = false; $<HTMLButtonElement>("author").disabled = true;
   stopping = false;
-  log(`playing ${pack.name} on tab ${device.tabId} with ${sensorSpec} · frame ${device.size().join("x")}`);
-  try {
-    const last = await agent.run(() => stopping);
-    log(`done: ${last.action}${last.reason ? " · " + last.reason : ""} after ${agent.tick} ticks, $${agent.totalCost.toFixed(4)}`);
-  } catch (e) { log(`error: ${(e as Error).message}`); }
+  log(`playing ${pack.name} on tab ${device.tabId} with ${sensorSpec} · frame ${device.size().join("x")}${learning ? ` · learning (pack v${version}, ${bank.episodes.length} episodes banked)` : ""}`);
+  const persistBank = async () => { const s = await load(); await save({ bank: { ...(s.bank ?? {}), [packKey]: bank } }); };
+  const scoreRead = typeof ag.base.raw.score_read === "string" ? ag.base.raw.score_read : (ag.base.reads.score ? "score" : undefined);
+  // ---- the episode loop: play until the game ends, bank it, learn from a loss, restart, keep what plays better
+  for (let episodeN = bank.episodes.length + 1; ; episodeN++) {
+    const records: Rec[] = [];
+    const decisions: Decision[] = [];
+    ag.onRecord = (rec, frame) => {
+      showRec(rec);
+      records.push(rec); if (records.length > 2000) records.shift();
+      if (rec.choice && rec.choice !== "fallback") { decisions.push({ rec, frame }); if (decisions.length > 8) decisions.shift(); }
+    };
+    let last: Rec | null = null;
+    try { last = await ag.run(() => stopping); }
+    catch (e) { log(`error: ${(e as Error).message}`); break; }
+    const ep = outcome(records, episodeN, version, scoreRead);
+    log(`episode ${episodeN}: ${last.action}${last.reason ? " · " + last.reason : ""} after ${ag.tick} ticks, $${ag.totalCost.toFixed(4)}${ep.score !== null ? `, score ${ep.score}` : ""}`);
+    if (stopping || !learning) break;
+    bank.episodes.push(ep); if (bank.episodes.length > 60) bank.episodes.shift();
+    // ---- a candidate on trial has to beat the incumbent's median episode, or it goes back
+    if (incumbent) {
+      const ref = medianEpisode(bank.episodes.filter((e) => e.version === incumbent!.version));
+      if (ref && !betterEpisode(ref, ep) && betterEpisode(ep, ref)) {
+        log(`learn: pack v${version} played worse than v${incumbent.version} (${ep.ticks} vs ${ref.ticks} ticks); reverting`);
+        ag.swapPack(loadPack(incumbent.yaml, pack.name)); version = incumbent.version; ep.version = version;
+      } else log(`learn: pack v${version} stays (${ep.ticks} ticks vs the incumbent's median ${ref?.ticks ?? "n/a"})`);
+      incumbent = null;
+    }
+    // ---- a loss becomes an incident; the chat model revises the pack; the revision must replay better
+    if (ep.lost && decisions.length) {
+      const inc: Incident = incidentOf(decisions, ep.reason, ag.tick);
+      const stored: StoredIncident = { reason: inc.reason, tick: inc.tick, at: inc.at, recs: inc.decisions.map((d) => d.rec), frames: [] };
+      for (const d of inc.decisions.slice(-2)) stored.frames.push(await frameToDataUrl(d.frame));
+      bank.incidents.push(stored); if (bank.incidents.length > 4) bank.incidents.shift();
+      try {
+        const chat = new Chat(store.keys ?? {});
+        const res = await improve(chat, ag.base, inc, bank.episodes, log);
+        if (res.pack) {
+          incumbent = { yaml: dumpPack(ag.base.raw), version };
+          version += 1; bank.version = version;
+          ag.swapPack(res.pack);
+          ($("playtext") as HTMLTextAreaElement).value = ag.base.play;
+          ($("rulestext") as HTMLTextAreaElement).value = ag.base.rules.length ? yaml.dump(ag.base.rules) : "";
+          ag.onPackChange?.(dumpPack(ag.base.raw), `tuned while playing: v${version} on trial (${res.verdict?.why})`);
+        }
+      } catch (e) { log(`learn: ${(e as Error).message.slice(0, 140)}`); }
+    }
+    await persistBank();
+    if (stopping) break;
+    // ---- restart: reload the tab and play again with the same device, sensor, fallback memo and pack
+    $("hybrid").textContent = `episode ${episodeN} done · pack v${version}${incumbent ? " (on trial)" : ""} · restarting`;
+    try { await device.reload(); } catch (e) { log(`restart failed: ${(e as Error).message}`); break; }
+    const next: Agent = new Agent(ag.base, device, sensor, null);
+    next.goal = ag.goal; next.fallback = ag.fallback; next.onPackChange = ag.onPackChange;
+    ag = next; agent = next;
+  }
   await stop();
-}
-
-/** One tune round in the background while the game keeps going: digest → the chat model → a pack that must still
- *  pass the fixtures the current pack carries (its fingerprinted screens) → hot swap. */
-async function improveOnce(records: Rec[], shots: import("../core/geometry.js").Frame[]) {
-  if (!agent) return;
-  const store = await load();
-  let chat: Chat;
-  try { chat = new Chat(store.keys ?? {}); } catch { return; }
-  const dec = records.filter((r) => r.jev_ms !== undefined);
-  const count = (xs: string[]) => { const c: Record<string, number> = {}; for (const x of xs) c[x] = (c[x] ?? 0) + 1; return c; };
-  const dg = [
-    `ticks ${records.length}, decisions ${dec.length}, last reason: ${records[records.length - 1]?.reason ?? "none"}`,
-    `actions: ${JSON.stringify(count(dec.map((r) => String(r.action).split(" (")[0])))}`,
-    `rules fired: ${JSON.stringify(count(dec.flatMap((r) => (r.rules ?? []).map((x) => x.split(" → ")[0]))))}`,
-    ...dec.filter((_, i) => i % Math.max(1, Math.floor(dec.length / 10)) === 0).slice(0, 10).map((r) => `tick ${r.tick}: screen=${JSON.stringify(r.screen).slice(0, 300)} → ${r.action} probs=${JSON.stringify(r.action_probs)} beliefs=${JSON.stringify(r.nouls)}`),
-  ].join("\n");
-  const parts: any[] = [{ type: "text", text: "This pack is playing right now. Here is how it has PLAYED recently. Revise the play paragraph, the questions and the rules so it plays better (move counting into derived reads, make fatal moves impossible with rules). Keep zones and reads unless the frames show a read is wrong. Return the whole pack.yaml in one fenced yaml block.\n\n" + dg + "\n\n```yaml\n" + (await import("../core/pack.js")).dumpPack(agent.base.raw) + "\n```" }];
-  for (const f of shots.length > 2 ? [shots[Math.floor(shots.length / 2)], shots[shots.length - 1]] : shots) parts.push({ type: "image_url", image_url: { url: await frameToDataUrl(f) } });
-  log("improve: asking the chat model …");
-  try {
-    const { text } = await chat.complete([{ role: "user", content: parts }], 12000, 0.2);
-    const y = extractYaml(text);
-    if (!y || !agent) { log("improve: no pack returned"); return; }
-    const cand = loadPack(y, "improved");
-    // the candidate must still read the screens the current pack knows: check on the last frames we have
-    const probe = new Agent(cand, agent.device, null);
-    let ok = true;
-    for (const f of shots.slice(-3)) { const { values, conf } = probe.observe(f, cand); if (probe.support(conf, values, cand) < 0.5) ok = false; }
-    if (!ok) { log("improve: the revised pack reads the current screens worse; kept the old one"); return; }
-    cand.raw.fingerprints = { ...(agent.base.raw.fingerprints ?? {}), ...(cand.raw.fingerprints ?? {}) };
-    agent.swapPack(loadPack((await import("../core/pack.js")).dumpPack(cand.raw), "improved"));
-    ($("playtext") as HTMLTextAreaElement).value = agent.base.play;
-    ($("rulestext") as HTMLTextAreaElement).value = agent.base.rules.length ? yaml.dump(agent.base.rules) : "";
-    agent.onPackChange?.((await import("../core/pack.js")).dumpPack(agent.base.raw), "tuned while playing");
-    log("improve: swapped in the revised pack");
-  } catch (e) { log(`improve: ${(e as Error).message.slice(0, 120)}`); }
 }
 
 // ---- demonstrations: record the human, or let the model explore ----

@@ -30,6 +30,9 @@ typed actions); it has hit a screen it cannot read. You see the frame. Answer wi
   "mode": { ... }           // only for "mode": a definition of how to play THIS screen, same YAML keys as a pack
                             // (zones with rect_px, read with colour options, act, play, questions, rules, act_when, stop_when),
                             // as a JSON object. Read only what matters on this screen. Colours are measured hex values.
+                            // Read kinds that exist, nothing else: color {zone, options: {name: "#hex"}, max_dist, otherwise},
+                            // ocr {zone, parse: int}, locate {in: <matrix read>, symbol}, around {of, in, free}, runs {in, symbol},
+                            // bar {zone, color}, templates. A read with any other kind is rejected and the mode is lost.
   "expect": { "<read id>": <value>, ... }   // for "mode": what the mode's reads must return on this exact frame
 }
 "transient" is a dialog, overlay or animation that one input dismisses (a start prompt, a game-over card, a

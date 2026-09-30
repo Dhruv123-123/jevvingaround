@@ -71,8 +71,8 @@ class Chat:
                     time.sleep(3 * (attempt + 1))
                     continue
                 raise RuntimeError(f"{self.base}: {type(e).__name__}: {str(e)[:160]}") from e
-            if r.status_code == 429 and attempt < 3:
-                time.sleep(8 * (attempt + 1))
+            if (r.status_code == 429 or r.status_code >= 500) and attempt < 3:      # rate limit or a gateway blip: retry, the run is worth more
+                time.sleep((8 if r.status_code == 429 else 4) * (attempt + 1))
                 continue
             if r.status_code == 402:
                 msg = (r.json().get("error") or {}).get("message", "")

@@ -44,6 +44,11 @@ class WebDevice(Device):
     def key(self, name):
         self._page.keyboard.press(name)
 
+    def reload(self):
+        """Reload the page: the cheapest restart for a browser game between episodes."""
+        self._page.reload()
+        self._page.wait_for_load_state("load")
+
     def evaluate(self, js: str):
         """For tests: read the page's own truth to check perception against it."""
         return self._page.evaluate(js)

@@ -69,6 +69,7 @@ class Agent:
         self.miss_ticks = 0
         self.fallback_calls = 0
         self.on_pack_change = None
+        self.on_record = None            # (rec, frame) after every tick: the learning loop keeps the decisions and their frames
         self.last_support = 1.0
         self._load_fingerprints()
         # slow reads (OCR, detectors) run in a forked worker process: a thread starves next to onnxruntime and
@@ -408,46 +409,6 @@ class Agent:
                 self.last_hash = h
                 self._emit(rec, frame, dets, None)
                 return rec
-        # the hybrid: a screen the pack cannot read goes to the VLM, which acts now and may define a mode
-        if not supported and not known:
-            self.miss_ticks += 1
-            if self.fallback is not None and self.miss_ticks >= int(self.base.raw.get("miss_ticks", 2)):
-                d = self.fallback.decide(frame, self.pack, self.goal or self.base.play[:300], [x["action"] for x in self.history[-6:]])
-                rec["fallback"] = f"{'memo' if d.get('memo') else 'vlm'} {d['screen']}{' ' + d['name'] if d.get('name') else ''}: {json.dumps(d['now'])}{' — ' + d['note'] if d.get('note') else ''}"
-                if not d.get("memo"):
-                    self.fallback_calls += 1
-                rec["action"] = self.act_fallback(d["now"])
-                rec["reason"] = f"unsupported screen (support {rec['support']}) → fallback"
-                if d["screen"] == "mode" and d.get("mode") and d.get("name"):
-                    self.merge_mode(d["name"], d["mode"], d.get("expect") or {}, frame, fp)
-                elif d["screen"] == "transient" and d.get("name"):
-                    self.fps.add(f"transient:{d['name']}", fp)
-                    self.base.fingerprints[f"transient:{d['name']}"] = to_b64(fp)
-                    self.base.raw["fingerprints"] = self.base.fingerprints
-                    if self.on_pack_change:
-                        self.on_pack_change(dump_pack(self.base.raw), f"learned transient screen {d['name']}")
-                self.history.append({"tick": self.tick, "action": rec["action"], "choice": "fallback", "key": "fallback"})
-                self.miss_ticks = 0
-                self.last_hash = h
-                self._emit(rec, frame, dets, None)
-                return rec
-            if self.fallback is not None:
-                rec["action"] = "wait"
-                rec["reason"] = f"unsupported screen (support {rec['support']}), {self.miss_ticks} tick(s)"
-                self.last_hash = h
-                self._emit(rec, frame, dets, None)
-                return rec
-        else:
-            self.miss_ticks = 0
-        if known and str(known).startswith("transient:") and self.fallback is not None:
-            d = self.fallback.recall(fp)
-            if d:
-                rec["action"] = self.act_fallback(d["now"])
-                rec["fallback"] = f"memo transient: {json.dumps(d['now'])}"
-                rec["reason"] = "known transient screen"
-                self.last_hash = h
-                self._emit(rec, frame, dets, None)
-                return rec
         stop = self.pack.raw.get("stop_when")
         if stop and self._cond(stop, values):
             rec["action"] = "stop"
@@ -592,6 +553,8 @@ class Agent:
         return out
 
     def _emit(self, rec, frame, dets, answers):
+        if self.on_record is not None:
+            self.on_record(rec, frame)
         if self.log:
             self.log.write(json.dumps(rec) + "\n")
             self.log.flush()
