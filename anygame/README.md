@@ -167,6 +167,32 @@ differences to keep in mind: CLM only ranks the candidates it is given (every pa
 `keep`, and the rules guard the rest), and there is no hosted API yet, so it needs a GPU. This container has
 none, so the wiring is proven against `test/clm_stub.py`, a stand-in that speaks the protocol faithfully.
 
+### From scratch: five games with their packs held out
+
+`scripts/from_scratch.sh` runs `anygame go --fresh --explore 60 --learn 6`: no pack, no pool, no lessons; the vision
+model explores for a minute, the author writes a pack from that demonstration, Jev plays, every loss becomes a
+replay-verified revision, the tab reloads. Same GPT-5.6 and Jev as everywhere else; every number below is from
+the run itself.
+
+| game | authored | first episode | best episode | revisions kept / reverted |
+|---|---|---|---|---|
+| Snake | 2 rounds | 48 ticks, dead | 400 ticks, alive at the cap (episodes 5 and 6) | 3 / 1 |
+| Tic-tac-toe | 2 rounds | 14 ticks, lost | 53 ticks, deadlocked with one cell left | 3 / 2 |
+| Connect Four | 1 round | 42 ticks, won | won all six games; nothing to revise | 0 / 0 |
+| 2048 | 2 rounds | 194 ticks, score 500 | 300 ticks alive at the cap, score 1484 | 2 / 0 |
+| a space shooter | 5 rounds, third attempt | 191 ticks, game over | 400 ticks alive at the cap, episodes 2 to 6 | 1 / 0 |
+
+What the runs taught, and what changed because of them: an authored box a few pixels outside the frame used to
+crash the loader (now clamped); a game that ends without the pack noticing used to sit at the tick cap as if it
+had survived (a stalled screen now ends the episode and the vision model labels it won, lost, draw or playing,
+and a stall while still playing counts as a loss); a pack whose `act_when` never opens used to wait forever with
+nothing to learn from (that stall is now an incident the revision must open); the author did not know what a
+`blobs` read returns, so the shooter's bullets took three attempts (documented now). Tic-tac-toe is the honest
+failure: its packs either lose in 14 ticks or deadlock, and six episodes of revisions did not find the move
+generator a person writes in one line (`legal: {kind: locate, symbol: "."}`); the loop needs more episodes there,
+or a lesson from the pool, which was held out. Snake's authored score read is wrong (it reads a digit), which the
+loop never notices because score is not the reward.
+
 ### Which model goes where
 
 Jev always goes to OpenRouter (`OPENROUTER_API_KEY`) or `JEV_BASE_URL`. Every other model call, the authoring
