@@ -466,7 +466,7 @@ def _better(a: dict[str, Any] | None, b: dict[str, Any], score_read: str | None)
 
 def author(device_url: str, game: str, out: Path, play: str | None = None, rounds: int = 3, model: str | None = None,
            frames_n: int = 4, size: tuple[int, int] = (540, 560), play_ticks: int = 0, tune: int = 0, sensor: str = "jev",
-           score_read: str | None = None, log=print, demo: Path | None = None) -> tuple[bool, Path]:
+           score_read: str | None = None, log=print, demo: Path | None = None, resume: bool = False) -> tuple[bool, Path]:
     """Write a pack for the game behind device_url. rounds: perception rounds until eval passes. tune: after that,
     play `play_ticks` ticks, hand the model a digest of the run, and let it revise the paragraph, questions and
     rules; the best-playing pack is kept."""
@@ -474,7 +474,11 @@ def author(device_url: str, game: str, out: Path, play: str | None = None, round
     out.mkdir(parents=True, exist_ok=True)
     fixtures = out / "fixtures"
     demo_text, demo_parts = "", []
-    if demo is not None:
+    resumed = sorted(fixtures.glob("probe-*.png")) if resume and (out / "pack.yaml").exists() else []
+    if resumed:
+        frames = resumed
+        log(f"resuming from {out / 'pack.yaml'} and its {len(frames)} probe frames")
+    elif demo is not None:
         from .demo import load_demo, digest as demo_digest
         d = load_demo(Path(demo))
         dg = demo_digest(d)
@@ -526,7 +530,15 @@ def author(device_url: str, game: str, out: Path, play: str | None = None, round
                   + (" Use the demonstration: the keys and clicks it used are the action set, the regions that changed are where the reads go, and what the player said they were doing goes into the paragraph." if demo is not None else "")})
     ok = False
     prev_exp: dict[str, dict[str, Any]] = {}
-    for rnd in range(1, rounds + 1):
+    if resumed:
+        ok, report = check_pack(out, frames)
+        log(report)
+        log(f"existing pack: {'PASS' if ok else 'FAIL'}")
+        if not ok:      # the rounds below start from the pack as it is, not from a blank page
+            parts.append({"type": "text", "text": "A pack already exists for these frames:\n```yaml\n" + (out / "pack.yaml").read_text()
+                          + "```\nHere is what it does on the probe frames:\n" + report + "\nFix it so every test passes and return the whole pack.yaml."})
+        prev_exp = expectations(out)
+    for rnd in range(1, (0 if ok else rounds) + 1):
         log(f"round {rnd}: asking {au.model} …")
         text = au.ask(parts)
         y = extract_yaml(text)
@@ -572,12 +584,14 @@ def author(device_url: str, game: str, out: Path, play: str | None = None, round
             if t == tune:
                 break
             log(f"tune {t + 1}: asking {au.model} …")
+            context = ("" if not resumed or len(au.messages) > 1 else      # a resumed run never showed the model its pack
+                       "\n\nThe pack as it stands (written earlier from probe frames of this game):\n```yaml\n" + (out / "pack.yaml").read_text() + "```\n" + FORMAT)
             tune_parts: list[dict[str, Any]] = [{"type": "text", "text":
                 "The pack passes its perception tests. Here is how it PLAYED. Revise the pack so it plays better: the play "
                 "paragraph, the questions, the rules (move any counting into derived reads: runs, around, locate; make "
                 "fatal or wasted moves impossible with exclude/avoid/only rules; add act_when/settle/stop_when if the "
                 "log shows waits or missed turns). Keep the zones, reads and tests that pass unless the log or the frames "
-                "show a read is wrong. Return the whole pack.yaml in one fenced yaml block.\n\n" + digest}]
+                "show a read is wrong. Return the whole pack.yaml in one fenced yaml block.\n\n" + digest + context}]
             shots = sorted(rec_dir.glob("*.jpg")) if rec_dir.exists() else []
             for f in ([shots[len(shots) // 2], shots[-1]] if len(shots) > 2 else shots):
                 img = cv2.imread(str(f))
