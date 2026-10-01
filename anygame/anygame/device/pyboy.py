@@ -65,7 +65,14 @@ class PyBoyDevice(Device):
         self._pb.button_release(b)
         self._pb.tick(self.after, render=False)
 
-    def key(self, name):
+    def key(self, name, hold_ms=0):
+        if hold_ms:
+            b = KEY_ALIASES.get(name.lower(), name.lower())
+            self._pb.button_press(b)
+            self._pb.tick(max(1, int(hold_ms / 1000 * 60)), render=False)     # the Game Boy runs 60 frames a second
+            self._pb.button_release(b)
+            self._pb.tick(self.after, render=False)
+            return
         self.press(name)
 
     def tap(self, x, y):

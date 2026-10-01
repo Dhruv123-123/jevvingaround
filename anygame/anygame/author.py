@@ -63,6 +63,9 @@ act:                                                      # typed actions; the m
   - { id: <name>, kind: tap, zone: <zone> }                            # tap the zone centre
   - { id: <name>, kind: swipe, zone: <zone>, dir: up|down|left|right, ms: 60 }
   - { id: <name>, kind: key, key: ArrowUp }                            # keyboard (web devices)
+  - { id: <name>, kind: key, key: ShiftLeft, hold_ms: 400 }            # a held key (a run, a charge, a camera turn)
+  - { id: <name>, kind: chunk, keys: [ArrowLeft, ArrowLeft, Space], key_ms: 60 }   # several inputs as one decision (from a recurring key run in the demonstration)
+  - { id: <name>, kind: mouse_move, dx: 40, dy: 0 }                    # relative mouse motion in pixels (a camera, a cursor); dx/dy may be negative
   - { id: place, kind: macro, options: <tetris read id>, key_ms: 40 }   # the runtime asks <id>__option among the read's landings and plays the keys
   - { id: keep, kind: wait, description: "do nothing this tick" }
 tick_hz: 4                                                # decisions per second, at most
@@ -81,6 +84,12 @@ rules:                                                    # policy the runtime e
   - { if: { noul: <belief>, gte: 0.5 }, set: { <action>__cell: <choice question id> } }
   - { if: { read: <id>, equals: our_turn }, avoid: { <action>__cell: <read listing cells> } }   # drop those cells
   - { if: { read: <id>, equals: our_turn }, only:  { <action>__cell: <read listing cells> } }   # offer only those cells
+tasks:                                                    # optional practice goals the runtime verifies from the reads
+  - { id: <snake_case>, instruction: "<one line the player follows>", category: navigate|collect|score|survive|clear|build|avoid|other,
+      done: { read: <id or id.path>, equals|in|not|gte|lte: <value> },   # or a list of conditions that must all hold
+      when: { read: <id>, equals: <value> }, hold_ticks: 1, limit_ticks: 150 }   # `when`: optional availability
+        # write 2-4 from what the demonstration shows the player doing (reach a score, eat N food, clear a line);
+        # the player is told one at a time beside the play notes, and completions are banked as what worked
 tests:                                                    # required: perception checks on the frames provided
   - { frame: fixtures/probe-1.png, expect: { <read id>: <exact value>, ... } }
   # expect values must be exactly what the read returns: a label, a number, a cell name, a list of cells,

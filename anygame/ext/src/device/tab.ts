@@ -88,12 +88,24 @@ export class TabDevice implements Device {
     await this.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: bx, y: by, button: "left", clickCount: 1 });
   }
 
-  async key(name: string): Promise<void> {
+  async key(name: string, holdMs = 0): Promise<void> {
     await this.attach();
     const k = keyInfo(name);
     const base = { key: k.key, code: k.code, windowsVirtualKeyCode: k.vk, nativeVirtualKeyCode: k.vk };
     await this.send("Input.dispatchKeyEvent", { type: k.text ? "keyDown" : "rawKeyDown", ...base, text: k.text, unmodifiedText: k.text });
+    if (holdMs > 0) await new Promise((r) => setTimeout(r, holdMs));     // a held key: a run, a charge, a camera turn
     await this.send("Input.dispatchKeyEvent", { type: "keyUp", ...base });
+  }
+
+  private mx = -1; private my = -1;
+  /** Relative mouse motion from the last pointer position (the page sees mousemove with the movement). */
+  async mouseMove(dx: number, dy: number): Promise<void> {
+    await this.attach();
+    const [w, h] = this.size();
+    if (this.mx < 0) { this.mx = w / 2; this.my = h / 2; }
+    this.mx = Math.max(0, Math.min(w - 1, this.mx + dx)); this.my = Math.max(0, Math.min(h - 1, this.my + dy));
+    const [cx, cy] = this.css(this.mx, this.my);
+    await this.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: cx, y: cy });
   }
 
   /** The page's own state, when an expression was given (e.g. `window.__state()`): what the json reads consume. */

@@ -86,11 +86,15 @@ class ScreenDevice(Device):
             time.sleep(ms / 1000 / steps)
         self.ms.release(self._Button.left)
 
-    def key(self, name):
+    def key(self, name, hold_ms=0):
         k = key_of(name)
         self.kb.press(k)
-        time.sleep(0.03)
+        time.sleep(max(0.03, (hold_ms or 0) / 1000))
         self.kb.release(k)
+
+    def mouse_move(self, dx, dy):
+        """Relative motion in captured pixels (scaled to the screen): a camera or a cursor."""
+        self.ms.move(int(dx / self.scale), int(dy / self.scale))
 
     def close(self):
         try:

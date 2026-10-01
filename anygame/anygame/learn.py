@@ -38,6 +38,7 @@ class Incident:
     tick: int
     decisions: list[Decision]
     at: str = field(default_factory=lambda: time.strftime("%Y-%m-%dT%H:%M:%S"))
+    kind: str = "loss"       # loss: the last decision lost; success: a span that completed a task or won, to be kept allowed
 
 
 def outcome(recs: list[dict[str, Any]], n: int, version: int, score_read: str | None = None) -> dict[str, Any]:
@@ -48,15 +49,16 @@ def outcome(recs: list[dict[str, Any]], n: int, version: int, score_read: str | 
     s = (last.get("screen") or {}).get(score_read) if score_read else None
     return {"n": n, "ticks": len(recs), "decisions": len(dec), "reason": reason, "score": s if isinstance(s, (int, float)) else None,
             "won": bool(WON.search(reason)) and not LOST.search(reason), "lost": bool(LOST.search(reason)),
-            "cost_usd": round(float(last.get("total_cost_usd") or 0), 6), "version": version, "at": time.strftime("%Y-%m-%dT%H:%M:%S")}
+            "tasks_done": sum(1 for r in recs if r.get("task_done")), "tasks_failed": sum(1 for r in recs if r.get("task_failed")),
+            "cost_usd": round(max([float(r.get("total_cost_usd") or 0) for r in recs] + [0.0]), 6), "version": version, "at": time.strftime("%Y-%m-%dT%H:%M:%S")}
 
 
 def _key(e: dict[str, Any]):
-    return (1 if e.get("won") else 0, 0 if e.get("lost") else 1, e.get("ticks", 0) if e.get("lost") else 0, e.get("score") or 0)
+    return (1 if e.get("won") else 0, e.get("tasks_done") or 0, 0 if e.get("lost") else 1, e.get("ticks", 0) if e.get("lost") else 0, e.get("score") or 0)
 
 
 def better_episode(a: dict[str, Any] | None, b: dict[str, Any]) -> bool:
-    """Is episode b better than a? won > not lost > longer when lost > higher score."""
+    """Is episode b better than a? won > more tasks done > not lost > longer when lost > higher score."""
     return True if a is None else _key(b) > _key(a)
 
 
@@ -447,9 +449,11 @@ def cell_rule(candidate: Pack, incumbent: Pack) -> str:
 
 
 def verify_revision(candidate: Pack, incumbent: Pack, inc: Incident, threshold: float = 0.7, max_overblock: float = 0.34,
-                    others: list[Incident] | None = None, allow_order: bool = False) -> dict[str, Any]:
-    """Does the candidate handle the incident better than the incumbent, by replay alone? `others` are earlier incidents:
-    the candidate must not block their ordinary decisions either (a rule that fits one loss and breaks the rest is out)."""
+                    others: list[Incident] | None = None, allow_order: bool = False, successes: list[Incident] | None = None) -> dict[str, Any]:
+    """Does the candidate handle the incident better than the incumbent, by replay alone? `others` are earlier losses:
+    the candidate must not block their ordinary decisions either (a rule that fits one loss and breaks the rest is out).
+    `successes` are banked spans that completed a task or won: every choice in them must stay allowed, the positive
+    half of the record that SIMA trains on and a loss-only loop never sees."""
     if not inc.decisions:
         return {"ok": False, "why": "no decisions to replay", "guarded": False, "distinguished": [], "overblocked": 0.0, "support": 0.0}
     if inc.decisions[-1].rec.get("never_acted"):
@@ -489,7 +493,18 @@ def verify_revision(candidate: Pack, incumbent: Pack, inc: Incident, threshold: 
         m = len(o.decisions) - 1
         changed += sum(1 for k in range(m) if oc["choices"][k] != o.decisions[k].rec.get("choice") and oi["choices"][k] == o.decisions[k].rec.get("choice"))
         total += m
+    broke = 0
+    for o in successes or []:
+        if not o.decisions:
+            continue
+        oc, oi = replay(candidate, o), replay(incumbent, o)
+        b = sum(1 for k in range(len(o.decisions)) if oc["choices"][k] != o.decisions[k].rec.get("choice") and oi["choices"][k] == o.decisions[k].rec.get("choice"))
+        broke += b
+        changed += b
+        total += len(o.decisions)
     overblocked = changed / total if total else 0.0
+    if broke:
+        return {"ok": False, "why": f"blocks {broke} of the choices in a span that completed a task or won ({changed} of {total} ordinary decisions in all)", "guarded": guarded, "distinguished": distinguished, "overblocked": overblocked, "support": support}
     if overblocked > max_overblock:
         return {"ok": False, "why": f"blocks {changed} of {total} ordinary decisions too", "guarded": guarded, "distinguished": distinguished, "overblocked": overblocked, "support": support}
     if not guarded and not distinguished:
@@ -682,7 +697,7 @@ PACK_SCHEMA_HINT = (
 def improve(chat, pack: Pack, inc: Incident, episodes: list[dict[str, Any]] | None = None, log=lambda m: None, threshold: float | None = None,
             rounds: int = 2, keep_rejected: Path | None = None, others: list[Incident] | None = None,
             hints: str = "", calibrator: "Calibrator | None" = None, sensor=None, min_agreement: float = 0.5,
-            holdout: list[Decision] | None = None, min_holdout: float = 0.6) -> dict[str, Any]:
+            holdout: list[Decision] | None = None, min_holdout: float = 0.6, successes: list[Incident] | None = None) -> dict[str, Any]:
     """A revision: incident → chat model → candidate → replay verdict → the decider re-asked (when a sensor is given:
     on the incident, on every earlier incident for the counterfactual return, and on the held-out ordinary ticks) →
     the calibrator's verdict (when it has learned from enough trials), with one repair round when the candidate does
@@ -711,7 +726,7 @@ def improve(chat, pack: Pack, inc: Incident, episodes: list[dict[str, Any]] | No
                 if "modes" not in cand.raw and pack.raw.get("modes"):
                     cand.raw["modes"] = pack.raw["modes"]
                 cand = load_pack_text(dump_pack(cand.raw), pack.name)
-                v = verify_revision(cand, pack, inc, thr, others=others, allow_order=sensor is not None)
+                v = verify_revision(cand, pack, inc, thr, others=others, allow_order=sensor is not None, successes=successes)
                 last_verdict = v
                 if not v["ok"]:
                     problem = f"replaying the loss through it: {v['why']}"
@@ -777,6 +792,8 @@ class Bank:
         self.revisions: list[dict[str, Any]] = [json.loads(l) for l in rv.read_text().splitlines() if l.strip()] if rv.exists() else []
         ls = self.path / "lessons.jsonl"
         self.lessons: list[dict[str, Any]] = [json.loads(l) for l in ls.read_text().splitlines() if l.strip()] if ls.exists() else []
+        tk = self.path / "tasks.jsonl"
+        self.task_results: list[dict[str, Any]] = [json.loads(l) for l in tk.read_text().splitlines() if l.strip()] if tk.exists() else []
 
     def _rewrite(self, name: str, rows: list[dict[str, Any]]) -> None:
         (self.path / name).write_text("".join(json.dumps(r) + "\n" for r in rows))
@@ -813,14 +830,28 @@ class Bank:
         d.mkdir()
         for k, dec in enumerate(inc.decisions):
             cv2.imwrite(str(d / f"{k}.png"), dec.frame)
-        (d / "incident.json").write_text(json.dumps({"reason": inc.reason, "tick": inc.tick, "at": inc.at, "recs": [dec.rec for dec in inc.decisions],
+        (d / "incident.json").write_text(json.dumps({"reason": inc.reason, "tick": inc.tick, "at": inc.at, "kind": inc.kind, "recs": [dec.rec for dec in inc.decisions],
                                                      "states": [dec.state for dec in inc.decisions]}, indent=1, default=str))
-        old = sorted(self.path.glob("incident-*"), key=lambda p: int(p.name.split("-")[1]))
-        for p in old[:-self.max_incidents]:
-            for f in p.iterdir():
-                f.unlink()
-            p.rmdir()
+        # the newest max_incidents of each kind stay: losses and successes are both the record
+        for kind in ("loss", "success"):
+            old = [p for p in sorted(self.path.glob("incident-*"), key=lambda p: int(p.name.split("-")[1])) if (p / "incident.json").exists() and json.loads((p / "incident.json").read_text()).get("kind", "loss") == kind]
+            for p in old[:-self.max_incidents]:
+                for f in p.iterdir():
+                    f.unlink()
+                p.rmdir()
         return d
+
+    def add_task_result(self, ev: dict[str, Any], version: int, episode: int) -> None:
+        """A task completed or failed: the per-category record the setter steers by and the suite reports."""
+        row = {**ev, "version": version, "episode": episode, "at": time.strftime("%Y-%m-%dT%H:%M:%S")}
+        self.task_results.append(row)
+        with open(self.path / "tasks.jsonl", "a") as f:
+            f.write(json.dumps(row) + "\n")
+
+    def add_lessons(self, new: list[dict[str, Any]]) -> None:
+        if new:
+            self.lessons.extend(new)
+            self._rewrite("lessons.jsonl", self.lessons)
 
     def add_holdout(self, decisions: list[Decision], max_holdout: int = 24) -> None:
         """Ordinary ticks, sampled from an episode outside any fatal window: the held-out set a revision is re-asked
@@ -846,15 +877,19 @@ class Bank:
         meta = json.loads((d / "holdout.json").read_text())
         return [Decision(it["rec"], cv2.imread(str(d / it["file"])), it.get("state")) for it in meta["items"] if (d / it["file"]).exists()]
 
-    def incidents(self) -> list[Incident]:
-        """The banked incidents, oldest first, with their frames."""
-        return [self.load_incident(d) for d in sorted(self.path.glob("incident-*"), key=lambda p: int(p.name.split("-")[1])) if (d / "incident.json").exists()]
+    def incidents(self, kind: str | None = "loss") -> list[Incident]:
+        """The banked incidents of a kind (loss by default; success; None for all), oldest first, with their frames."""
+        out = [self.load_incident(d) for d in sorted(self.path.glob("incident-*"), key=lambda p: int(p.name.split("-")[1])) if (d / "incident.json").exists()]
+        return [i for i in out if kind is None or i.kind == kind]
+
+    def successes(self) -> list[Incident]:
+        return self.incidents("success")
 
     def load_incident(self, d: Path) -> Incident:
         j = json.loads((d / "incident.json").read_text())
         states = j.get("states") or [None] * len(j["recs"])
         decs = [Decision(r, cv2.imread(str(d / f"{k}.png")), states[k]) for k, r in enumerate(j["recs"])]
-        return Incident(j["reason"], j["tick"], decs, j.get("at", ""))
+        return Incident(j["reason"], j["tick"], decs, j.get("at", ""), j.get("kind", "loss"))
 
     def save_version(self, version: int, yaml_text: str) -> None:
         (self.path / f"pack.v{version}.yaml").write_text(yaml_text)

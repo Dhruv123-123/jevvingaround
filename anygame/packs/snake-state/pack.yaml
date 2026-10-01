@@ -49,6 +49,9 @@ rules:
   - { if: { read: head_around.left_space,  lte: 6 }, exclude: [left] }
   - { if: { read: head_around.right_space, lte: 6 }, exclude: [right] }
   - { if: { read: head_moving, in: [up, down, left, right] }, exclude: [$head_reverse] }
+tasks:                      # practice goals the runtime verifies from the state reads
+  - { id: first_food, instruction: "Eat one food: reach score 1.", done: { read: score, gte: 1 }, category: collect, limit_ticks: 60 }
+  - { id: five_food, instruction: "Eat five food without dying: reach score 5.", done: { read: score, gte: 5 }, category: score, limit_ticks: 220 }
 tests:
 - state: fixtures/start.json
   frame: fixtures/start.png

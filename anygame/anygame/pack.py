@@ -37,6 +37,7 @@ class Pack:
     rules: list[dict[str, Any]]
     tests: list[dict[str, Any]]
     raw: dict[str, Any]
+    tasks: list[dict[str, Any]] = field(default_factory=list)       # goals with a verifier over the reads (see TASK_KEYS)
     modes: dict[str, "Pack"] = field(default_factory=dict)          # sub-packs for other screens, each with a `when`
     fingerprints: dict[str, str] = field(default_factory=dict)      # screen name → base64 fingerprint
 
@@ -56,6 +57,36 @@ class Pack:
 
 
 MODE_KEYS = ("zones", "read", "act", "play", "questions", "rules", "act_when", "stop_when", "settle", "tick_hz")
+TASK_CATEGORIES = ("navigate", "collect", "score", "survive", "clear", "build", "avoid", "other")
+
+
+def _cond_ok(c: Any) -> bool:
+    return isinstance(c, dict) and "read" in c and any(k in c for k in ("equals", "in", "not", "gte", "lte"))
+
+
+def check_tasks(tasks: Any, reads: dict[str, Any], where: str = "pack") -> list[dict[str, Any]]:
+    """Tasks are goals the runtime can verify from the reads: `done` (one condition or a list that must all hold)
+    marks completion once it has held `hold_ticks` ticks; `when` says when the task is available; `limit_ticks`
+    bounds the attempt. Returns the tasks with their defaults filled, or raises PackError."""
+    out = []
+    seen: set[str] = set()
+    for t in tasks or []:
+        if not isinstance(t, dict) or not t.get("id") or not t.get("instruction") or "done" not in t:
+            raise PackError(f"{where}: every task needs id, instruction and done: {{read, equals|in|not|gte|lte}} (or a list of them)")
+        tid = str(t["id"])
+        if tid in seen:
+            raise PackError(f"{where}: task '{tid}' is listed twice")
+        seen.add(tid)
+        conds = t["done"] if isinstance(t["done"], list) else [t["done"]]
+        for c in conds + ([t["when"]] if t.get("when") else []):
+            if not _cond_ok(c):
+                raise PackError(f"{where}: task '{tid}': a condition is {{read: <id or id.path>, equals|in|not|gte|lte: v}}")
+            if str(c["read"]).split(".")[0] not in reads:
+                raise PackError(f"{where}: task '{tid}': unknown read '{c['read']}'")
+        cat = str(t.get("category") or "other")
+        out.append({**t, "id": tid, "done": conds, "hold_ticks": int(t.get("hold_ticks", 1)), "limit_ticks": int(t.get("limit_ticks", 150)),
+                    "category": cat if cat in TASK_CATEGORIES else "other"})
+    return out
 
 
 def merge_mode(base: dict[str, Any], mode: dict[str, Any]) -> dict[str, Any]:
@@ -163,6 +194,12 @@ def load_pack(path: str | os.PathLike, _allow_no_tests: bool = False) -> Pack:
         kind = a.get("kind") or ("wait" if a["id"] == "wait" else "tap")
         if kind == "macro" and not a.get("options"):
             raise PackError(f"{p}: action '{a['id']}': macro needs 'options: <read id>' (a read whose value has landings + macros, e.g. a tetris read)")
+        if kind == "chunk" and not (isinstance(a.get("keys"), list) and a["keys"]):
+            raise PackError(f"{p}: action '{a['id']}': chunk needs 'keys: [<key>, ...]' (optionally key_ms, hold_ms)")
+        if kind == "mouse_move" and ("dx" not in a and "dy" not in a):
+            raise PackError(f"{p}: action '{a['id']}': mouse_move needs dx and/or dy (pixels of relative motion)")
+        if kind == "key" and "key" not in a:
+            raise PackError(f"{p}: action '{a['id']}': key needs 'key' (optionally hold_ms)")
         actions.append(Action(a["id"], kind, {k: v for k, v in a.items() if k not in ("id", "kind")}))
     if not actions:
         raise PackError(f"{p}: 'act' must list at least one action")
@@ -200,6 +237,7 @@ def load_pack(path: str | os.PathLike, _allow_no_tests: bool = False) -> Pack:
         mp.raw["when"] = m["when"]
         mp.raw["own_reads"] = list((m.get("read") or {}).keys())
         modes[mn] = mp
+    tasks = check_tasks(raw.get("tasks"), reads, str(p))
     fingerprints = dict(raw.get("fingerprints") or {})
     for mn, m in (raw.get("modes") or {}).items():
         if isinstance(m.get("when"), dict) and m["when"].get("fingerprint"):
@@ -207,5 +245,5 @@ def load_pack(path: str | os.PathLike, _allow_no_tests: bool = False) -> Pack:
     return Pack(
         name=raw["game"], path=p, orientation=screen.get("orientation", "portrait"), size=(int(size[0]), int(size[1])),
         zones=zones, reads=reads, actions=actions, tick_hz=float(raw.get("tick_hz", 3)), play=(raw.get("play") or "").strip(),
-        questions=questions, rules=rules, tests=tests, raw=raw, modes=modes, fingerprints=fingerprints,
+        questions=questions, rules=rules, tests=tests, raw=raw, modes=modes, fingerprints=fingerprints, tasks=tasks,
     )

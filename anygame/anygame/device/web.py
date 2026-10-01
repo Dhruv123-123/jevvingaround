@@ -2,6 +2,7 @@
 `web://<url>#state=<js expression>` also gives state(): the expression evaluated on the page (e.g. a game's own
 `window.__state()`), for packs that read the stream instead of the pixels."""
 from __future__ import annotations
+import time
 import os
 import numpy as np
 import cv2
@@ -46,8 +47,21 @@ class WebDevice(Device):
         m.move(x1, y1, steps=steps)
         m.up()
 
-    def key(self, name):
-        self._page.keyboard.press(name)
+    def key(self, name, hold_ms=0):
+        if hold_ms and hold_ms > 0:
+            # a held key: down, hold, up (what a run, a charge or a camera turn needs)
+            self._page.keyboard.down(name)
+            time.sleep(hold_ms / 1000)
+            self._page.keyboard.up(name)
+        else:
+            self._page.keyboard.press(name)
+
+    def mouse_move(self, dx, dy):
+        """Relative motion from the last pointer position (the page sees mousemove events with the movement)."""
+        self._mx, self._my = getattr(self, "_mx", self.size()[0] // 2) + int(dx), getattr(self, "_my", self.size()[1] // 2) + int(dy)
+        w, h = self.size()
+        self._mx, self._my = max(0, min(w - 1, self._mx)), max(0, min(h - 1, self._my))
+        self._page.mouse.move(self._mx, self._my, steps=max(2, int(np.hypot(dx, dy) // 8)))
 
     def reload(self):
         """Reload the page: the cheapest restart for a browser game between episodes."""

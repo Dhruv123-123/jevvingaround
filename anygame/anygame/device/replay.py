@@ -34,5 +34,8 @@ class ReplayDevice(Device):
     def swipe(self, x0, y0, x1, y1, ms=120):
         self.actions.append(("swipe", x0, y0, x1, y1))
 
-    def key(self, name):
-        self.actions.append(("key", name))
+    def key(self, name, hold_ms=0):
+        self.actions.append(("key", name) if not hold_ms else ("key", name, hold_ms))
+
+    def mouse_move(self, dx, dy):
+        self.actions.append(("mouse_move", dx, dy))

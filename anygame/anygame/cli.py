@@ -284,7 +284,7 @@ def cmd_go(a):
         # the application loop: episodes with the fallback on, a replay-verified revision after every loss, restarts
         import argparse as _ap
         print(f"learning {known} over {a.learn or 'endless'} episodes", file=sys.stderr)
-        return cmd_learn(_ap.Namespace(pack=str(known), device=a.device, sensor=a.sensor, episodes=a.learn, max_ticks=a.max_ticks, goal=a.game, fallback=True, bank=None, out=None, fresh=a.fresh, requery=True))
+        return cmd_learn(_ap.Namespace(pack=str(known), device=a.device, sensor=a.sensor, episodes=a.learn, max_ticks=a.max_ticks, goal=a.game, fallback=True, bank=None, out=None, fresh=a.fresh, requery=True, set_tasks=0, rate=False))
     pack = load_pack(known)
     device = open_device(a.device, pack.size)
     hud = Hud(a.hud) if a.hud else None
@@ -398,8 +398,9 @@ def cmd_learn(a):
     from .chat import Chat
     from .device import open_device
     from .fallback import VLMFallback
-    from .learn import Bank, Decision, better_episode, hints_text, improve, incident_of, median_episode, outcome, relevance, relevance_text, audit_questions
+    from .learn import Bank, Decision, Incident, better_episode, hints_text, improve, incident_of, lessons_of, median_episode, outcome, relevance, relevance_text, audit_questions
     from .loop import Agent
+    from .tasks import choose_order, propose_tasks, tasks_text
     from .pack import dump_pack, load_pack, load_pack_text
     from .sensors import open_sensor
     src = Path(find_pack(a.pack))
@@ -421,6 +422,9 @@ def cmd_learn(a):
     from .pool import fetch_pool, pool_lessons
     pool_hints = [] if a.fresh else pool_lessons(fetch_pool(), exclude=pack.name)     # --fresh: nothing from the pool, not even lessons
     read_kinds = {str(r.get("kind")) for r in pack.reads.values()}
+    if not (bank.path / "pack.v1.yaml").exists():
+        bank.save_version(1, dump_pack(pack.raw))         # the base every success is measured against
+    set_tasks = int(getattr(a, "set_tasks", 0) or 0)
     try:
         import itertools
         first = len(bank.episodes) + 1
@@ -430,8 +434,40 @@ def cmd_learn(a):
             agent.stall_ticks = 40          # a game that ended without the pack noticing ends the episode too
             recs, decisions, sample, seen = [], [], [], [0]
             rng = random.Random(n)
+            # ---- tasks: the setter proposes new ones from the current frame, the weakest categories first
+            if set_tasks and (n == first or n % 2 == 1):
+                try:
+                    if hasattr(device, "reload"):
+                        device.reload()
+                    fr = device.frame()
+                    vals, _, _ = agent.observe(fr, pack, state=device.state() if hasattr(device, "state") else None)
+                    new = propose_tasks(chat, pack, fr, vals, bank.task_results, k=set_tasks, log=log, game=a.goal or "")
+                    if new:
+                        pack.raw["tasks"] = (pack.raw.get("tasks") or []) + new
+                        pack = load_pack_text(dump_pack(pack.raw), pack.name)
+                        agent.swap_pack(pack)
+                        learned.write_text(dump_pack(pack.raw))
+                        log("tasks: set " + "; ".join(f"{t['id']} [{t['category']}]: {t['instruction'][:60]}" for t in new))
+                except Exception as e:  # noqa: BLE001
+                    log(f"tasks: {str(e)[:120]}")
+            agent.task_order = choose_order(pack.tasks, bank.task_results) if pack.tasks else None
+            successes_now: list = []
+            kept_frames: list = []            # (tick, frame) spread across the episode, for the rater
+            def _task(ev, _n=n):
+                bank.add_task_result(ev, version, _n)
+                log(f"task {ev['id']} [{ev['category']}]: {ev['outcome']} after {ev['ticks']} ticks")
+                if ev["outcome"] == "done" and decisions:
+                    # a positive incident: the span that completed the task, to be kept allowed by every revision
+                    inc_s = Incident(f"done: {ev['id']}", ev["tick"], list(decisions[-12:]), kind="success")
+                    bank.add_incident(inc_s)
+                    successes_now.append(ev["id"])
+            agent.on_task = _task
             def _rec(rec, frame):
                 recs.append(rec)
+                if a.rate:
+                    kept_frames.append((rec.get("tick", len(recs)), frame.copy()))
+                    if len(kept_frames) > 24:
+                        del kept_frames[1:-1:2]          # thin the middle, keep the ends
                 if rec.get("choice") and rec.get("choice") != "fallback":
                     d = Decision(rec, frame.copy(), getattr(agent, "last_state", None))
                     decisions.append(d)
@@ -462,7 +498,16 @@ def cmd_learn(a):
                 stalled_rec = {**last, "choice": "wait", "action": "wait", "never_acted": True}
                 decisions.append(Decision(stalled_rec, device.frame().copy(), getattr(agent, "last_state", None)))
             ep = outcome(recs, n, version, score_read)
-            log(f"episode {n}: {last.get('action')}{' · ' + str(last.get('reason')) if last.get('reason') else ''} after {agent.tick} ticks, ${agent.total_cost:.4f}" + (f", score {ep['score']}" if ep["score"] is not None else ""))
+            if a.rate and kept_frames:
+                # the rater: completion and directedness 0..100 from sampled frames; the score where the pack has none
+                from .rater import rate_episode
+                tsk = ", ".join(e["id"] for e in agent.task_log) or (agent.task["instruction"] if agent.task else "")
+                rating = rate_episode(chat, kept_frames, recs, a.goal or pack.play[:300], task=tsk, outcome=ep["reason"])
+                ep["rating"] = rating
+                if ep["score"] is None and rating.get("completion") is not None:
+                    ep["score"] = rating["completion"]
+                log(f"rater: completion {rating.get('completion')}, directedness {rating.get('directedness')}: {rating.get('note')}")
+            log(f"episode {n}: {last.get('action')}{' · ' + str(last.get('reason')) if last.get('reason') else ''} after {agent.tick} ticks, ${agent.total_cost:.4f}" + (f", score {ep['score']}" if ep["score"] is not None else "") + (f", tasks {ep['tasks_done']} done" if ep.get("tasks_done") else ""))
             if incumbent is not None:
                 ref = median_episode(bank.of_version(incumbent[1]))
                 if ref and better_episode(ep, ref) and not better_episode(ref, ep):
@@ -481,6 +526,16 @@ def cmd_learn(a):
                     learned.write_text(dump_pack(pack.raw))
                 incumbent = None
             bank.add_episode(ep)
+            if ep["won"] and decisions:
+                bank.add_incident(Incident(f"won: {ep['reason']}", agent.tick, list(decisions[-12:]), kind="success"))
+            firsts = [t for t in successes_now if sum(1 for r in bank.task_results if r.get("id") == t and r.get("outcome") == "done") == 1]
+            if firsts and (bank.path / "pack.v1.yaml").exists():
+                # the pack that first completed a task is the positive record: its growth since the base becomes lessons
+                base_pack = load_pack_text((bank.path / "pack.v1.yaml").read_text(), pack.name)
+                new_ls = lessons_of(pack, base_pack, f"completed task {', '.join(firsts)}")
+                if new_ls:
+                    bank.add_lessons(new_ls)
+                    log(f"learn: {len(new_ls)} lesson(s) from completing {', '.join(firsts)} for the first time")
             if decisions:
                 edge = decisions[0].rec.get("tick", 0)       # the oldest tick still in the fatal window
                 bank.add_holdout([d for d in sample if d.rec.get("tick", 0) < edge])
@@ -491,6 +546,9 @@ def cmd_learn(a):
                 log(f"learn: incident saved to {d}")
                 try:
                     hints = hints_text((pack.raw.get("lessons") or []) + pool_hints, read_kinds)
+                    tt = tasks_text(pack.tasks, bank.task_results)
+                    if tt:
+                        hints = (hints + "\n\n" + tt) if hints else tt
                     # the audits: reads that predict the loss but the decider ignores, and questions that never change the action
                     try:
                         rel = relevance_text(relevance(recs))
@@ -504,7 +562,7 @@ def cmd_learn(a):
                     except Exception as e:  # noqa: BLE001
                         log(f"learn: audit skipped ({str(e)[:80]})")
                     res = improve(chat, pack, inc, bank.episodes, log, keep_rejected=bank.path / "rejected", others=earlier, hints=hints, calibrator=bank.calibrator(),
-                                  sensor=jev if a.requery else None, holdout=bank.holdout() if a.requery else None)
+                                  sensor=jev if a.requery else None, holdout=bank.holdout() if a.requery else None, successes=bank.successes())
                 except Exception as e:  # noqa: BLE001
                     res = {"pack": None}
                     log(f"learn: {str(e)[:140]}")
@@ -524,7 +582,79 @@ def cmd_learn(a):
                "by_version": {str(v): [e["ticks"] for e in bank.of_version(v)] for v in sorted({e["version"] for e in bank.episodes})},
                "revisions": {"kept": sum(1 for r in bank.revisions if r.get("kept")), "reverted": sum(1 for r in bank.revisions if r.get("kept") is False), "on_trial": sum(1 for r in bank.revisions if r.get("kept") is None)},
                "lessons": len(bank.lessons), "calibrator": "active" if bank.calibrator().active else "idle"}
+    if bank.task_results:
+        from .tasks import task_stats
+        summary["tasks"] = task_stats(bank.task_results)
+    if any(e.get("rating") for e in bank.episodes):
+        from .rater import calibrate
+        summary["rater"] = calibrate(bank.episodes)
     print(json.dumps(summary, indent=1))
+
+
+def cmd_suite(a):
+    """The evaluation suite: packs with tasks, several seeds, one sensor. Per task SIMA's two numbers, done within its
+    limit and done at all (the condition held at some tick), per category, and against a reference where the task has
+    one. The pack as written is the held-out number; --learned evaluates the learned pack. Nothing is learned here."""
+    from .device import open_device
+    from .learn import outcome
+    from .loop import Agent
+    from .pack import load_pack, load_pack_text
+    from .sensors import open_sensor
+    from .tasks import task_stats
+    rows = []
+    for name in a.packs.split(","):
+        src = Path(find_pack(name.strip()))
+        pack = load_pack(src)
+        pack_dir = src if src.is_dir() else src.parent
+        if a.learned and (pack_dir / "pack.learned.yaml").exists():
+            pack = load_pack_text((pack_dir / "pack.learned.yaml").read_text(), pack.name)
+        if not pack.tasks:
+            print(f"{pack.name}: no tasks; add a tasks: section or let `anygame learn --set-tasks` write some", file=sys.stderr)
+            continue
+        for seed in a.seeds.split(","):
+            device = open_device(a.device.replace("{seed}", seed.strip()), pack.size)
+            jev = open_sensor(a.sensor, timeout=float(pack.raw.get("sensor_timeout_s", os.environ.get("ANYGAME_JEV_TIMEOUT", "4"))))
+            agent = Agent(pack, device, jev, None, max_ticks=a.max_ticks)
+            agent.stall_ticks = 40
+            recs, events = [], []
+            agent.on_record = lambda rec, frame: recs.append(rec)
+            agent.on_task = events.append
+            try:
+                last = agent.run()
+            finally:
+                agent.close(); device.close()
+            ep = outcome(recs, int(seed) if seed.strip().isdigit() else 0, 1)
+            for t in pack.tasks:
+                evs = [e for e in events if e["id"] == t["id"]]
+                within = any(e["outcome"] == "done" for e in evs)
+                # done at all: the condition held at some tick, whatever the limit (SIMA's "without time limit")
+                without = within or any(all(Agent._cond(c, r.get("screen") or {}) for c in t["done"]) for r in recs if isinstance(r.get("screen"), dict))
+                ticks = min((e["ticks"] for e in evs if e["outcome"] == "done"), default=None)
+                ref = t.get("reference_ticks")
+                rows.append({"pack": pack.name, "seed": seed, "task": t["id"], "category": t["category"], "within": within, "without": without, "ticks": ticks,
+                             "within_reference": (ticks is not None and ticks <= int(ref)) if ref else None, "attempts": len(evs), "episode_ticks": agent.tick, "reason": ep["reason"],
+                             "cost_usd": round(agent.total_cost, 6), "sensor": a.sensor, "learned": bool(a.learned)})
+            print(json.dumps({"pack": pack.name, "seed": seed, "ticks": agent.tick, "reason": ep["reason"], "tasks_done": ep["tasks_done"], "tasks_failed": ep["tasks_failed"]}), file=sys.stderr)
+    if a.out:
+        with open(a.out, "a") as f:
+            for r in rows:
+                f.write(json.dumps(r) + "\n")
+    # the table: per pack and task, then per category, within / without
+    def rate(sel, key):
+        return (f"{sum(1 for r in sel if r[key]) / len(sel):.0%}" if sel else "–")
+    print(f"suite · sensor {a.sensor} · {'learned packs' if a.learned else 'packs as written (held out)'} · {len(rows)} task runs")
+    print(f"{'pack':<14}{'task':<18}{'category':<10}{'within limit':>13}{'at all':>8}{'vs ref':>8}{'median ticks':>14}")
+    for pk in sorted({r["pack"] for r in rows}):
+        for t in sorted({r["task"] for r in rows if r["pack"] == pk}):
+            sel = [r for r in rows if r["pack"] == pk and r["task"] == t]
+            tk = sorted(r["ticks"] for r in sel if r["ticks"] is not None)
+            refsel = [r for r in sel if r["within_reference"] is not None]
+            print(f"{pk:<14}{t:<18}{sel[0]['category']:<10}{rate(sel, 'within'):>13}{rate(sel, 'without'):>8}{rate(refsel, 'within_reference') if refsel else '–':>8}{(tk[len(tk) // 2] if tk else '–'):>14}")
+    print("by category:")
+    for c in sorted({r["category"] for r in rows}):
+        sel = [r for r in rows if r["category"] == c]
+        print(f"  {c:<10} within {rate(sel, 'within')}, at all {rate(sel, 'without')} ({len(sel)} runs)")
+    return rows
 
 
 def cmd_audit(a):
@@ -545,6 +675,13 @@ def cmd_audit(a):
     fatal = {inc.decisions[-1].rec.get("tick") for inc in incidents if inc.decisions}
     out: dict = {"pack": pack.name, "version": bank.version, "episodes": len(bank.episodes), "incidents": len(incidents), "banked_decisions": len(decisions), "holdout": len(bank.holdout())}
     out["questions"] = audit_questions(pack, decisions) if decisions else {}
+    if bank.task_results:
+        from .tasks import task_stats
+        out["tasks"] = task_stats(bank.task_results)
+        out["successes"] = len(bank.successes())
+    if any(e.get("rating") for e in bank.episodes):
+        from .rater import calibrate
+        out["rater"] = calibrate(bank.episodes)
     logs = sorted(bank.path.glob("episode-*.jsonl"), key=lambda p: int(p.stem.split("-")[1]))
     rel = []
     for lg in reversed(logs):
@@ -567,6 +704,13 @@ def cmd_audit(a):
     print(f"{pack.name} v{out['version']}: {out['episodes']} episodes, {out['incidents']} banked losses ({len(decisions)} decisions), {out['holdout']} held-out ordinary ticks")
     for q, r in out["questions"].items():
         print(f"  question {q}: {r['verdict']} (changes the action on {r['changes_action']} of {r['decisions']} decisions)")
+    if out.get("rater"):
+        r_ = out["rater"]
+        print(f"  rater: agrees with the trial order on {r_['agreement']} of {r_['pairs']} episode pairs ({r_['rated']} rated)" if r_["pairs"] else f"  rater: {r_['rated']} rated episodes, no comparable pairs yet")
+    if out.get("tasks"):
+        print(f"  tasks ({out.get('successes', 0)} success spans banked):")
+        for tid, t in out["tasks"]["tasks"].items():
+            print(f"    {tid} [{t['category']}]: {t['done']}/{t['attempts']} done" + (f", median {t['median_ticks']} ticks" if t["median_ticks"] is not None else ""))
     if rel:
         print("  " + relevance_text(rel).replace("\n", "\n  "))
     if out.get("order"):
@@ -672,7 +816,13 @@ def main(argv=None):
     ln.add_argument("--episodes", type=int, default=5, help="0 = forever"); ln.add_argument("--max-ticks", type=int, default=None); ln.add_argument("--goal", default=None)
     ln.add_argument("--fallback", action="store_true", help="VLM fallback on screens the pack cannot read (restart prompts, game-over cards)")
     ln.add_argument("--bank", default=None, help="where episodes and incidents go (default <pack>/bank)"); ln.add_argument("--out", default=None, help="the learned pack (default <pack>/pack.learned.yaml)")
+    ln.add_argument("--set-tasks", type=int, default=0, metavar="N", help="let the chat model set up to N new practice tasks (verified from the reads) every other episode");
+    ln.add_argument("--rate", action="store_true", help="rate every episode 0..100 for completion and directedness with the chat model (the score where the pack has none)");
     ln.add_argument("--fresh", action="store_true", help="ignore an existing learned pack"); ln.add_argument("--no-requery", dest="requery", action="store_false", help="do not re-ask the decider on banked states when judging a revision"); ln.set_defaults(fn=cmd_learn, requery=True)
+    su = sub.add_parser("suite", help="the evaluation suite: packs with tasks over seeds; per task done within its limit and at all, per category, against a reference")
+    su.add_argument("packs", help="comma-separated pack names"); su.add_argument("--device", required=True, help="use {seed} where the seed goes"); su.add_argument("--seeds", default="1,2,3")
+    su.add_argument("--sensor", default="jev"); su.add_argument("--max-ticks", type=int, default=300); su.add_argument("--learned", action="store_true", help="evaluate pack.learned.yaml instead of the pack as written")
+    su.add_argument("--out", default=None, help="append one row per task run to this jsonl"); su.set_defaults(fn=cmd_suite)
     ad = sub.add_parser("audit", help="what the bank says about a pack: question value, ignored reads, option-order A/B, counterfactual return on banked losses")
     ad.add_argument("pack"); ad.add_argument("--bank", default=None); ad.add_argument("--out", default=None, help="the learned pack to audit (default <pack>/pack.learned.yaml if it exists)")
     ad.add_argument("--sensor", default="none", help="jev | clm | none: with a sensor the decider is re-asked on the banked states"); ad.add_argument("--json", action="store_true"); ad.set_defaults(fn=cmd_audit)

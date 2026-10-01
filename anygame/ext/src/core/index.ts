@@ -12,6 +12,7 @@ export * from "./demo.js";
 export * from "./explore.js";
 export { author, probe, checkPack, withFingerprints, extractYaml, frameToDataUrl } from "./author.js";
 export * from "./learn.js";
+export * from "./tasks.js";
 export { BUNDLED_PACKS } from "../packs.generated.js";
 
 /** The runtime's own `eval`: run a pack's tests on decoded fixture frames. Used by the Node tests and the panel. */

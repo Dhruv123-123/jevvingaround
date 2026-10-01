@@ -15,6 +15,7 @@ export interface DemoDigest {
   changeMap: number[][];                       // 8x8, 0..1: how much each region changed across the demo
   pairs: { event: DemoEvent; before: Frame; after: Frame }[];
   intents: string[];
+  chunks: [string[], number][];      // recurring key runs: candidates for a chunk action
   text: string;                                // the summary handed to the author
 }
 
@@ -65,6 +66,7 @@ export function digest(demo: Demo, maxPairs = 6): DemoDigest {
   }
   const seconds = demo.frames.length ? Math.round((demo.frames[demo.frames.length - 1].t - demo.frames[0].t) / 100) / 10 : 0;
   const intents = demo.events.map((e) => e.intent).filter((x): x is string => !!x);
+  const chunks = keyRuns(demo.events);
   const hot = changeMap.flatMap((row, y) => row.map((v, x) => ({ v, x, y }))).filter((c) => c.v > 0.15).sort((a, b) => b.v - a.v).slice(0, 12);
   const text = [
     `DEMONSTRATION (${demo.source}): ${seconds}s, ${demo.frames.length} frames, ${demo.events.length} inputs.`,
@@ -72,7 +74,21 @@ export function digest(demo: Demo, maxPairs = 6): DemoDigest {
     `click clusters (px, count): ${JSON.stringify(clicks.slice(0, 12))}`,
     `regions that change most (8x8 grid cells, x then y, 0..1): ${JSON.stringify(hot.map((c) => [c.x, c.y, c.v]))}`,
     intents.length ? `what the player said they were doing: ${JSON.stringify(intents.slice(0, 20))}` : "",
+    chunks.length ? `recurring key runs (keys pressed within 600 ms of each other, count; candidates for a chunk action): ${JSON.stringify(chunks)}` : "",
     demo.notes ? `notes: ${demo.notes}` : "",
   ].filter(Boolean).join("\n");
-  return { seconds, keys, clicks, changeMap, pairs, intents, text };
+  return { seconds, keys, clicks, changeMap, pairs, intents, chunks, text };
+}
+
+/** Key sequences the player repeats: runs of 2 to maxLen keys each within gapMs of the previous one, counted across
+ *  the demonstration. A run that recurs is a candidate `chunk` action. Same rule as demo.key_runs. */
+export function keyRuns(events: DemoEvent[], gapMs = 600, maxLen = 4, minCount = 2): [string[], number][] {
+  const keys = events.filter((e) => e.key && e.key !== "(wait)" && e.t !== undefined).map((e) => [e.t as number, e.key as string] as [number, string]);
+  const runs: string[][] = []; let cur: [number, string][] = [];
+  for (const [t, k] of keys) { if (cur.length && t - cur[cur.length - 1][0] > gapMs) { runs.push(cur.map((x) => x[1])); cur = []; } cur.push([t, k]); }
+  if (cur.length) runs.push(cur.map((x) => x[1]));
+  const c = new Map<string, number>();
+  for (const r of runs) for (let n = 2; n <= maxLen; n++) for (let i = 0; i + n <= r.length; i++) { const k = JSON.stringify(r.slice(i, i + n)); c.set(k, (c.get(k) ?? 0) + 1); }
+  return [...c.entries()].sort((a, b) => b[1] - a[1] || b[0].length - a[0].length).slice(0, 12).map(([k, v]) => [JSON.parse(k) as string[], v] as [string[], number])
+    .filter(([k, v]) => (v >= minCount && new Set(k).size > 1) || (v >= minCount && k.length >= 3)).slice(0, 6);
 }

@@ -54,6 +54,10 @@ rules:
   - { if: { read: head_around.left_space,  lte: 6 }, exclude: [left] }
   - { if: { read: head_around.right_space, lte: 6 }, exclude: [right] }
   - { if: { read: head_moving, in: [up, down, left, right] }, exclude: [$head_reverse] }   # the game ignores a reversal, which is as fatal as keep
+tasks:                      # practice goals the runtime verifies from the reads; one at a time is told to the decider
+  - { id: first_food, instruction: "Eat one food: reach score 10 (each food is 10).", done: { read: score, gte: 10 }, category: collect, limit_ticks: 60 }
+  - { id: five_food, instruction: "Eat five food without dying: reach score 50.", done: { read: score, gte: 50 }, category: score, limit_ticks: 220 }
+  - { id: survive_200, instruction: "Stay alive for 200 ticks: keep away from the body and the walls, and never enter a pocket.", done: { read: status, equals: playing }, category: survive, hold_ticks: 200, limit_ticks: 220 }
 tests:
   - frame: fixtures/start.png
     expect: { status: playing }

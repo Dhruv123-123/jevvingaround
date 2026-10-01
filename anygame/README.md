@@ -100,6 +100,23 @@ time against 20% for no bias and want a rule-excluded move 62% of the time again
 learned pack still owns one of its four banked losses, the pocket death a one-step rule cannot see.
 [docs/research/sima2.md](docs/research/sima2.md) reads DeepMind's SIMA 2 report against this design.
 
+**From SIMA 2, built without training a model.** A pack can carry **tasks** (`tasks:`): practice goals with a
+verifier over the reads (`done`, one condition or several, held for `hold_ticks`; `when` for availability;
+`limit_ticks`; a category from navigate, collect, score, survive, clear, build, avoid). The loop tells the
+decider one task at a time beside the paragraph and verifies it every tick; `anygame learn --set-tasks N` lets
+the chat model propose new ones from the typed frame and the frame, steered to the weakest category, and the
+author writes the first from the demonstration. A completed task (or a win) banks the span as a **positive
+incident**: every revision must keep those choices allowed, and the pack that first completes a task yields
+lessons, so the loop learns from what worked and not only from the fatal tick; episodes rank by won, then
+tasks done, then survival. `anygame suite <packs> --device … --seeds …` is the evaluation suite: per task,
+done within its limit and done at all (SIMA's two numbers), per category, against a `reference_ticks` where
+the task has one; the pack as written is the held-out number, `--learned` the learned one.
+`anygame learn --rate` adds an **episode rater** (the chat model scores sampled frames and the action log 0 to
+100 for completion and directedness), used as the score where the pack has none and calibrated against the
+trial order the loop already trusts (`anygame audit` reports the agreement). And the input vocabulary grew
+for 3D and action games: `key` takes `hold_ms`, `mouse_move` moves the pointer by `dx, dy`, and `chunk` plays
+a short key sequence as one decision, which the demonstration digest proposes from recurring key runs.
+
 Measured on Snake from a **naive pack** (no rules, no `around` read, a two-line paragraph), eight episodes with
 GPT-5.6 revising and Jev playing, the trial record and lessons on: episode 1 died at tick 51; v2 (rules on free
 cells) played 365 ticks; v3 381; v4 408 with score 1500, which is where the hand-written Snake pack sits. Eight
@@ -307,7 +324,8 @@ on:
 | `tetris` | the falling piece, the stack's features, and the reachable landings with computed consequences as a typed choice; a `macro` action plays the choice as keys and the next spawn verifies it | tetris |
 | `history: 1` | `<id>_prev` (last distinct value), and for a located cell `<id>_moving` / `<id>_reverse` | direction of travel |
 
-Actions are typed. `swipe`, `tap` and `key` are direct; `play` means "pick a slot, then a target cell", and the
+Actions are typed. `swipe`, `tap` and `key` are direct (`key` with `hold_ms` is a held key; `chunk` plays a short
+key sequence as one decision; `mouse_move` moves the pointer by `dx, dy` for a camera or a cursor); `play` means "pick a slot, then a target cell", and the
 runtime asks Jev for the slot and the cell in the same call as the action, so a Clash Royale tick is one request;
 `macro` means "pick one of the options a read computed" and plays it as a key sequence.
 
@@ -497,7 +515,8 @@ so every pack is testable in CI with no hardware and no account beyond the model
 anygame packs
 anygame play <pack> --device web://…[#state=<js>]|screen://x,y,w,h|stream://ws://…|pyboy://<rom>|adb://…|replay://<dir> [--hud 8080] [--max-ticks N] [--sensor none]
 anygame eval <pack> [--sensor jev]        # perception tests on the pack's frames; action checks with a sensor
-anygame audit <pack> [--bank DIR] [--sensor jev]   # what the bank says: question value, ignored reads, option-order A/B, counterfactual return
+anygame audit <pack> [--bank DIR] [--sensor jev]   # what the bank says: question value, ignored reads, option-order A/B, counterfactual return, tasks, rater
+anygame suite <pack,pack> --device "web://games/snake.html?seed={seed}" --seeds 1,2,3 [--learned] [--out suite.jsonl]   # tasks done within the limit and at all, per category
 anygame record --device adb://<ip>:5555 --out packs/<pack>/fixtures --seconds 30   # frames for authoring
 anygame render <recorded-dir> --log run.jsonl --out demo.mp4                         # video with the decision panel
 anygame go <device> [--game "…"] [--play "…"] [--pack <bundled>] [--learn N]   # pool → author if needed → play; --learn: episodes and revisions

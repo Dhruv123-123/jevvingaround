@@ -226,3 +226,67 @@ test("margin read and the per-tick budget", async () => {
   assert.equal(calls, 2); assert.deepEqual(recs.map((r) => r.skipped === "budget"), [false, true, true, false, true, true]); assert.equal(ag.skippedBudget, 4);
   assert.ok(recs.every((r) => r.choice) && recs.filter((r) => r.skipped).every((r) => r.sensor.includes("rules on last answers")));
 });
+
+test("tasks: the pack validates them, the loop tracks them, successes are kept allowed, the setter validates proposals", async () => {
+  const { checkTasks, Agent, StillDevice, RandomSensor, outcome, betterEpisode, Bank, taskStats, chooseOrder, tasksText, verifyRevision, proposeTasks } = await import("../dist/core.js");
+  const reads = { score: { kind: "json", path: "score" }, head: { kind: "locate", in: "x", symbol: "H" } };
+  const t = checkTasks([{ id: "ten", instruction: "reach 10", done: { read: "score", gte: 10 } }], reads)[0];
+  assert.deepEqual(t.done, [{ read: "score", gte: 10 }]); assert.equal(t.limit_ticks, 150); assert.equal(t.category, "other");
+  assert.throws(() => checkTasks([{ id: "x", instruction: "?", done: { read: "nope", equals: 1 } }], reads));
+  assert.throws(() => checkTasks([{ id: "x", instruction: "?" }], reads));
+  const raw = yaml.load(BUNDLED_PACKS["snake-state"]);
+  raw.tasks = [{ id: "score_ten", instruction: "eat until the score reaches 10", done: { read: "score", gte: 10 }, category: "score", limit_ticks: 20 },
+               { id: "go_right", instruction: "move the head to column 12", done: { read: "head", equals: "c12r7" }, category: "navigate", limit_ticks: 2 }];
+  const pack = packFromText(dumpPack(raw), "snake-state");
+  assert.deepEqual(pack.tasks.map((x) => x.id), ["score_ten", "go_right"]);
+  const states = [0, 1, 2, 3, 4, 5].map((i) => ({ snake: [[3 + i, 6], [2 + i, 6], [1 + i, 6]], food: [9, 2], score: i < 2 ? 0 : 10, over: false }));
+  const dev = new StillDevice([{ width: W, height: H, data: new Uint8ClampedArray(W * H * 4) }], [W, H]); let si = 0; dev.state = async () => states[Math.min(si++, 5)];
+  const seen = []; const spy = { model: "spy", async ask(s, qs) { seen.push(s.task); return new RandomSensor(1).ask(s, qs); } };
+  const ag = new Agent(pack, dev, spy); const events = []; ag.onTask = (e) => events.push(e);
+  const recs = []; for (let i = 0; i < 6; i++) recs.push(await ag.step());
+  assert.equal(recs[0].task_started, "score_ten"); assert.equal(recs[2].task_done, "score_ten"); assert.equal(events[0].outcome, "done"); assert.equal(events[0].ticks, 2);
+  assert.equal(recs[3].task_started, "go_right"); assert.equal(recs[5].task_failed, "go_right"); assert.equal(events[1].outcome, "failed");
+  assert.equal(seen[0], "eat until the score reaches 10");
+  const ep = outcome(recs, 1, 1, "score"); assert.equal(ep.tasks_done, 1); assert.equal(ep.tasks_failed, 1);
+  assert.ok(betterEpisode({ won: false, lost: false, ticks: 400, score: 0, tasks_done: 0 }, { won: false, lost: true, ticks: 50, score: 0, tasks_done: 1 }));
+  const bank = new Bank(); for (const e of events) bank.addTaskResult(e, 1, 1); bank.addTaskResult({ ...events[1] }, 1, 2);
+  const st = taskStats(bank.taskResults); assert.equal(st.tasks.score_ten.rate, 1); assert.equal(st.categories.navigate.rate, 0); assert.equal(st.tasks.go_right.attempts, 2);
+  assert.equal(chooseOrder(pack.tasks, bank.taskResults)[0], "go_right"); assert.match(tasksText(pack.tasks, bank.taskResults), /score_ten \[score\] 1\/1/);
+  // positive incidents: a revision that blocks a choice in a success span is refused; the per-kind cap keeps both kinds
+  const inc = snakeIncident(); const good = { reason: "done: eat_three", tick: 30, decisions: inc.decisions.slice(0, 2), at: "", kind: "success" };
+  const fullPack = packFromText(BUNDLED_PACKS.snake, "snake"), incumbent = stripped();
+  const r2 = yaml.load(dumpPack(fullPack.raw)); r2.rules.push({ if: { read: "head_moving", equals: "right" }, exclude: ["right"] });
+  const v = verifyRevision(packFromText(dumpPack(r2), "snake"), incumbent, inc, 0.7, 0.34, [], false, [good]);
+  assert.ok(!v.ok && v.why.includes("completed a task")); assert.ok(verifyRevision(fullPack, incumbent, inc, 0.7, 0.34, [], false, [good]).ok);
+  const b2 = new Bank(1); b2.addIncident(inc); b2.addIncident(good); b2.addIncident({ ...incidentOf(inc.decisions, "status is dead", 99) });
+  assert.equal(b2.losses().length, 1); assert.equal(b2.losses()[0].tick, 99); assert.equal(b2.successes().length, 1);
+  // the setter: ids normalised, unknown reads and already-true conditions rejected, categories outside the taxonomy become other
+  const chat = { model: "fake", async complete() { return { text: '[{"id": "Score Five!", "instruction": "reach 5", "done": {"read": "score", "gte": 5}, "category": "score", "limit_ticks": 40}, {"id": "bogus", "instruction": "?", "done": {"read": "nothing", "equals": 1}}, {"id": "already", "instruction": "be playing", "done": {"read": "status", "equals": "playing"}}, {"id": "list", "instruction": "two", "done": [{"read": "score", "gte": 1}, {"read": "head", "not": "c3r7"}], "category": "weird"}, {"id": "go_there", "instruction": "reach the food", "done": {"read": "head", "equals": "c9r3"}}]', usage: {}, ms: 0 }; } };
+  const log = [];
+  const fresh = packFromText(BUNDLED_PACKS["snake-state"], "snake-state");
+  const newTasks = await proposeTasks(chat, fresh, { width: W, height: H, data: new Uint8ClampedArray(W * H * 4) }, { score: 0, head: "c3r7", status: "playing" }, [], 5, (m) => log.push(m));
+  assert.deepEqual(newTasks.map((x) => x.id), ["score_five", "list"]); assert.equal(newTasks[1].category, "other"); assert.equal(newTasks[1].done.length, 2);
+  assert.ok(log.some((m) => m.includes("bogus")) && log.some((m) => m.includes("already done")) && log.some((m) => m.includes("exact cell")));
+  for (let i = 0; i < 4; i++) await ag.step();
+  assert.equal(ag.taskLog.filter((e) => e.id === "go_right" && e.outcome === "failed").length, 2); assert.equal(ag.task, null);
+});
+
+test("held keys, relative mouse and chunks reach the device; the digest finds recurring key runs", async () => {
+  const { Agent, packFromText: pft, keyRuns } = await import("../dist/core.js");
+  const raw = yaml.load(BUNDLED_PACKS["snake-state"]);
+  raw.act = [{ id: "run", kind: "key", key: "ShiftLeft", hold_ms: 120 }, { id: "combo", kind: "chunk", keys: ["ArrowLeft", "ArrowLeft", "Space"], key_ms: 1 }, { id: "look", kind: "mouse_move", dx: 40, dy: -8 }, { id: "keep", kind: "wait" }];
+  raw.rules = []; raw.tasks = [];
+  const pack = pft(dumpPack(raw), "inputs");
+  const got = [];
+  const dev = { size: () => [W, H], frame: async () => ({ width: W, height: H, data: new Uint8ClampedArray(W * H * 4) }), tap: async () => {}, swipe: async () => {}, key: async (k, hold) => got.push(hold ? ["key", k, hold] : ["key", k]), mouseMove: async (dx, dy) => got.push(["mouse_move", dx, dy]), close: async () => {} };
+  const ag = new Agent(pack, dev, null);
+  assert.equal(await ag.act(pack.actions[0], {}), "key ShiftLeft held 120 ms"); assert.deepEqual(got.at(-1), ["key", "ShiftLeft", 120]);
+  assert.equal(await ag.act(pack.actions[1], {}), "chunk ArrowLeft ArrowLeft Space"); assert.deepEqual(got.slice(-3), [["key", "ArrowLeft"], ["key", "ArrowLeft"], ["key", "Space"]]);
+  assert.equal(await ag.act(pack.actions[2], {}), "mouse_move 40,-8"); assert.deepEqual(got.at(-1), ["mouse_move", 40, -8]);
+  delete dev.mouseMove; assert.match(await ag.act(pack.actions[2], {}), /unsupported/);
+  for (const bad of [{ id: "c", kind: "chunk" }, { id: "m", kind: "mouse_move" }, { id: "k", kind: "key" }]) assert.throws(() => { const r = yaml.load(dumpPack(raw)); r.act = [bad]; pft(dumpPack(r), "x"); });
+  const ev = []; let t = 0;
+  for (let rep = 0; rep < 3; rep++) { for (const k of ["ArrowLeft", "ArrowLeft", "Space"]) { ev.push({ t, type: "key", key: k }); t += 150; } t += 2000; }
+  ev.push({ t, type: "key", key: "ArrowUp" });
+  const runs = keyRuns(ev); assert.deepEqual(runs[0], [["ArrowLeft", "ArrowLeft", "Space"], 3]); assert.deepEqual(keyRuns([]), []);
+});

@@ -18,7 +18,11 @@ class Device:
     def swipe(self, x0: int, y0: int, x1: int, y1: int, ms: int = 120) -> None:
         raise NotImplementedError
 
-    def key(self, name: str) -> None:
+    def mouse_move(self, dx: int, dy: int) -> None:
+        """Relative mouse motion (a camera, a cursor); devices without a pointer raise."""
+        raise NotImplementedError(f"{type(self).__name__} has no pointer to move")
+
+    def key(self, name: str, hold_ms: int = 0) -> None:
         raise NotImplementedError(f"{type(self).__name__} has no keys")
 
     def close(self) -> None:

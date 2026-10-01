@@ -54,6 +54,7 @@ play:       # the paragraph: what the game is and how to play it
 questions:  # what Jev is asked every tick (noul beliefs, choices, scores)
 rules:      # beliefs and reads become policy: exclude, set, avoid, only
 act_when / stop_when / settle / tick_hz / sensor_timeout_s / budget_ms
+tasks:      # practice goals with a verifier over the reads (done, when, hold_ticks, limit_ticks, category)
 tests:      # fixtures with the exact values the reads must produce
 modes:      # sub-packs for other screens (a shop, a map), each with a `when`
 fingerprints:   # screen name → base64 fingerprint (main and every mode and transient)
@@ -73,7 +74,9 @@ There is no training step. Learning is growing the pack, and every growth is ver
 | a screen the pack reads well but has not seen | its fingerprint joins the index as `main` | support alone |
 | a game with no pack | the author writes one from a **demonstration** (your recording, or the explorer's minute of play with intents): the action set as used, the regions that change, the paragraph | the pack must pass tests on the demonstration's frames; changed expectations are re-checked against the image ("cannot lower the bar") |
 | a **loss** while playing | the last decisions and their frames become an **incident**; the chat model revises the typed frame: derived reads, rules, questions, paragraph | **replay**: Jev's recorded answers are pushed through the candidate's reads and rules; the fatal decision must be guarded (a rule excludes it) or visible (a new read separates that tick), ordinary decisions must stay allowed, screens must still read |
-| the next episode with a revision | the revision stays or goes | it must not play worse than the incumbent's median episode |
+| the next episode with a revision | the revision stays or goes | it must not play worse than the incumbent's median episode (won > tasks done > not lost > longer > score) |
+| a **task** completes or the game is won | the span becomes a **positive incident**; the pack that first completed a task yields lessons | every later revision must keep the span's choices allowed (replay) |
+| the task record per category | the **setter** proposes new tasks from the typed frame, weakest category first | a task must name real reads and not already hold; it is verified every tick by the compiler |
 
 The last two rows are the closest thing to reinforcement learning this system does, and they never touch a
 model: the gradient is a change to the typed frame, and the reward is an episode outcome (won > not lost >

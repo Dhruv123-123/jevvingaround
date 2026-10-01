@@ -1,6 +1,7 @@
 // The loop: frame → reads → derived reads → state → one sensor call → rules → typed action. Port of anygame/loop.py.
 import { center, type Frame } from "./geometry.js";
-import { dumpPack, loadPack, type ActionDef, type Pack } from "./pack.js";
+import { dumpPack, loadPack, type ActionDef, type Pack, type TaskDef } from "./pack.js";
+export interface TaskEvent { id: string; category: string; outcome: "done" | "failed"; ticks: number; tick: number; limit_ticks: number }
 import { aroundOf, marginOf, marginNum, readAll, type Values } from "./reads.js";
 import { TetrisTracker } from "./tetris.js";
 import { FingerprintIndex, fingerprint, fpToBase64, type Fingerprint } from "./fingerprint.js";
@@ -13,7 +14,8 @@ export interface Device {
   state?(): Promise<any>;          // a game that publishes its state: what the json / json_grid reads consume
   tap(x: number, y: number): Promise<void>;
   swipe(x0: number, y0: number, x1: number, y1: number, ms?: number): Promise<void>;
-  key(name: string): Promise<void>;
+  key(name: string, holdMs?: number): Promise<void>;
+  mouseMove?(dx: number, dy: number): Promise<void>;     // relative motion (a camera, a cursor)
   close(): Promise<void>;
 }
 
@@ -66,6 +68,13 @@ export class Agent {
   totalCost = 0;
   settling = 0;
   lastAnswers: Record<string, Answer> | null = null;
+  // tasks: goals with a verifier over the reads; the active one goes to the decider as `task`
+  task: TaskDef | null = null;
+  taskStarted = 0;
+  taskHeld = 0;
+  taskLog: TaskEvent[] = [];
+  taskOrder: string[] | null = null;
+  onTask?: (ev: TaskEvent) => void;
   sensorEwmaMs = 0;        // what the decider has been taking lately: the per-tick budget is judged against it
   budgetSkips = 0;         // consecutive ticks the decider was skipped for the budget
   skippedBudget = 0;       // over the run
@@ -195,6 +204,35 @@ export class Agent {
     return false;
   }
 
+  // ---- tasks ----------------------------------------------------------------------------------
+  private taskOk(conds: any, values: Values): boolean { return (Array.isArray(conds) ? conds : [conds]).every((c: any) => this.cond(c, values)); }
+  /** The next task: in the setter's order (else the pack's), one whose `when` holds, least attempted first. */
+  private pickTask(values: Values): TaskDef | null {
+    const tried: Record<string, number> = {}; for (const e of this.taskLog) tried[e.id] = (tried[e.id] ?? 0) + 1;
+    const order: Record<string, number> = {}; (this.taskOrder ?? this.base.tasks.map((t) => t.id)).forEach((id, k) => (order[id] = k));
+    const failed: Record<string, number> = {}; for (const e of this.taskLog) if (e.outcome === "failed") failed[e.id] = (failed[e.id] ?? 0) + 1;
+    const cap = Number(this.base.raw.task_attempts ?? 2);      // a task that keeps failing this run waits for the next one
+    const cands = this.base.tasks.filter((t) => (!t.when || this.taskOk(t.when, values)) && !this.taskOk(t.done, values) && (failed[t.id] ?? 0) < cap);
+    cands.sort((a, b) => (tried[a.id] ?? 0) - (tried[b.id] ?? 0) || (order[a.id] ?? 1e9) - (order[b.id] ?? 1e9));
+    return cands[0] ?? null;
+  }
+  private finishTask(outcome: "done" | "failed", rec: Rec) {
+    const t = this.task!;
+    const ev: TaskEvent = { id: t.id, category: t.category ?? "other", outcome, ticks: this.tick - this.taskStarted, tick: this.tick, limit_ticks: t.limit_ticks };
+    this.taskLog.push(ev);
+    (rec as any)[`task_${outcome}`] = t.id;
+    this.task = null; this.taskHeld = 0;
+    this.onTask?.(ev);
+  }
+  private tasksTick(values: Values, rec: Rec) {
+    if (!this.task) { this.task = this.pickTask(values); if (this.task) { this.taskStarted = this.tick; this.taskHeld = 0; (rec as any).task_started = this.task.id; } }
+    if (!this.task) return;
+    (rec as any).task = this.task.id;
+    if (this.taskOk(this.task.done, values)) { this.taskHeld++; if (this.taskHeld >= Number(this.task.hold_ticks ?? 1)) { this.finishTask("done", rec); return; } }
+    else this.taskHeld = 0;
+    if (this.tick - this.taskStarted >= Number(this.task.limit_ticks ?? 150)) this.finishTask("failed", rec);
+  }
+
   /** The rules whose condition holds on these answers and values, with why. */
   hits(answers: Record<string, Answer>, values: Values): [any, string][] {
     const out: [any, string][] = [];
@@ -305,7 +343,18 @@ export class Agent {
     const [w, h] = this.device.size();
     const p = a.params;
     if (a.kind === "wait") return "wait";
-    if (a.kind === "key") { await this.device.key(p.key); return `key ${p.key}`; }
+    if (a.kind === "key") { const hold = Number(p.hold_ms ?? 0); if (hold) { await this.device.key(p.key, hold); return `key ${p.key} held ${hold} ms`; } await this.device.key(p.key); return `key ${p.key}`; }
+    if (a.kind === "chunk") {
+      // a short input sequence as one decision (what a demonstration's recurring key runs become)
+      const keys = ((p.keys ?? []) as any[]).map(String), hold = Number(p.hold_ms ?? 0);
+      for (const k of keys) { await (hold ? this.device.key(k, hold) : this.device.key(k)); await sleep(Number(p.key_ms ?? 40)); }
+      return `chunk ${keys.join(" ")}`;
+    }
+    if (a.kind === "mouse_move") {
+      if (!this.device.mouseMove) return "mouse_move unsupported: this device has no pointer to move";
+      await this.device.mouseMove(Number(p.dx ?? 0), Number(p.dy ?? 0));
+      return `mouse_move ${p.dx ?? 0},${p.dy ?? 0}`;
+    }
     if (a.kind === "macro") {
       const label = answers[`${a.id}__option`]?.choice;
       const tracker = this.trackers[String(p.options).split(".")[0]];
@@ -406,9 +455,10 @@ export class Agent {
     const changed = h !== this.lastHash;
     if (changed) this.noops = [];
     else { const last = this.history[this.history.length - 1]; if (last?.key && !this.noops.includes(last.key)) this.noops.push(last.key); }
-    const state = { game: this.pack.name, tick: this.tick, how_to_play: this.pack.play, screen: values, recent_actions: this.history.slice(-6).map((x) => x.action), last_action_changed_screen: this.history.length ? changed : null, actions_that_did_nothing_since_last_change: [...this.noops] };
+    const state: Record<string, any> = { game: this.pack.name, tick: this.tick, how_to_play: this.pack.play, screen: values, recent_actions: this.history.slice(-6).map((x) => x.action), last_action_changed_screen: this.history.length ? changed : null, actions_that_did_nothing_since_last_change: [...this.noops] };
     this.lastValues = values;
     const rec: Rec = { tick: this.tick, hash: h, perception_ms: Math.round(tPerc), timings_ms: timings, screen: values, action: "wait", mode: this.mode, support: Math.round(support * 100) / 100, known: cls.known };
+    if (this.mode === "main" && this.base.tasks.length) { this.tasksTick(values, rec); if (this.task) state.task = this.task.instruction; }
     const done = (r: Rec) => { this.lastHash = h; this.onRecord?.(r, frame, null); return r; };
     // ---- the hybrid: a screen the pack cannot read goes to the VLM, which acts now and may define a mode
     if (!supported && !cls.known) {

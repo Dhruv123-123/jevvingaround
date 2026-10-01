@@ -1,5 +1,6 @@
 """Learning from experience: episodes, incidents, and a revision that must replay better than the incumbent before it
 is accepted. Snake boards are painted with the pack's own colours, so the reads are real. Mirrors ext/test/learn.test.mjs."""
+import json
 import os
 import numpy as np
 import yaml
@@ -50,14 +51,14 @@ def snake_yaml():
 def stripped():
     """The Snake pack without its guard: no around read, no rules, no OCR score (keeps the test fast)."""
     raw = yaml.safe_load(snake_yaml())
-    del raw["read"]["head_around"]; del raw["read"]["score"]; raw["rules"] = []; raw["tests"] = []
+    del raw["read"]["head_around"]; del raw["read"]["score"]; raw["rules"] = []; raw["tests"] = []; raw.pop("tasks", None)
     raw["play"] = "Snake. Move toward the food."
     return load_pack_text(dump_pack(raw), "snake-stripped")
 
 
 def full():
     raw = yaml.safe_load(snake_yaml())
-    del raw["read"]["score"]; raw["tests"] = []
+    del raw["read"]["score"]; raw["tests"] = []; raw.pop("tasks", None)
     return load_pack_text(dump_pack(raw), "snake")
 
 
@@ -425,3 +426,194 @@ def test_margin_read_and_the_per_tick_budget():
     skipped = [r.get("skipped") == "budget" for r in recs]
     assert slow.calls == 2 and skipped == [False, True, True, False, True, True] and ag.skipped_budget == 4
     assert all(r["choice"] for r in recs) and all("rules on last answers" in r["sensor"] for r in recs if r.get("skipped"))
+
+
+def test_tasks_in_the_pack_the_loop_tracks_them_and_successes_are_banked_and_kept_allowed(tmp_path):
+    from anygame.learn import Bank, Incident, outcome
+    from anygame.loop import Agent
+    from anygame.pack import load_pack, check_tasks, PackError
+    from anygame.tasks import task_stats, choose_order, weakest_categories, tasks_text
+    from test_state import StateDevice
+    # schema: done is required and must name a read; defaults are filled
+    reads = {"score": {"kind": "json", "path": "score"}, "head": {"kind": "locate", "in": "x", "symbol": "H"}}
+    t = check_tasks([{"id": "ten", "instruction": "reach 10", "done": {"read": "score", "gte": 10}}], reads)[0]
+    assert t["done"] == [{"read": "score", "gte": 10}] and t["limit_ticks"] == 150 and t["hold_ticks"] == 1 and t["category"] == "other"
+    with pytest.raises(PackError):
+        check_tasks([{"id": "x", "instruction": "?", "done": {"read": "nope", "equals": 1}}], reads)
+    with pytest.raises(PackError):
+        check_tasks([{"id": "x", "instruction": "?"}], reads)
+    # the loop: the state snake with two tasks; the score read makes the first done, the second times out
+    pack = load_pack(os.path.join(ROOT, "packs", "snake-state"))
+    pack.raw["tasks"] = [{"id": "score_ten", "instruction": "eat until the score reaches 10", "done": {"read": "score", "gte": 10}, "category": "score", "limit_ticks": 20},
+                         {"id": "go_right", "instruction": "move the head to column 12", "done": {"read": "head", "equals": "c12r7"}, "category": "navigate", "limit_ticks": 2}]
+    from anygame.pack import load_pack_text, dump_pack
+    pack = load_pack_text(dump_pack(pack.raw), "snake-state")
+    assert [t["id"] for t in pack.tasks] == ["score_ten", "go_right"]
+    states = [{"snake": [[3 + i, 6], [2 + i, 6], [1 + i, 6]], "food": [9, 2], "score": 0 if i < 2 else 10, "over": False} for i in range(6)]
+    from anygame.sensors import RandomSensor
+    events = []
+    ag = Agent(pack, StateDevice(states), RandomSensor(1))
+    ag.on_task = events.append
+    recs = [ag.step() for _ in range(6)]
+    assert recs[0]["task_started"] == "score_ten" and recs[0]["task"] == "score_ten"
+    assert recs[2].get("task_done") == "score_ten" and events[0]["outcome"] == "done" and events[0]["category"] == "score" and events[0]["ticks"] == 2
+    assert recs[3]["task_started"] == "go_right" and recs[5].get("task_failed") == "go_right" and events[1]["outcome"] == "failed"
+    assert any(r.get("task") for r in recs) and ag.task_log[-1]["id"] == "go_right"
+    # a task that failed twice this run is not retried a third time (task_attempts, default 2)
+    for _ in range(4):
+        ag.step()
+    assert sum(1 for e in ag.task_log if e["id"] == "go_right" and e["outcome"] == "failed") == 2 and ag.task is None
+    # the decider is told the task beside the play notes
+    seen = []
+    class Spy(RandomSensor):
+        def ask(self, state, qs):
+            seen.append(state.get("task")); return super().ask(state, qs)
+    ag2 = Agent(pack, StateDevice(states), Spy(1)); ag2.step()
+    assert seen and seen[0] == "eat until the score reaches 10"
+    # outcome counts tasks; more tasks done ranks above surviving longer
+    ep = outcome(recs, 1, 1, "score")
+    assert ep["tasks_done"] == 1 and ep["tasks_failed"] == 1
+    assert better_episode({"won": False, "lost": False, "ticks": 400, "score": 0, "tasks_done": 0}, {"won": False, "lost": True, "ticks": 50, "score": 0, "tasks_done": 1})
+    # the record: stats, the setter's order prefers the weakest category, the prompt line
+    bank = Bank(tmp_path / "bank")
+    for ev in events:
+        bank.add_task_result(ev, 1, 1)
+    bank.add_task_result({**events[1], "outcome": "failed"}, 1, 2)
+    st = task_stats(Bank(tmp_path / "bank").task_results)
+    assert st["tasks"]["score_ten"]["rate"] == 1.0 and st["categories"]["navigate"]["rate"] == 0.0 and st["tasks"]["go_right"]["attempts"] == 3
+    assert choose_order(pack.tasks, bank.task_results)[0] == "go_right" and "navigate" in weakest_categories(bank.task_results, pack.tasks)
+    assert "score_ten [score] 1/1" in tasks_text(pack.tasks, bank.task_results)
+    # positive incidents: a success span is banked with its kind, listed apart from losses, and a revision that
+    # blocks a choice in it is refused by replay
+    inc = snake_incident()
+    good = Incident("done: eat_three", 30, inc.decisions[:2], kind="success")
+    bank.add_incident(inc); bank.add_incident(good)
+    assert len(bank.incidents()) == 1 and len(bank.successes()) == 1 and bank.successes()[0].kind == "success" and len(bank.incidents(None)) == 2
+    raw = yaml.safe_load(dump_pack(full().raw)); raw["rules"].append({"if": {"read": "head_moving", "equals": "right"}, "exclude": ["right"]})   # breaks the successful 'right's
+    blunt = load_pack_text(dump_pack(raw), "snake")
+    v = verify_revision(blunt, stripped(), inc, successes=[good])
+    assert not v["ok"] and "completed a task" in v["why"]
+    assert verify_revision(full(), stripped(), inc, successes=[good])["ok"]
+    # the per-kind cap keeps the newest of each kind
+    b2 = Bank(tmp_path / "bank2", max_incidents=1)
+    b2.add_incident(inc); b2.add_incident(good); b2.add_incident(incident_of(inc.decisions, "status is dead", 99))
+    assert len(b2.incidents()) == 1 and b2.incidents()[0].tick == 99 and len(b2.successes()) == 1
+
+
+def test_task_setter_validates_the_model_s_proposals():
+    from anygame.tasks import propose_tasks
+    from anygame.pack import load_pack
+    pack = load_pack(os.path.join(ROOT, "packs", "snake-state"))
+    values = {"score": 0, "head": "c3r7", "status": "playing"}
+    class _Chat:
+        model = "fake"
+        def complete(self, messages, **kw):
+            assert any(isinstance(m.get("content"), list) for m in messages)
+            return ('[{"id": "Score Five!", "instruction": "reach 5", "done": {"read": "score", "gte": 5}, "category": "score", "limit_ticks": 40},'
+                    ' {"id": "bogus", "instruction": "?", "done": {"read": "nothing", "equals": 1}},'
+                    ' {"id": "already", "instruction": "be playing", "done": {"read": "status", "equals": "playing"}},'
+                    ' {"id": "list", "instruction": "two", "done": [{"read": "score", "gte": 1}, {"read": "head", "not": "c3r7"}], "category": "weird"},'
+                    ' {"id": "go_there", "instruction": "reach the food cell", "done": {"read": "head", "equals": "c9r3"}}]', {}, 0)
+    log = []
+    new = propose_tasks(_Chat(), pack, np.zeros((560, 540, 3), np.uint8), values, [], k=5, log=log.append)
+    assert [t["id"] for t in new] == ["score_five", "list"] and new[1]["category"] == "other" and len(new[1]["done"]) == 2
+    assert any("bogus" in m for m in log) and any("already done" in m for m in log) and any("exact cell" in m for m in log)
+
+
+def test_rater_samples_frames_parses_scores_and_calibrates_against_the_trial_order():
+    from anygame.rater import sample_frames, actions_summary, rate_episode, calibrate
+    frames = [(t, np.zeros((4, 4, 3), np.uint8)) for t in range(1, 101)]
+    picked = sample_frames(frames, 10)
+    assert len(picked) == 10 and picked[0][0] == 1 and picked[-1][0] == 100
+    assert sample_frames(frames[:3], 10) == frames[:3]
+    recs = [{"tick": t, "choice": "right", "action": "swipe right"} for t in range(5)] + [{"tick": 6, "choice": "up", "action": "swipe up"}]
+    assert "6 actions" in actions_summary(recs) and "swipe right×5" in actions_summary(recs)
+    class _Chat:
+        model = "fake"; cost = 0.0
+        def complete(self, messages, **kw):
+            assert messages[1]["content"][0]["type"] == "text" and sum(1 for p in messages[1]["content"] if p["type"] == "image_url") == 3
+            self.cost += 0.001
+            return ('{"completion": 72.4, "directedness": 140, "note": "ate two, then turned into the wall"}', {}, 0)
+    r = rate_episode(_Chat(), frames[:3], recs, "snake", task="first_food", outcome="status is dead")
+    assert r["completion"] == 72 and r["directedness"] == 100 and r["note"].startswith("ate two") and r["cost_usd"] == 0.001
+    class _Bad:
+        model = "fake"
+        def complete(self, messages, **kw): raise RuntimeError("down")
+    assert rate_episode(_Bad(), frames[:2], recs)["completion"] is None
+    # calibration: the rater agrees with the trial order on 2 of 3 strict pairs
+    eps = [{"won": False, "lost": True, "ticks": 50, "score": None, "tasks_done": 0, "rating": {"completion": 10}},
+           {"won": False, "lost": True, "ticks": 300, "score": None, "tasks_done": 0, "rating": {"completion": 60}},
+           {"won": False, "lost": False, "ticks": 400, "score": None, "tasks_done": 0, "rating": {"completion": 40}},
+           {"won": False, "lost": False, "ticks": 400, "score": 999, "tasks_done": 0}]
+    c = calibrate(eps)
+    assert c["rated"] == 3 and c["pairs"] == 3 and abs(c["agreement"] - 2 / 3) < 1e-3
+    assert calibrate([])["agreement"] is None
+
+
+def test_held_keys_relative_mouse_and_chunks_reach_the_device_and_the_demo_digest_finds_key_runs():
+    from anygame.loop import Agent
+    from anygame.pack import load_pack_text, dump_pack, load_pack, PackError
+    from anygame.device.replay import ReplayDevice
+    from anygame.demo import key_runs
+    import tempfile, cv2
+    raw = yaml.safe_load(open(os.path.join(ROOT, "packs", "snake-state", "pack.yaml")).read())
+    raw["act"] = [{"id": "run", "kind": "key", "key": "ShiftLeft", "hold_ms": 120}, {"id": "combo", "kind": "chunk", "keys": ["ArrowLeft", "ArrowLeft", "Space"], "key_ms": 1},
+                  {"id": "look", "kind": "mouse_move", "dx": 40, "dy": -8}, {"id": "keep", "kind": "wait"}]
+    raw["rules"], raw["tasks"] = [], []
+    pack = load_pack_text(dump_pack(raw), "inputs")
+    d = tempfile.mkdtemp(); cv2.imwrite(os.path.join(d, "0.png"), np.zeros((560, 540, 3), np.uint8))
+    dev = ReplayDevice(d)
+    ag = Agent(pack, dev, None)
+    assert ag.act(pack.action("run"), {}) == "key ShiftLeft held 120 ms" and dev.actions[-1] == ("key", "ShiftLeft", 120)
+    assert ag.act(pack.action("combo"), {}) == "chunk ArrowLeft ArrowLeft Space" and dev.actions[-3:] == [("key", "ArrowLeft"), ("key", "ArrowLeft"), ("key", "Space")]
+    assert ag.act(pack.action("look"), {}) == "mouse_move 40,-8" and dev.actions[-1] == ("mouse_move", 40, -8)
+    # a device without a pointer reports it instead of crashing
+    from anygame.device.base import Device
+    class NoMouse(Device):
+        def size(self): return (540, 560)
+        def frame(self): return np.zeros((560, 540, 3), np.uint8)
+        def tap(self, x, y): pass
+        def swipe(self, *a): pass
+        def key(self, name, hold_ms=0): pass
+    assert Agent(pack, NoMouse(), None).act(pack.action("look"), {}).startswith("mouse_move unsupported")
+    for bad in ({"id": "c", "kind": "chunk"}, {"id": "m", "kind": "mouse_move"}, {"id": "k", "kind": "key"}):
+        with pytest.raises(PackError):
+            r2 = yaml.safe_load(dump_pack(raw)); r2["act"] = [bad]; load_pack_text(dump_pack(r2), "x")
+    # the digest: a repeated left-left-space within 600 ms is a chunk candidate; isolated presses are not
+    ev = []
+    t = 0
+    for rep in range(3):
+        for k in ("ArrowLeft", "ArrowLeft", "Space"):
+            ev.append({"t": t, "type": "key", "key": k}); t += 150
+        t += 2000
+    ev.append({"t": t, "type": "key", "key": "ArrowUp"})
+    runs = key_runs(ev)
+    assert runs and runs[0][0] == ["ArrowLeft", "ArrowLeft", "Space"] and runs[0][1] == 3
+    assert key_runs([]) == []
+
+
+def test_suite_reports_tasks_done_within_the_limit_and_at_all(tmp_path, monkeypatch):
+    """The suite over the state snake with a device whose seed picks how fast the score rises."""
+    from anygame import cli
+    from anygame.pack import load_pack, dump_pack
+    import anygame.device as devmod
+    from test_state import StateDevice
+    raw = yaml.safe_load(open(os.path.join(ROOT, "packs", "snake-state", "pack.yaml")).read())
+    raw["tasks"] = [{"id": "one", "instruction": "score 1", "done": {"read": "score", "gte": 1}, "category": "collect", "limit_ticks": 3, "reference_ticks": 2},
+                    {"id": "big", "instruction": "score 9", "done": {"read": "score", "gte": 9}, "category": "score", "limit_ticks": 4}]
+    raw["tests"] = [{"state": "fixtures/start.json", "expect": {"status": "playing"}}]
+    pdir = tmp_path / "snake-suite"; (pdir / "fixtures").mkdir(parents=True)
+    (pdir / "pack.yaml").write_text(dump_pack(raw)); (pdir / "fixtures" / "start.json").write_text(json.dumps({"snake": [[3, 6], [2, 6], [1, 6]], "food": [9, 2], "score": 0, "over": False}))
+    def fake_open(url, size):
+        seed = int(url.split("seed=")[1])
+        # seed 1: score jumps to 1 at tick 2 and to 9 at tick 8 (past 'big's limit of 4 but held at some tick); seed 2: never scores
+        states = [{"snake": [[3 + i, 6], [2 + i, 6], [1 + i, 6]], "food": [9, 2], "score": (0 if i < 1 else 1 if i < 7 else 9) if seed == 1 else 0, "over": False} for i in range(10)]
+        return StateDevice(states)
+    monkeypatch.setattr(devmod, "open_device", fake_open)
+    import argparse
+    rows = cli.cmd_suite(argparse.Namespace(packs=str(pdir), device="x://?seed={seed}", seeds="1,2", sensor="random:1", max_ticks=10, learned=False, out=str(tmp_path / "suite.jsonl")))
+    by = {(r["seed"], r["task"]): r for r in rows}
+    assert by[("1", "one")]["within"] and by[("1", "one")]["without"] and by[("1", "one")]["within_reference"] is True
+    assert not by[("1", "big")]["within"] and by[("1", "big")]["without"]       # done after its limit: counts "at all", not "within"
+    assert not by[("2", "one")]["within"] and not by[("2", "one")]["without"]
+    assert len(open(tmp_path / "suite.jsonl").read().splitlines()) == 4

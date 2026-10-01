@@ -6,7 +6,8 @@
 // read the screens. Replay is deterministic and costs no model call: Jev's recorded answers are pushed through the
 // candidate's reads and rules. Same contract as anygame/learn.py.
 import type { Frame } from "./geometry.js";
-import { Agent, stableHash, type Rec, type Answer, type Sensor } from "./loop.js";
+import { Agent, stableHash, type Rec, type Answer, type Sensor, type TaskEvent } from "./loop.js";
+export interface TaskResult extends TaskEvent { version: number; episode: number; at: string }
 import type { Values } from "./reads.js";
 import { loadPack, dumpPack, type Pack, type ActionDef } from "./pack.js";
 import { extractYaml, frameToDataUrl } from "./author.js";
@@ -15,8 +16,8 @@ import { StillDevice } from "./index.js";
 
 export interface Decision { rec: Rec; frame: Frame }
 /** The fatal window of an episode, oldest first; the last decision is the one that lost. */
-export interface Incident { reason: string; tick: number; decisions: Decision[]; at: string }
-export interface Episode { n: number; ticks: number; decisions: number; reason: string; score: number | null; won: boolean; lost: boolean; cost_usd: number; version: number; at: string }
+export interface Incident { reason: string; tick: number; decisions: Decision[]; at: string; kind?: "loss" | "success" }   // success: a span that completed a task or won, to be kept allowed
+export interface Episode { n: number; ticks: number; decisions: number; reason: string; score: number | null; won: boolean; lost: boolean; cost_usd: number; version: number; at: string; tasks_done?: number; tasks_failed?: number }
 export interface Verdict { ok: boolean; why: string; guarded: boolean; distinguished: string[]; overblocked: number; support: number; order_changed?: boolean; requery?: any; counterfactual?: any; holdout?: any; calibration?: string }
 
 export const LOST = /lost|dead|over|game_over|crash|died|stalled: playing/i;   // a deadlock mid-game is a failure to act: a loss
@@ -31,14 +32,15 @@ export function outcome(recs: Rec[], n: number, version: number, scoreRead?: str
   return {
     n, ticks: recs.length, decisions: dec.length, reason, score: typeof s === "number" ? s : null,
     won: WON.test(reason) && !LOST.test(reason), lost: LOST.test(reason),
-    cost_usd: Math.round((last?.total_cost_usd ?? 0) * 1e6) / 1e6, version, at: new Date().toISOString(),
+    tasks_done: recs.filter((r) => (r as any).task_done).length, tasks_failed: recs.filter((r) => (r as any).task_failed).length,
+    cost_usd: Math.round(Math.max(0, ...recs.map((r) => r.total_cost_usd ?? 0)) * 1e6) / 1e6, version, at: new Date().toISOString(),
   };
 }
 
-/** Is episode b better than a? won > not lost > longer when lost > higher score. Same order as the Python author's _better. */
+/** Is episode b better than a? won > more tasks done > not lost > longer when lost > higher score. Same order as learn.py. */
 export function betterEpisode(a: Episode | null, b: Episode): boolean {
   if (!a) return true;
-  const key = (e: Episode) => [e.won ? 1 : 0, e.lost ? 0 : 1, e.lost ? e.ticks : 0, e.score ?? 0];
+  const key = (e: Episode) => [e.won ? 1 : 0, e.tasks_done ?? 0, e.lost ? 0 : 1, e.lost ? e.ticks : 0, e.score ?? 0];
   const ka = key(a), kb = key(b);
   for (let i = 0; i < ka.length; i++) if (ka[i] !== kb[i]) return kb[i] > ka[i];
   return false;
@@ -257,7 +259,7 @@ export function cellRule(candidate: Pack, incumbent: Pack): string {
 
 /** Does the candidate handle the incident better than the incumbent, by replay alone? `others` are earlier incidents:
  *  the candidate must not block their ordinary decisions either (a rule that fits one loss and breaks the rest is out). */
-export function verifyRevision(candidate: Pack, incumbent: Pack, inc: Incident, threshold = 0.7, maxOverblock = 0.34, others: Incident[] = [], allowOrder = false): Verdict {
+export function verifyRevision(candidate: Pack, incumbent: Pack, inc: Incident, threshold = 0.7, maxOverblock = 0.34, others: Incident[] = [], allowOrder = false, successes: Incident[] = []): Verdict {
   if (!inc.decisions.length) return { ok: false, why: "no decisions to replay", guarded: false, distinguished: [], overblocked: 0, support: 0 };
   const narrow = cellRule(candidate, incumbent);
   if (narrow) return { ok: false, why: `rule on ${narrow} tests the exact cell of a located read; it would fire only there`, guarded: false, distinguished: [], overblocked: 0, support: 0 };
@@ -280,7 +282,17 @@ export function verifyRevision(candidate: Pack, incumbent: Pack, inc: Incident, 
     for (let k = 0; k < m; k++) if (oc.choices[k] !== o.decisions[k].rec.choice && oi.choices[k] === o.decisions[k].rec.choice) changed++;
     total += m;
   }
+  // success spans (a task completed, a win): every choice in them must stay allowed
+  let broke = 0;
+  for (const o of successes) {
+    if (!o.decisions.length) continue;
+    const oc = replay(candidate, o), oi = replay(incumbent, o);
+    for (let k = 0; k < o.decisions.length; k++) if (oc.choices[k] !== o.decisions[k].rec.choice && oi.choices[k] === o.decisions[k].rec.choice) broke++;
+    total += o.decisions.length;
+  }
+  changed += broke;
   const overblocked = total ? changed / total : 0;
+  if (broke) return { ok: false, why: `blocks ${broke} of the choices in a span that completed a task or won (${changed} of ${total} ordinary decisions in all)`, guarded, distinguished, overblocked, support };
   if (overblocked > maxOverblock) return { ok: false, why: `blocks ${changed} of ${total} ordinary decisions too`, guarded, distinguished, overblocked, support };
   if (!guarded && !distinguished.length) {
     const ci = candidate.actions.map((a) => a.id), ii = incumbent.actions.map((a) => a.id);
@@ -437,7 +449,7 @@ export const PACK_SCHEMA_HINT =
 
 /** A revision: incident → chat model → candidate → replay verdict, with one repair round when the candidate does not
  *  load or the replay rejects it. Returns the accepted pack or null. */
-export async function improve(chat: Chat, pack: Pack, inc: Incident, episodes: Episode[] = [], log: (m: string) => void = () => {}, opts: { threshold?: number; maxTokens?: number; rounds?: number; others?: Incident[]; hints?: string; calibrator?: Calibrator; sensor?: Sensor; minAgreement?: number; holdout?: Decision[]; minHoldout?: number } = {}): Promise<{ pack: Pack | null; verdict: Verdict | null; yaml: string | null; features: RevisionFeatures | null }> {
+export async function improve(chat: Chat, pack: Pack, inc: Incident, episodes: Episode[] = [], log: (m: string) => void = () => {}, opts: { threshold?: number; maxTokens?: number; rounds?: number; others?: Incident[]; hints?: string; calibrator?: Calibrator; sensor?: Sensor; minAgreement?: number; holdout?: Decision[]; minHoldout?: number; successes?: Incident[] } = {}): Promise<{ pack: Pack | null; verdict: Verdict | null; yaml: string | null; features: RevisionFeatures | null }> {
   const parts: any[] = [{ type: "text", text: REVISION_RULES + "\n\n" + PACK_SCHEMA_HINT + (opts.hints ? "\n\n" + opts.hints : "") + "\n\n" + incidentDigest(inc, episodes) + "\n\n```yaml\n" + dumpPack(pack.raw) + "\n```" }];
   const n = inc.decisions.length;
   for (const k of n > 1 ? [n - 2, n - 1] : [n - 1]) {
@@ -461,7 +473,7 @@ export async function improve(chat: Chat, pack: Pack, inc: Incident, episodes: E
         cand.raw.fingerprints = { ...(pack.raw.fingerprints ?? {}), ...(cand.raw.fingerprints ?? {}) };
         cand.raw.modes = cand.raw.modes ?? pack.raw.modes;
         cand = loadPack(dumpPack(cand.raw), pack.name);
-        v = verifyRevision(cand, pack, inc, threshold, 0.34, opts.others ?? [], !!opts.sensor);
+        v = verifyRevision(cand, pack, inc, threshold, 0.34, opts.others ?? [], !!opts.sensor, opts.successes ?? []);
         lastVerdict = v;
         if (!v.ok) problem = `replaying the loss through it: ${v.why}`;
         else {
@@ -519,7 +531,15 @@ export class Bank {
     return fresh;
   }
   calibrator(): Calibrator { return new Calibrator(this.revisions); }
-  addIncident(i: Incident) { this.incidents.push(i); if (this.incidents.length > this.maxIncidents) this.incidents.shift(); }
+  addIncident(i: Incident) {
+    this.incidents.push(i);
+    // the newest maxIncidents of each kind stay: losses and successes are both the record
+    for (const kind of ["loss", "success"]) { const idx = this.incidents.map((x, j) => ((x.kind ?? "loss") === kind ? j : -1)).filter((j) => j >= 0); for (const j of idx.slice(0, Math.max(0, idx.length - this.maxIncidents)).reverse()) this.incidents.splice(j, 1); }
+  }
+  losses(): Incident[] { return this.incidents.filter((i) => (i.kind ?? "loss") === "loss"); }
+  successes(): Incident[] { return this.incidents.filter((i) => i.kind === "success"); }
+  taskResults: TaskResult[] = [];
+  addTaskResult(ev: TaskEvent, version: number, episode: number) { this.taskResults.push({ ...ev, version, episode, at: new Date().toISOString() }); }
   holdout: Decision[] = [];               // ordinary ticks sampled outside any fatal window: what a revision is re-asked on for drift
   addHoldout(decisions: Decision[], max = 24) { this.holdout.push(...decisions); if (this.holdout.length > max) this.holdout.splice(0, this.holdout.length - max); }
   /** Episodes played with a given pack version. */

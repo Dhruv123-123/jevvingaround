@@ -21,6 +21,31 @@ export interface Pack {
   raw: Record<string, any>;
   modes: Record<string, Pack>;                 // sub-packs for other screens, each with a `when`
   fingerprints: Record<string, string>;        // screen name → base64 fingerprint (main and every mode)
+  tasks: TaskDef[];                            // goals with a verifier over the reads
+}
+export interface TaskDef { id: string; instruction: string; done: Record<string, any>[]; when?: Record<string, any>; hold_ticks: number; limit_ticks: number; category: string; [k: string]: any }
+export const TASK_CATEGORIES = ["navigate", "collect", "score", "survive", "clear", "build", "avoid", "other"];
+
+const condOk = (c: any) => c && typeof c === "object" && "read" in c && ["equals", "in", "not", "gte", "lte"].some((k) => k in c);
+
+/** Tasks are goals the runtime can verify from the reads: `done` (one condition or a list that must all hold) marks
+ *  completion once it has held `hold_ticks` ticks; `when` says when the task is available; `limit_ticks` bounds the attempt. */
+export function checkTasks(tasks: any, reads: Record<string, ReadDef>, where = "pack"): TaskDef[] {
+  const out: TaskDef[] = []; const seen = new Set<string>();
+  for (const t of (tasks ?? []) as any[]) {
+    if (!t || typeof t !== "object" || !t.id || !t.instruction || t.done === undefined) throw new PackError(`${where}: every task needs id, instruction and done: {read, equals|in|not|gte|lte} (or a list of them)`);
+    const id = String(t.id);
+    if (seen.has(id)) throw new PackError(`${where}: task '${id}' is listed twice`);
+    seen.add(id);
+    const conds = Array.isArray(t.done) ? t.done : [t.done];
+    for (const c of [...conds, ...(t.when ? [t.when] : [])]) {
+      if (!condOk(c)) throw new PackError(`${where}: task '${id}': a condition is {read: <id or id.path>, equals|in|not|gte|lte: v}`);
+      if (!(String(c.read).split(".")[0] in reads)) throw new PackError(`${where}: task '${id}': unknown read '${c.read}'`);
+    }
+    const cat = String(t.category ?? "other");
+    out.push({ ...t, id, done: conds, hold_ticks: Number(t.hold_ticks ?? 1), limit_ticks: Number(t.limit_ticks ?? 150), category: TASK_CATEGORIES.includes(cat) ? cat : "other" });
+  }
+  return out;
 }
 
 export interface ModeWhen { read?: string; equals?: any; in?: any[]; not?: any; fingerprint?: string }
@@ -107,6 +132,9 @@ export function loadPack(text: string, name = "pack"): Pack {
     if (!a.id) throw new PackError(`${name}: every action needs an id`);
     const kind = a.kind ?? (a.id === "wait" ? "wait" : "tap");
     if (kind === "macro" && !a.options) throw new PackError(`${name}: action '${a.id}': macro needs 'options: <read id>'`);
+    if (kind === "chunk" && !(Array.isArray(a.keys) && a.keys.length)) throw new PackError(`${name}: action '${a.id}': chunk needs 'keys: [<key>, ...]' (optionally key_ms, hold_ms)`);
+    if (kind === "mouse_move" && a.dx === undefined && a.dy === undefined) throw new PackError(`${name}: action '${a.id}': mouse_move needs dx and/or dy (pixels of relative motion)`);
+    if (kind === "key" && a.key === undefined) throw new PackError(`${name}: action '${a.id}': key needs 'key' (optionally hold_ms)`);
     const params: Record<string, any> = {};
     for (const [k, v] of Object.entries(a)) if (k !== "id" && k !== "kind") params[k] = v;
     actions.push({ id: a.id, kind, params });
@@ -127,6 +155,7 @@ export function loadPack(text: string, name = "pack"): Pack {
     if (!["exclude", "set", "avoid", "only"].some((k) => k in rl)) throw new PackError(`${name}: rule needs exclude, set, avoid or only`);
   }
   const tests: Test[] = raw.tests ?? [];
+  const tasks = checkTasks(raw.tasks, reads, name);
   const modes: Record<string, Pack> = {};
   for (const [mn, m] of Object.entries<any>(raw.modes ?? {})) {
     if (!m || typeof m !== "object" || !m.when) throw new PackError(`${name}: mode '${mn}' needs 'when' ({read, equals|in|not} or {fingerprint})`);
@@ -140,6 +169,6 @@ export function loadPack(text: string, name = "pack"): Pack {
   for (const [mn, m] of Object.entries<any>(raw.modes ?? {})) if (m.when?.fingerprint) fingerprints[mn] = m.when.fingerprint;
   return {
     name: String(raw.game), size, zones, reads, actions, tickHz: Number(raw.tick_hz ?? 3), play: String(raw.play ?? "").trim(),
-    questions, rules, tests, raw, modes, fingerprints,
+    questions, rules, tests, raw, modes, fingerprints, tasks,
   };
 }

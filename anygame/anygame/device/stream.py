@@ -124,10 +124,15 @@ class StreamDevice(Device):
             return self._input.swipe(x0, y0, x1, y1, ms)
         self.send({"swipe": [int(x0), int(y0), int(x1), int(y1)], "ms": ms})
 
-    def key(self, name):
+    def key(self, name, hold_ms=0):
         if self._input is not None:
-            return self._input.key(name)
-        self.send({"key": name})
+            return self._input.key(name, hold_ms)
+        self.send({"key": name, **({"hold_ms": int(hold_ms)} if hold_ms else {})})
+
+    def mouse_move(self, dx, dy):
+        if self._input is not None:
+            return self._input.mouse_move(dx, dy)
+        self.send({"mouse_move": [int(dx), int(dy)]})
 
     def close(self):
         self._stop = True

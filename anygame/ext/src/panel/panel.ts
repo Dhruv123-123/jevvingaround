@@ -1,7 +1,7 @@
 // The side panel is the whole runtime: it captures the game tab, runs the pack, calls the sensor, sends input,
 // and shows the decision panel. Packs are bundled or authored here and cached in extension storage.
 import yaml from "js-yaml";
-import { Agent, BUNDLED_PACKS, loadPack, dumpPack, openSensor, Chat, VLMFallback, explore, digest as demoDigest, fingerprint, fpDistance, fpFromBase64, type Frame, outcome, Calibrator, hintsText, lessonsOf, type RevisionRecord, type Lesson, betterEpisode, medianEpisode, incidentOf, improve, LOST, Bank, type Decision, type Episode, type Incident, type Demo, type DemoEvent, type Keys, type Pack, type Rec, type Sensor } from "../core/index.js";
+import { Agent, BUNDLED_PACKS, loadPack, dumpPack, openSensor, Chat, VLMFallback, explore, digest as demoDigest, fingerprint, fpDistance, fpFromBase64, type Frame, outcome, Calibrator, hintsText, lessonsOf, type RevisionRecord, type Lesson, betterEpisode, medianEpisode, incidentOf, improve, LOST, Bank, chooseOrder, tasksText, type Decision, type Episode, type Incident, type Demo, type DemoEvent, type Keys, type Pack, type Rec, type Sensor } from "../core/index.js";
 import { author, checkPack, extractYaml, withFingerprints, frameToDataUrl } from "../core/author.js";
 import { TabDevice, type Region } from "../device/tab.js";
 
@@ -217,7 +217,8 @@ async function play() {
   bank.revisions = bank.revisions ?? []; bank.lessons = bank.lessons ?? [];
   const readKinds = new Set(Object.values(ag.base.reads).map((r) => String(r.kind)));
   const pastIncidents: Incident[] = [];                                 // this session's incidents with frames: a revision must not break them
-  const holdout = new Bank();   // in memory: held-out ordinary ticks with their frames, for this run
+  const holdout = new Bank();   // in memory: held-out ordinary ticks with their frames, and the task record, for this run
+  const successes: Incident[] = [];   // spans that completed a task or won: a revision must keep their choices allowed
   $("playtext").textContent = pack.play; ($("playtext") as HTMLTextAreaElement).value = pack.play;
   ($("rulestext") as HTMLTextAreaElement).value = pack.rules.length ? yaml.dump(pack.rules) : "";
   $<HTMLButtonElement>("play").disabled = true; $<HTMLButtonElement>("stop").disabled = false; $<HTMLButtonElement>("author").disabled = true;
@@ -230,6 +231,13 @@ async function play() {
     const records: Rec[] = [];
     const decisions: Decision[] = [];
     const sample: Decision[] = []; let seen = 0; let rs = (episodeN * 2654435761) >>> 0;   // a reservoir of ordinary ticks for the held-out check
+    // tasks: the pack's practice goals; a completion banks the span as a success incident every revision must keep allowed
+    ag.taskOrder = ag.base.tasks.length ? chooseOrder(ag.base.tasks, holdout.taskResults) : null;
+    ag.onTask = (ev) => {
+      holdout.addTaskResult(ev, version, episodeN);
+      log(`task ${ev.id} [${ev.category}]: ${ev.outcome} after ${ev.ticks} ticks`);
+      if (ev.outcome === "done" && decisions.length) { successes.push({ reason: `done: ${ev.id}`, tick: ev.tick, decisions: decisions.slice(-12), at: new Date().toISOString(), kind: "success" }); if (successes.length > 4) successes.shift(); }
+    };
     ag.onRecord = (rec, frame) => {
       showRec(rec);
       records.push(rec); if (records.length > 2000) records.shift();
@@ -264,6 +272,7 @@ async function play() {
       incumbent = null;
     }
     if (decisions.length) { const edge = decisions[0].rec.tick; holdout.addHoldout(sample.filter((d) => d.rec.tick < edge)); }
+    if (ep.won && decisions.length) { successes.push({ reason: `won: ${ep.reason}`, tick: ag.tick, decisions: decisions.slice(-12), at: new Date().toISOString(), kind: "success" }); if (successes.length > 4) successes.shift(); }
     // ---- a loss becomes an incident; the chat model revises the pack; the revision must replay better, and the
     //      decider re-asked under it must leave the banked losses and keep its choices on the held-out ordinary ticks
     if (ep.lost && decisions.length) {
@@ -273,8 +282,9 @@ async function play() {
       bank.incidents.push(stored); if (bank.incidents.length > 4) bank.incidents.shift();
       try {
         const chat = new Chat(store.keys ?? {});
-        const hints = hintsText([...((ag.base.raw.lessons ?? []) as Lesson[]), ...poolLessons], readKinds);
-        const res = await improve(chat, ag.base, inc, bank.episodes, log, { others: pastIncidents.slice(), hints, calibrator: new Calibrator(bank.revisions!), sensor: sensor ?? undefined, holdout: holdout.holdout.slice() });
+        const tt = tasksText(ag.base.tasks, holdout.taskResults);
+        const hints = hintsText([...((ag.base.raw.lessons ?? []) as Lesson[]), ...poolLessons], readKinds) + (tt ? "\n\n" + tt : "");
+        const res = await improve(chat, ag.base, inc, bank.episodes, log, { others: pastIncidents.slice(), hints, calibrator: new Calibrator(bank.revisions!), sensor: sensor ?? undefined, holdout: holdout.holdout.slice(), successes: successes.slice() });
         pastIncidents.push(inc); if (pastIncidents.length > 4) pastIncidents.shift();
         if (res.pack) {
           incumbent = { yaml: dumpPack(ag.base.raw), version, reason: ep.reason };

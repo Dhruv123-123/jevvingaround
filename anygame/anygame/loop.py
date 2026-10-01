@@ -81,6 +81,14 @@ class Agent:
         self.on_pack_change = None
         self.on_record = None            # (rec, frame) after every tick: the learning loop keeps the decisions and their frames
         self.last_support = 1.0
+        # tasks: goals with a verifier over the reads; the active one goes to the decider as `task`, and its
+        # completion or failure is an event the learning loop banks (a success span) and scores (per category)
+        self.task: dict[str, Any] | None = None
+        self.task_started = 0
+        self.task_held = 0
+        self.task_log: list[dict[str, Any]] = []       # this run's task events: {id, category, outcome, ticks, tick}
+        self.task_order: list[str] | None = None       # a setter's preference (ids first to try); pack order otherwise
+        self.on_task = None                            # (event) when a task completes or fails
         self.sensor_ewma_ms = 0.0        # what the decider has been taking lately: the per-tick budget is judged against it
         self.budget_skips = 0            # consecutive ticks the decider was skipped for the budget
         self.skipped_budget = 0          # over the run
@@ -190,8 +198,26 @@ class Agent:
         if a.kind == "wait":
             return "wait"
         if a.kind == "key":
+            hold = int(p.get("hold_ms", 0) or 0)
+            if hold:
+                self.device.key(p["key"], hold)
+                return f"key {p['key']} held {hold} ms"
             self.device.key(p["key"])
             return f"key {p['key']}"
+        if a.kind == "chunk":
+            # a short input sequence as one decision (what a demonstration's recurring key runs become)
+            keys = [str(k) for k in (p.get("keys") or [])]
+            hold = int(p.get("hold_ms", 0) or 0)
+            for k in keys:
+                self.device.key(k, hold) if hold else self.device.key(k)
+                time.sleep(float(p.get("key_ms", 40)) / 1000)
+            return f"chunk {' '.join(keys)}"
+        if a.kind == "mouse_move":
+            try:
+                self.device.mouse_move(int(p.get("dx", 0)), int(p.get("dy", 0)))
+            except NotImplementedError as e:
+                return f"mouse_move unsupported: {e}"
+            return f"mouse_move {p.get('dx', 0)},{p.get('dy', 0)}"
         if a.kind == "macro":
             label = answers.get(f"{a.id}__option", {}).get("choice")
             tracker = self.trackers.get(p["options"].split(".")[0])
@@ -391,6 +417,10 @@ class Agent:
         self.last_values = values
         rec: dict[str, Any] = {"tick": self.tick, "t": round(t0, 3), "hash": h, "perception_ms": round(t_perc), "timings_ms": timings, "screen": values,
                                "mode": self.mode, "support": round(support, 2), "known": known}
+        if self.mode == "main" and self.base.tasks:
+            self._tasks_tick(values, rec)
+            if self.task is not None:
+                state["task"] = self.task["instruction"]
         # the hybrid: a screen the pack cannot read goes to the VLM, which acts now and may define a mode
         if not supported and not known:
             self.miss_ticks += 1
@@ -553,6 +583,53 @@ class Agent:
                 # because a trap that closed ticks ago is an incident for the reads that should have seen it coming
                 applied.append(f"→ every action excluded; {act.get('choice')} stands")
         return applied
+
+    # ---- tasks ---------------------------------------------------------------------------------
+    def _task_ok(self, conds: Any, values: dict[str, Any]) -> bool:
+        return all(self._cond(c, values) for c in (conds if isinstance(conds, list) else [conds]))
+
+    def _pick_task(self, values: dict[str, Any]) -> dict[str, Any] | None:
+        """The next task: in the setter's order (else the pack's), one whose `when` holds, least attempted first."""
+        tried = {e["id"]: 0 for e in self.task_log}
+        for e in self.task_log:
+            tried[e["id"]] += 1
+        order = {tid: k for k, tid in enumerate(self.task_order or [t["id"] for t in self.base.tasks])}
+        failed = {e["id"]: 0 for e in self.task_log}
+        for e in self.task_log:
+            if e["outcome"] == "failed":
+                failed[e["id"]] += 1
+        cap = int(self.base.raw.get("task_attempts", 2))      # a task that keeps failing this run waits for the next one
+        cands = [t for t in self.base.tasks if (not t.get("when") or self._task_ok(t["when"], values)) and not self._task_ok(t["done"], values) and failed.get(t["id"], 0) < cap]
+        cands.sort(key=lambda t: (tried.get(t["id"], 0), order.get(t["id"], len(order))))
+        return cands[0] if cands else None
+
+    def _finish_task(self, outcome: str, rec: dict[str, Any]) -> None:
+        t = self.task
+        ev = {"id": t["id"], "category": t.get("category", "other"), "outcome": outcome, "ticks": self.tick - self.task_started, "tick": self.tick, "limit_ticks": t["limit_ticks"]}
+        self.task_log.append(ev)
+        rec["task_" + outcome] = t["id"]
+        self.task, self.task_held = None, 0
+        if self.on_task is not None:
+            self.on_task(ev)
+
+    def _tasks_tick(self, values: dict[str, Any], rec: dict[str, Any]) -> None:
+        if self.task is None:
+            self.task = self._pick_task(values)
+            if self.task is not None:
+                self.task_started, self.task_held = self.tick, 0
+                rec["task_started"] = self.task["id"]
+        if self.task is None:
+            return
+        rec["task"] = self.task["id"]
+        if self._task_ok(self.task["done"], values):
+            self.task_held += 1
+            if self.task_held >= int(self.task.get("hold_ticks", 1)):
+                self._finish_task("done", rec)
+                return
+        else:
+            self.task_held = 0
+        if self.tick - self.task_started >= int(self.task.get("limit_ticks", 150)):
+            self._finish_task("failed", rec)
 
     def _hits(self, answers: dict[str, Any], values: dict[str, Any]) -> list[tuple[dict[str, Any], str]]:
         """The rules whose condition holds on these answers and values, with why."""

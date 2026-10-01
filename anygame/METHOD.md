@@ -145,11 +145,34 @@ closed ticks earlier, which is what the barrier condition `<dir>_ok` at those ea
 the proposer is shown. With `lag: 1` the same read reports the path, not the cell, and is the right setting for
 a game that keeps moving while the decider thinks.
 
-## Read against SIMA 2
+## Read against SIMA 2, and built from it
 
 `docs/research/sima2.md` reads DeepMind's SIMA 2 report (December 2025) against this runtime. What transfers
-without training a model: tasks set in the pack and proposed from the typed frame (SIMA's task setter), positive
-incidents so successes are learned from and protected, an evaluation suite with held-out packs and per-category
-success, an episode rater calibrated against the trial verdict, and held inputs and relative mouse motion for 3D
-games. What does not: anything that fine-tunes the decider, which in SIMA cost the base model up to 25% on
+without training a model is now built:
+
+- **Tasks and a task setter.** `tasks:` in the pack, each a goal with a verifier over the reads; the decider is
+  told one at a time; the setter (the chat model, from the typed frame and the frame) proposes new ones, steered
+  to the weakest category by the record in `tasks.jsonl`; the author writes the first from the demonstration.
+- **Positive incidents.** A completed task or a win banks the last decisions as a success span; `verify_revision`
+  refuses any revision that blocks a choice in one; the pack that first completes a task yields lessons. Episodes
+  rank by won, then tasks done, then survival, so a trial can be won by practice, not only by not dying.
+- **An evaluation suite.** `anygame suite`: per task, done within its limit and done at all, per category, against
+  a reference; the pack as written is the held-out number.
+- **An episode rater with calibration.** The chat model scores sampled frames and the action log 0 to 100 for
+  completion and directedness; it stands in for the score where a pack has none, and `calibrate` reports its
+  pairwise agreement with the trial order, with the rating left out of that order so it cannot vouch for itself.
+- **Held inputs, relative mouse, chunks.** `hold_ms` on a key, `mouse_move`, and `chunk` actions mined from a
+  demonstration's recurring key runs.
+
+What does not transfer: anything that fine-tunes the decider, which in SIMA cost the base model up to 25% on
 reasoning benchmarks and which this design avoids by construction.
+
+Measured live on the bundled Snake with real Jev and the chat model setting tasks: the suite over two packs and
+two seeds completed `first_food` on every run and `five_food` within its limit on the pixel pack (the state pack
+reached it only past the limit, which is what the "at all" column is for); the setter's first proposals pinned
+tasks to an exact cell ("navigate to the food at c10r3"), which failed six times in a row before two fixes: a
+task that tests the exact cell of a located read is refused like a cell rule, and a task that has failed twice
+in a run waits for the next one. After that the setter proposed relational tasks ("a position with at least
+seven open cells to the right", "clear the cell beside the body"), all completed, and the rater scored the two
+episodes 100 and 85 for completion with notes that matched the play. The rater's first answers were empty for
+the same reason the stall labeller's once were: a reasoning model needs a token budget before it answers.

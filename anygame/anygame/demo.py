@@ -116,6 +116,7 @@ def digest(demo: dict[str, Any], max_pairs: int = 6) -> dict[str, Any]:
         if before and after and before[0] != after[0]:
             pairs.append({"event": e, "before": before[1], "after": after[1]})
     intents = [e["intent"] for e in demo["events"] if e.get("intent")]
+    chunks = key_runs(demo["events"])
     seconds = round((fr[-1][0] - fr[0][0]) / 1000, 1) if fr else 0
     text = "\n".join(x for x in [
         f"DEMONSTRATION ({demo['source']}): {seconds}s, {len(fr)} frames, {len(demo['events'])} inputs.",
@@ -123,6 +124,30 @@ def digest(demo: dict[str, Any], max_pairs: int = 6) -> dict[str, Any]:
         f"click clusters (px, count): {json.dumps(clusters[:12])}",
         f"regions that change most (8x8 grid, [value, x, y]): {json.dumps(hot)}",
         f"what the player said they were doing: {json.dumps(intents[:20])}" if intents else "",
+        f"recurring key runs (keys pressed within 600 ms of each other, count; candidates for a chunk action): {json.dumps(chunks)}" if chunks else "",
         f"notes: {demo['notes']}" if demo.get("notes") else "",
     ] if x)
-    return {"seconds": seconds, "keys": keys, "clicks": clusters, "hot": hot, "pairs": pairs, "intents": intents, "text": text}
+    return {"seconds": seconds, "keys": keys, "clicks": clusters, "hot": hot, "pairs": pairs, "intents": intents, "chunks": chunks, "text": text}
+
+
+def key_runs(events: list[dict[str, Any]], gap_ms: int = 600, max_len: int = 4, min_count: int = 2) -> list[list[Any]]:
+    """Key sequences the player repeats: runs of 2 to max_len keys each within gap_ms of the previous one, counted
+    across the demonstration. A run that recurs is a candidate `chunk` action (one decision, several inputs)."""
+    from collections import Counter
+    keys = [(e["t"], e["key"]) for e in events if e.get("type") == "key"]
+    runs: list[list[str]] = []
+    cur: list[tuple[int, str]] = []
+    for t, k in keys:
+        if cur and t - cur[-1][0] > gap_ms:
+            runs.append([x[1] for x in cur]); cur = []
+        cur.append((t, k))
+    if cur:
+        runs.append([x[1] for x in cur])
+    c: Counter = Counter()
+    for r in runs:
+        for n in range(2, max_len + 1):
+            for i in range(0, len(r) - n + 1):
+                c[tuple(r[i:i + n])] += 1
+    ranked = sorted(c.items(), key=lambda kv: (-kv[1], -len(kv[0])))      # on a tie the longer run wins
+    out = [[list(k), v] for k, v in ranked[:12] if v >= min_count and (len(set(k)) > 1 or len(k) >= 3)]
+    return out[:6]

@@ -32,5 +32,5 @@ class AdbDevice(Device):
     def swipe(self, x0, y0, x1, y1, ms=120):
         self._adb(["shell", "input", "swipe", str(int(x0)), str(int(y0)), str(int(x1)), str(int(y1)), str(int(ms))])
 
-    def key(self, name):
-        self._adb(["shell", "input", "keyevent", name])
+    def key(self, name, hold_ms=0):
+        self._adb(["shell", "input", "keyevent"] + (["--longpress"] if hold_ms and hold_ms >= 400 else []) + [name])
