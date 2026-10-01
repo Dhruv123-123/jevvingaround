@@ -403,10 +403,18 @@ def check_pack(pack_dir: Path, frames: list[Path]) -> tuple[bool, str]:
     lines = []
     ok = True
     ag = Agent(pack, device=_Dummy(pack.size), jev=None)
+    if ag.pool is not None:     # every read runs on every test frame: no background worker, no `every: N` carry-over,
+        ag.close()              # or a throttled OCR read comes back null on some frames and the tests flip between rounds
+        ag.pool = None
+
+    def observe(frame):
+        ag.last_values = None
+        return ag.observe(frame)
+
     for f in frames:
         frame = cv2.imread(str(f))
         try:
-            values, _, timings = ag.observe(frame)
+            values, _, timings = observe(frame)
         except Exception as e:  # noqa: BLE001
             ok = False
             lines.append(f"{f.name}: READ ERROR {type(e).__name__}: {e}")
@@ -419,7 +427,7 @@ def check_pack(pack_dir: Path, frames: list[Path]) -> tuple[bool, str]:
             ok = False
             lines.append(f"TEST {t['frame']}: frame not found")
             continue
-        values, _, _ = ag.observe(frame)
+        values, _, _ = observe(frame)
         misses = {k: (v, values.get(k)) for k, v in t["expect"].items() if not _match(v, values.get(k))}
         if misses:
             ok = False
