@@ -28,6 +28,8 @@ class Chat:
         self.model = model or os.environ.get("ANYGAME_LLM_MODEL")      # no default: the chat model is always chosen explicitly
         if not self.model:
             raise SystemExit("set ANYGAME_LLM_MODEL (on Azure: the deployment name) or pass --model; there is no default chat model")
+        if "openrouter" in self.base and not os.environ.get("ANYGAME_ALLOW_OPENROUTER_CHAT"):
+            raise SystemExit("OpenRouter is for Jev only: point ANYGAME_LLM_BASE at another endpoint (e.g. Azure) for the chat model")
         self.key = api_key or os.environ.get("ANYGAME_LLM_KEY") or os.environ.get("AZURE_OPENAI_API_KEY") or (os.environ.get("OPENROUTER_API_KEY") if "openrouter" in self.base else None)
         if not self.key:
             raise SystemExit(f"no key for {self.base}: set ANYGAME_LLM_KEY")
