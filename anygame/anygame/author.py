@@ -198,9 +198,14 @@ def probe(device, out_dir: Path, n: int = 4, keys: bool = True, seconds: float =
             device.tap(inp[1], inp[2])
         else:
             device.key(inp[1])
+
+    def left(inp: tuple) -> bool:
+        """The input followed a link (an ad, a menu) away from the game: go back and drop what was seen."""
         back = getattr(device, "back_if_navigated", None)
         if back and back():
-            log(f"probe: {inp} left the page; went back")
+            log(f"probe: {say(inp)} left the page; went back")
+            return True
+        return False
 
     def say(inp: tuple) -> str:
         return f"tap at ({inp[1]}, {inp[2]})" if inp[0] == "tap" else f"key {inp[1]}"
@@ -217,6 +222,8 @@ def probe(device, out_dir: Path, n: int = 4, keys: bool = True, seconds: float =
                 device.key(k)
             time.sleep(0.35)
             f = device.frame()
+            if left(("key", k or "(none)")):
+                return
             moving = changed(prev, f) > LIVE
             pressed = sum(1 for x in plan[:i + 1] if x)
             keep(f, (f"gameplay: in motion, {pressed} keys after {how}" if pressed else f"in motion with no input, {0.35 * (i + 1):.1f} s after {how}")
@@ -231,9 +238,9 @@ def probe(device, out_dir: Path, n: int = 4, keys: bool = True, seconds: float =
     keep(start, "the page as loaded, before any input", False)
     grid = [(w // 2, h // 2), (w // 4, h // 2), (3 * w // 4, h // 2), (w // 2, h // 4), (w // 2, 3 * h // 4),
             (w // 4, h // 4), (3 * w // 4, 3 * h // 4), (w // 4, 3 * h // 4), (3 * w // 4, h // 4)]
-    queue: list[tuple] = [("tap", x, y) for x, y in targets(start)] + [("tap", x, y) for x, y in grid]
-    if keys:
-        queue += [("key", k) for k in ("Enter", "Space", "ArrowUp", "ArrowRight", "ArrowDown", "ArrowLeft")]
+    # keys first where there are keys: they cannot follow a link off the page, and many web games start on one
+    queue: list[tuple] = [("key", k) for k in ("Space", "Enter", "ArrowUp", "ArrowRight", "ArrowDown", "ArrowLeft")] if keys else []
+    queue += [("tap", x, y) for x, y in targets(start)] + [("tap", x, y) for x, y in grid]
     done: set[tuple] = set()
     went_live = False
     while queue and time.time() < t_end and len(done) < 40:
@@ -250,6 +257,8 @@ def probe(device, out_dir: Path, n: int = 4, keys: bool = True, seconds: float =
         f1 = device.frame()
         time.sleep(0.5)
         f2 = device.frame()
+        if left(inp):
+            continue
         live = changed(f1, f2) > LIVE
         did = max(changed(before, f1), changed(before, f2)) > MOVED
         keep(f1, f"just after {say(inp)}" + (" (screen in motion)" if live else ""), live)
