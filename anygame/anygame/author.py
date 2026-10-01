@@ -466,10 +466,10 @@ def _better(a: dict[str, Any] | None, b: dict[str, Any], score_read: str | None)
     def key(s):
         reason = str(s.get("reason") or "")
         won = "we_won" in reason or "won" in reason
-        lost = "we_lost" in reason or "dead" in reason or "over" in reason or "unchanged" in reason    # a stall is a loss
+        lost = "we_lost" in reason or "dead" in reason or "over" in reason
         score = (s.get("final_screen") or {}).get(score_read or "score")
         return (1 if won else 0, 0 if lost else 1, s.get("ticks", 0) if lost else 0, float(score) if isinstance(score, (int, float)) else 0.0,
-                s.get("decisions", 0))      # equal otherwise: the pack that kept making moves
+                s.get("decisions", 0))      # equal otherwise (a stall, a tick cap): the pack that kept making moves
     return key(b) > key(a)
 
 
