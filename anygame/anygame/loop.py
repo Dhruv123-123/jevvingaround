@@ -9,7 +9,7 @@ from .device.base import Device
 from .geometry import Zone
 from .jev import Jev
 from .pack import Action, Pack
-from .perceive import read_all, around_of
+from .perceive import read_all, around_of, margin_of, margin_num
 from .fingerprint import Index as FpIndex, fingerprint, to_b64
 from .pack import dump_pack, load_pack_text
 
@@ -81,6 +81,9 @@ class Agent:
         self.on_pack_change = None
         self.on_record = None            # (rec, frame) after every tick: the learning loop keeps the decisions and their frames
         self.last_support = 1.0
+        self.sensor_ewma_ms = 0.0        # what the decider has been taking lately: the per-tick budget is judged against it
+        self.budget_skips = 0            # consecutive ticks the decider was skipped for the budget
+        self.skipped_budget = 0          # over the run
         self._load_fingerprints()
         # slow reads (OCR, detectors) run in a forked worker process: a thread starves next to onnxruntime and
         # the browser, a process does not, and the loop only ever waits on the first value
@@ -337,6 +340,9 @@ class Agent:
                 values[rid] = _predict(values.get(r["of"]), values.get(f"{r['of']}_prev"), int(r.get("steps", 1)))
             if r.get("kind") == "around":
                 values[rid] = around_of(values.get(r["of"]), raw_values.get(r["in"]), values.get(f"{r['of']}_moving"), r)
+            elif r.get("kind") == "margin":
+                # the barrier after each move with the decision latency compensated (a discrete control barrier function)
+                values[rid] = margin_of(values.get(r["of"]), raw_values.get(r["in"]), r) if "in" in r else margin_num(values.get(r["of"]), r)
             elif r.get("kind") == "tetris":
                 if rid not in self.trackers:
                     from .perceive.tetris import TetrisTracker
@@ -460,9 +466,29 @@ class Agent:
             self._emit(rec, frame, dets, None)
             return rec
         qs = self.questions(values)
-        try:
-            res = self.jev.ask(state, qs)
-        except Exception as e:  # noqa: BLE001 — a failed call costs one tick, not the game
+        budget = float(self.pack.raw.get("budget_ms") or 0)
+        expected = t_perc + self.sensor_ewma_ms
+        if (budget and self.last_answers and self.pack.rules and expected > budget
+                and self.budget_skips < int(self.pack.raw.get("budget_skip_max", 2))):
+            # the tick cannot afford the decider: the rules act on its last answers (the post-posed shield), at most
+            # budget_skip_max ticks in a row so a slow decider is never starved out of the loop
+            import copy
+            self.budget_skips += 1
+            self.skipped_budget += 1
+            res = {"answers": copy.deepcopy(self.last_answers), "latency_ms": 0, "input_tokens": 0, "cost_usd": 0.0}
+            rec["sensor"] = f"budget: skipped the decider (perception {t_perc:.0f} ms + expected {self.sensor_ewma_ms:.0f} ms > {budget:.0f} ms) → rules on last answers"
+            rec["skipped"] = "budget"
+            e = None
+        else:
+            e = None
+            self.budget_skips = 0
+            try:
+                res = self.jev.ask(state, qs)
+                lat = float(res.get("latency_ms") or 0)
+                self.sensor_ewma_ms = lat if not self.sensor_ewma_ms else 0.7 * self.sensor_ewma_ms + 0.3 * lat
+            except Exception as ex:  # noqa: BLE001
+                e = ex
+        if e is not None:  # a failed call costs one tick, not the game
             self.errors += 1
             if self.pack.rules and self.last_answers:
                 # the model is late: replay its last answers through the pack's rules so a safe move still goes out
@@ -503,20 +529,7 @@ class Agent:
            set: {param_question: source_question}              → copy a choice into a parameter question."""
         applied: list[str] = []
         excluded: set[str] = set()
-        for rl in self.pack.rules:
-            c = rl["if"]
-            if "noul" in c:
-                a = answers.get(c["noul"])
-                if not a or a.get("type") != "noul":
-                    continue
-                p = a["noul"]
-                hit = (p >= c["gte"]) if "gte" in c else (p <= c["lte"])
-                why = f"{c['noul']}={p:.2f}"
-            else:
-                hit = self._cond(c, values)
-                why = f"{c['read']}={_get(values, c['read'])}"
-            if not hit:
-                continue
+        for rl, why in self._hits(answers, values):
             for x in rl.get("exclude") or []:
                 v = _get(values, x[1:]) if isinstance(x, str) and x.startswith("$") else x
                 if v is not None and v != "none":
@@ -535,7 +548,40 @@ class Agent:
                 best = max(probs, key=probs.get)
                 answers["action"] = {**act, "choice": best}
                 applied.append(f"→ {best}")
+            else:
+                # the rules are infeasible here: every action is excluded. The choice stands, and the record says so,
+                # because a trap that closed ticks ago is an incident for the reads that should have seen it coming
+                applied.append(f"→ every action excluded; {act.get('choice')} stands")
         return applied
+
+    def _hits(self, answers: dict[str, Any], values: dict[str, Any]) -> list[tuple[dict[str, Any], str]]:
+        """The rules whose condition holds on these answers and values, with why."""
+        out = []
+        for rl in self.pack.rules:
+            c = rl["if"]
+            if "noul" in c:
+                a = answers.get(c["noul"])
+                if not a or a.get("type") != "noul":
+                    continue
+                p = a["noul"]
+                hit = (p >= c["gte"]) if "gte" in c else (p <= c["lte"])
+                why = f"{c['noul']}={p:.2f}"
+            else:
+                hit = self._cond(c, values)
+                why = f"{c['read']}={_get(values, c['read'])}"
+            if hit:
+                out.append((rl, why))
+        return out
+
+    def _excluded(self, answers: dict[str, Any], values: dict[str, Any]) -> set[str]:
+        """The actions the rules exclude here: the complement of what the decider is allowed to pick."""
+        exc: set[str] = set()
+        for rl, _ in self._hits(answers, values):
+            for x in rl.get("exclude") or []:
+                v = _get(values, x[1:]) if isinstance(x, str) and x.startswith("$") else x
+                if v is not None and v != "none":
+                    exc.add(str(v))
+        return exc
 
     @staticmethod
     def _cond(c: dict[str, Any], values: dict[str, Any]) -> bool:

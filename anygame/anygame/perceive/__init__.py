@@ -71,7 +71,7 @@ def read_all(pack: Pack, frame: np.ndarray, only: set[str] | None = None, tick: 
                 conf[rid] = 1.0 if cells else 0.0
             timings[rid] = 0.0
             continue
-        if kind in ("around", "tetris", "predict"):
+        if kind in ("around", "tetris", "predict", "margin"):
             continue  # derived in the loop (needs direction / history / per-run tracker state)
         if kind == "runs":
             values[rid] = runs_of(values.get(r["in"], {}), r)
@@ -178,15 +178,68 @@ def around_of(cell: Any, src: Any, moving: str | None, r: dict[str, Any]) -> dic
     return out
 
 
-def _space(src: dict[str, Any], start: tuple[int, int], free: set[str]) -> int:
-    if str(src.get(f"c{start[0]}r{start[1]}", "wall")) not in free:
+def _space(src: dict[str, Any], start: tuple[int, int], free: set[str], blocked: set[tuple[int, int]] = frozenset()) -> int:
+    if start in blocked or str(src.get(f"c{start[0]}r{start[1]}", "wall")) not in free:
         return 0
     seen, todo = {start}, [start]
     while todo:
         c, rw = todo.pop()
         for dc, dr in ((1, 0), (-1, 0), (0, 1), (0, -1)):
             nxt = (c + dc, rw + dr)
-            if nxt not in seen and str(src.get(f"c{nxt[0]}r{nxt[1]}", "wall")) in free:
+            if nxt not in seen and nxt not in blocked and str(src.get(f"c{nxt[0]}r{nxt[1]}", "wall")) in free:
                 seen.add(nxt)
                 todo.append(nxt)
     return len(seen)
+
+
+DIRS = (("up", (0, -1)), ("down", (0, 1)), ("left", (-1, 0)), ("right", (1, 0)))
+
+
+def margin_of(cell: Any, src: Any, r: dict[str, Any]) -> dict[str, Any] | None:
+    """The safety margin after each move, with the decision latency compensated: a discrete control barrier function
+    on a grid. `now` is the room reachable from the located cell (the barrier value h(x) before acting). For each
+    direction, the value is the room reachable from the cell the mover will occupy when the action has landed and
+    the next decision is made: `lag` + 1 cells that way (the game advances `lag` cells while we think), 0 when any
+    cell on that path is not free (death on the way). `<dir>_ok` holds when the room after the move keeps at least
+    (1 - alpha) of the room now, the DCBF condition; `safe` lists the directions that hold, `best` the roomiest."""
+    import re as _re
+    m = _re.match(r"c(\d+)r(\d+)$", str(cell or ""))
+    if not m or not isinstance(src, dict):
+        return None
+    c, rw = int(m.group(1)), int(m.group(2))
+    free = set(str(x) for x in (r.get("free") or ["."]))
+    lag, alpha = max(0, int(r.get("lag", 1))), float(r.get("alpha", 0.5))
+    out: dict[str, Any] = {}
+    now = 0
+    for name, (dc, dr) in DIRS:
+        now = max(now, _space(src, (c + dc, rw + dr), free))
+    out["now"] = now
+    safe: list[str] = []
+    for name, (dc, dr) in DIRS:
+        path = [(c + dc * i, rw + dr * i) for i in range(1, lag + 2)]
+        if any(str(src.get(f"c{x}r{y}", "wall")) not in free for x, y in path):
+            after = 0
+        else:
+            after = _space(src, path[-1], free, blocked=set(path[:-1]) | {(c, rw)})
+        out[name] = after
+        ok = after > 0 and after >= (1 - alpha) * now
+        out[f"{name}_ok"] = ok
+        if ok:
+            safe.append(name)
+    out["safe"] = safe
+    out["best"] = max(DIRS, key=lambda d: out[d[0]])[0] if now else None
+    return out
+
+
+def margin_num(v: Any, r: dict[str, Any]) -> float | None:
+    """The numeric form: how far a number is from the nearest of its bounds (a bar, a timer, a height)."""
+    try:
+        x = float(v)
+    except (TypeError, ValueError):
+        return None
+    ds = []
+    if "lower" in r:
+        ds.append(x - float(r["lower"]))
+    if "upper" in r:
+        ds.append(float(r["upper"]) - x)
+    return round(min(ds), 3) if ds else None

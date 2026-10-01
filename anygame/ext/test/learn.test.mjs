@@ -143,3 +143,86 @@ test("the calibrator learns from the trial record; lessons and hints; the bank k
   const fresh = bank.recordTrial(2, true, fullPack, incumbent, "status is dead");
   assert.equal(bank.revisions[0].kept, true); assert.ok(fresh.length >= 2 && bank.lessons.length === fresh.length);
 });
+
+test("counterfactual return: identical owns the loss, guarded leaves it, an earlier turn truncates the walk", async () => {
+  const { counterfactual, counterfactualSummary, loggedPolicy } = await import("../dist/core.js");
+  const inc = snakeIncident();
+  const lp = loggedPolicy(rec(5, "left", { right: 0.5, left: 0.3, up: 0.2 }, { rules: ["head_around.right=wall → not right", "→ left"] }));
+  assert.ok(!("right" in lp) && Math.abs(lp.left - 0.6) < 1e-9);
+  const same = [{ right: 0.8, up: 0.1, down: 0.1 }, { right: 0.8, up: 0.1, down: 0.1 }, { right: 0.6, up: 0.3, down: 0.1 }];
+  const c1 = counterfactual(inc, same); assert.ok(c1.lost && c1.diverged_at === null && Math.abs(c1.loss_weight - 1) < 1e-6);
+  const c2 = counterfactual(inc, same.slice(0, 2).concat([{ up: 0.75, down: 0.25 }])); assert.equal(c2.loss_weight, 0); assert.ok(c2.reached_end);
+  const c3 = counterfactual(inc, [same[0], { up: 0.9, right: 0.02, down: 0.08 }, same[2]]); assert.equal(c3.diverged_at, 12); assert.equal(c3.loss_weight, 0); assert.equal(c3.ratios.length, 2);
+  assert.equal(counterfactual(inc, [{ right: 1 }, { right: 1 }, { right: 1 }], 2).loss_weight, 2);
+  assert.equal(counterfactual(inc, [null, null, null]).loss_weight, 1);
+  const s = counterfactualSummary([c1, c2, c3]);
+  assert.equal(s.n, 3); assert.equal(s.incumbent_loss, 1); assert.ok(Math.abs(s.candidate_loss - 1 / 3) < 1e-3); assert.equal(s.walks_into, 1); assert.equal(s.diverged, 1); assert.equal(s.ess, 1);
+});
+
+test("re-ask, holdout, order A/B and the gates against a scripted sensor; an order-only revision needs a sensor", async () => {
+  const { reask, holdoutCheck, auditOrder, actionOrders, orderText, counterfactualReturn, Bank, verifyRevision, revisionFeatures, Calibrator } = await import("../dist/core.js");
+  // a sensor that always wants the first option listed (pure position bias), 0.7 on it
+  const first = { model: "first", async ask(_s, qs) { const a = {}; for (const [k, q] of Object.entries(qs)) { if (q.type === "noul") a[k] = { type: "noul", noul: 0.5 }; else if (q.type === "choice") { const c = Object.keys(q.criteria); a[k] = { type: "choice", choice: c[0], probabilities: Object.fromEntries(c.map((x, i) => [x, i ? 0.3 / (c.length - 1) : 0.7])) }; } } return { answers: a, latency_ms: 10, input_tokens: 1, cost_usd: 0.00001 }; } };
+  const inc = snakeIncident(); const fullPack = packFromText(BUNDLED_PACKS.snake, "snake");
+  const r = await reask(first, fullPack, inc.decisions);
+  assert.equal(r.raw.length, 3); assert.ok(r.raw.every((x) => x === "up")); assert.ok(r.probs.every((p) => Math.abs(Object.values(p).reduce((a, b) => a + b, 0) - 1) < 1e-9));
+  const bank = new Bank(); bank.addHoldout(inc.decisions.slice(0, 2), 3); bank.addHoldout(inc.decisions.slice(0, 2), 3);
+  assert.equal(bank.holdout.length, 3); assert.equal(bank.holdout[2].rec.tick, 12);
+  const h = await holdoutCheck(first, fullPack, bank.holdout); assert.equal(h.n, 3); assert.ok(h.agreement >= 0 && h.agreement <= 1);
+  assert.equal((await holdoutCheck(first, fullPack, [])).n, 0);
+  const orders = actionOrders(fullPack); assert.equal(orders.length, 4);
+  const res = await auditOrder(first, fullPack, inc.decisions, () => {}, undefined, new Set([20]));
+  assert.equal(res.length, 4); assert.ok(res.every((o) => o.first_pick === 1 && o.n === 3 && o.fatal_repeated !== null));
+  // listing 'right' first makes the biased decider pick the excluded move at the wall: that order sorts last
+  const rightFirst = res.find((o) => o.order[0] === "right"); if (rightFirst) assert.ok(rightFirst.unsafe > 0 && res[res.length - 1].unsafe >= rightFirst.unsafe);
+  assert.equal(typeof orderText(res), "string");
+  const cf = await counterfactualReturn(first, fullPack, [inc, incidentOf(inc.decisions, "status is dead", 40)], () => {}, { 0: [{ right: 1 }, { right: 1 }, { right: 1 }] });
+  assert.equal(cf.n, 2); assert.ok(cf.per_incident[0].loss_weight >= 1); assert.ok(cf.cost_usd > 0);
+  // an order-only revision: rejected by replay alone, accepted for re-query when a sensor will judge it
+  const raw = yaml.load(dumpPack(fullPack.raw)); raw.act = [...raw.act].reverse();
+  const reordered = packFromText(dumpPack(raw), "snake");
+  assert.ok(!verifyRevision(reordered, fullPack, inc).ok);
+  const v = verifyRevision(reordered, fullPack, inc, 0.7, 0.34, [], true); assert.ok(v.ok && v.order_changed && !v.guarded);
+  assert.equal(revisionFeatures(v, reordered, fullPack).order_changed, 1); assert.equal(revisionFeatures(v, fullPack, fullPack).order_changed, 0);
+  // the conformal floor: five kept and five reverted rows; the floor is the smallest leave-one-out score among the kept (capped at 0.9)
+  const good = (i) => ({ guarded: 1, distinguished: 2, overblocked: 0, support: 1, rules_added: 1, reads_added: 1, requery_avoided: 1, requery_agreement: 0.9, holdout_agreement: 0.9 - i * 0.01 });
+  const bad = (i) => ({ guarded: 0, distinguished: 0, overblocked: 0.3 + i * 0.02, support: 0.8, rules_added: 3, reads_added: 0, requery_avoided: 0, requery_agreement: 0.5, holdout_agreement: 0.5 });
+  const rows = [...[0, 1, 2, 3, 4].map((i) => ({ version: i, features: good(i), kept: true, at: "" })), ...[0, 1, 2, 3, 4].map((i) => ({ version: 10 + i, features: bad(i), kept: false, at: "" }))];
+  const c = new Calibrator(rows);
+  assert.ok(c.active && c.conformal !== null && c.nKept === 5 && c.floor > 0 && c.floor <= 0.9);
+  assert.ok(c.judge(good(9))[0] && c.judge(good(9))[1].includes("conformal floor")); assert.ok(!c.judge(bad(9))[0]);
+  const c2 = new Calibrator([...rows.slice(0, 2), ...rows.slice(5)]);
+  assert.ok(c2.active && c2.floor === 0 && c2.judge(bad(9))[0] && c2.judge(bad(9))[1].includes("no floor yet"));
+  assert.equal(new Calibrator(rows, 6, 0.35, null).floor, 0.35);
+});
+
+test("margin read and the per-tick budget", async () => {
+  const { marginOf, marginNum, Agent, StillDevice } = await import("../dist/core.js");
+  const cells = {}; for (let c = 1; c <= 6; c++) for (let r = 1; r <= 6; r++) cells[`c${c}r${r}`] = ".";
+  for (const k of ["c1r2", "c2r2", "c3r2", "c3r1"]) cells[k] = "s";
+  cells.c2r1 = "H";
+  const m = marginOf("c2r1", cells, { free: [".", "F"], lag: 0 });
+  assert.equal(m.left, 1); assert.equal(m.right, 0); assert.equal(m.now, 1); assert.deepEqual(m.safe, ["left"]); assert.equal(m.best, "left");
+  const open = {}; for (let c = 1; c <= 6; c++) for (let r = 1; r <= 6; r++) open[`c${c}r${r}`] = "."; open.c3r3 = "H";
+  const m2 = marginOf("c3r3", open, { free: ["."], lag: 1 });
+  assert.equal(m2.now, 35); assert.equal(m2.right, 34); assert.ok(m2.right_ok); assert.equal(m2.safe.length, 4);
+  const m3 = marginOf("c3r3", open, { free: ["."], lag: 2 }); assert.equal(m3.up, 0); assert.ok(!m3.up_ok && m3.down > 0);
+  assert.equal(marginOf(null, open, {}), null); assert.equal(marginNum(7, { lower: 0, upper: 10 }), 3); assert.equal(marginNum("x", { lower: 0 }), null);
+  // in a pack: a rule on the margin excludes the move into the wall at replay time
+  const { replay } = await import("../dist/core.js");
+  const raw = yaml.load(dumpPack(packFromText(BUNDLED_PACKS.snake, "snake").raw));
+  raw.read.room = { kind: "margin", of: "head", in: "cells", free: [".", "F"], lag: 1 }; raw.rules.push({ if: { read: "room.right_ok", equals: false }, exclude: ["right"] });
+  const r = replay(packFromText(dumpPack(raw), "snake"), snakeIncident());
+  assert.equal(r.values[2].room.right, 0); assert.notEqual(r.choices[2], "right");
+  assert.throws(() => { const bad = yaml.load(dumpPack(raw)); bad.read.bad = { kind: "margin", of: "head" }; packFromText(dumpPack(bad), "x"); });
+  // the budget: a sensor that reports 500 ms is skipped when perception + expected latency exceeds budget_ms, at most budget_skip_max in a row
+  let calls = 0;
+  const slow = { model: "slow", async ask(_s, qs) { calls++; const c = Object.keys(qs.action.criteria); return { answers: { action: { type: "choice", choice: "right", probabilities: Object.fromEntries(c.map((x) => [x, x === "right" ? 0.9 : 0.1 / (c.length - 1)])) } }, latency_ms: 500, input_tokens: 1, cost_usd: 0 }; } };
+  const pack = packFromText(BUNDLED_PACKS["snake-state"], "snake-state"); pack.raw.budget_ms = 100; pack.raw.budget_skip_max = 2;
+  const states = [0, 1, 2, 3, 4, 5].map((i) => ({ snake: [[3 + i, 6], [2 + i, 6], [1 + i, 6]], food: [9, 2], score: 0, over: false }));
+  const dev = new StillDevice([{ width: W, height: H, data: new Uint8ClampedArray(W * H * 4) }], [W, H]); let si = 0; dev.state = async () => states[Math.min(si++, 5)];
+  const ag = new Agent(pack, dev, slow);
+  const recs = []; for (let i = 0; i < 6; i++) recs.push(await ag.step());
+  assert.equal(calls, 2); assert.deepEqual(recs.map((r) => r.skipped === "budget"), [false, true, true, false, true, true]); assert.equal(ag.skippedBudget, 4);
+  assert.ok(recs.every((r) => r.choice) && recs.filter((r) => r.skipped).every((r) => r.sensor.includes("rules on last answers")));
+});

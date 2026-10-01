@@ -43,6 +43,11 @@ read:                                                     # each read is one key
         # cells; mode: hands = landing cells whose cell above completes the line (drop there and you lose)
   <id>: { kind: around, of: <locate read id>, in: <grid read id>, free: [".", F] }
         # {up,down,left,right,ahead} neighbours plus <dir>_free (open cells that way) and <dir>_space (flood fill)
+  <id>: { kind: margin, of: <locate read id>, in: <grid read id>, free: [".", F], lag: 1, alpha: 0.5 }
+        # the room left AFTER each move, with the decision latency compensated (the mover advances `lag` cells while
+        # the decider thinks): { now, up, down, left, right, <dir>_ok, safe: [dirs], best }; 0 = death that way.
+        # A rule `{ if: { read: <id>.up_ok, equals: false }, exclude: [up] }` is the guard against pockets.
+        # Numeric form for a bar or a number: { kind: margin, of: <number read>, lower: 0, upper: 100 } → distance to a bound
   <id>: { kind: blobs, zone: <grid zone>, colors: { <label>: "#hex", ... }, min_area: 20, tol: 40, max: 20 }
         # small moving things a grid read misses (bullets, a cursor, sprites): connected blobs of each colour,
         # returned as { <label>: [ { cell: "c3r7", size: small|medium|large }, ... ] } (cells of the zone's grid;

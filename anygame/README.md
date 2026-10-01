@@ -87,6 +87,19 @@ each read with the coming loss and with the decider's choice; the gap names what
 feed the revision prompt. On the eight-episode Snake run's own bank, the audit found that the learned pack's only
 question, `food_reachable_safely`, is consumed by no rule and so never changed an action in forty decisions.
 
+The second slice closes the scoring step: a **counterfactual return** for every candidate (per-decision importance
+ratios from the logged probabilities and the re-query, the walk cut at the first tick the candidate would have
+left the logged path; a revision must leave more of the banked losses than the incumbent did), a **held-out set**
+of ordinary ticks banked from every episode that the decider is re-asked on so a fix for one loss cannot drift
+everywhere else, an **option-order A/B** on the banked states, a **conformal floor** for the calibrator (at most a
+quarter of revisions as good as the kept ones are refused; no veto until three have been kept), **`margin`**
+reads (the room after each move with the decision latency compensated) and a per-tick **`budget_ms`** that lets
+the rules act on the decider's last answers when the tick cannot afford it. `anygame audit <pack> --sensor jev`
+prints all of it for a bank. On the Snake bank it found that listing `keep` first makes Jev want it 45% of the
+time against 20% for no bias and want a rule-excluded move 62% of the time against 28% as authored, and that the
+learned pack still owns one of its four banked losses, the pocket death a one-step rule cannot see.
+[docs/research/sima2.md](docs/research/sima2.md) reads DeepMind's SIMA 2 report against this design.
+
 Measured on Snake from a **naive pack** (no rules, no `around` read, a two-line paragraph), eight episodes with
 GPT-5.6 revising and Jev playing, the trial record and lessons on: episode 1 died at tick 51; v2 (rules on free
 cells) played 365 ticks; v3 381; v4 408 with score 1500, which is where the hand-written Snake pack sits. Eight
@@ -290,6 +303,7 @@ on:
 | `locate` | the cell(s) holding a symbol in a grid read (`row`/`col` filters, `many`) | snake head/food, legal columns |
 | `runs` | empty cells that would complete N-in-a-line of a symbol (optionally under gravity) | Connect Four wins and threats; tic-tac-toe, gomoku |
 | `around` | what is next to a located cell in each direction, straight `ahead`, `<dir>_free` (open cells that way), `<dir>_space` (flood-fill room that way) | snake |
+| `margin` | the room left *after* each move with the decision latency compensated (`lag` cells advance while the decider thinks): `now`, per direction the reachable room from where the mover will be when the action has landed (0 = death that way), `<dir>_ok` (keeps at least `1-alpha` of the room: a discrete control barrier condition), `safe`, `best`; a numeric form gives a number's distance to its bounds | snake (pockets), bars, timers |
 | `tetris` | the falling piece, the stack's features, and the reachable landings with computed consequences as a typed choice; a `macro` action plays the choice as keys and the next spawn verifies it | tetris |
 | `history: 1` | `<id>_prev` (last distinct value), and for a located cell `<id>_moving` / `<id>_reverse` | direction of travel |
 
@@ -483,6 +497,7 @@ so every pack is testable in CI with no hardware and no account beyond the model
 anygame packs
 anygame play <pack> --device web://…[#state=<js>]|screen://x,y,w,h|stream://ws://…|pyboy://<rom>|adb://…|replay://<dir> [--hud 8080] [--max-ticks N] [--sensor none]
 anygame eval <pack> [--sensor jev]        # perception tests on the pack's frames; action checks with a sensor
+anygame audit <pack> [--bank DIR] [--sensor jev]   # what the bank says: question value, ignored reads, option-order A/B, counterfactual return
 anygame record --device adb://<ip>:5555 --out packs/<pack>/fixtures --seconds 30   # frames for authoring
 anygame render <recorded-dir> --log run.jsonl --out demo.mp4                         # video with the decision panel
 anygame go <device> [--game "…"] [--play "…"] [--pack <bundled>] [--learn N]   # pool → author if needed → play; --learn: episodes and revisions

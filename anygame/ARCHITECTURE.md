@@ -53,7 +53,7 @@ act:        # the typed actions (tap a cell, swipe, key, macro, wait)
 play:       # the paragraph: what the game is and how to play it
 questions:  # what Jev is asked every tick (noul beliefs, choices, scores)
 rules:      # beliefs and reads become policy: exclude, set, avoid, only
-act_when / stop_when / settle / tick_hz / sensor_timeout_s
+act_when / stop_when / settle / tick_hz / sensor_timeout_s / budget_ms
 tests:      # fixtures with the exact values the reads must produce
 modes:      # sub-packs for other screens (a shop, a map), each with a `when`
 fingerprints:   # screen name → base64 fingerprint (main and every mode and transient)
@@ -84,7 +84,8 @@ Two more things learn, and they are what separates this from a fixed self-improv
 
 | what | learns from | how |
 |---|---|---|
-| the **judge** (`Calibrator`) | the trial record: each accepted revision's shape and whether it was kept or reverted | a small logistic model, consulted before a revision goes on trial once six labelled revisions of both outcomes exist |
+| the **judge** (`Calibrator`) | the trial record: each accepted revision's shape and whether it was kept or reverted | a small logistic model, consulted before a revision goes on trial once six labelled revisions of both outcomes exist; its veto floor is conformal (at most a quarter of revisions as good as the kept ones refused), so it abstains until three revisions have been kept |
+| the **scorer** (re-query) | the frozen decider itself, re-asked on banked states under the candidate frame | the fatal state must be avoided, the counterfactual return over every banked loss must beat the incumbent's, and the held-out ordinary ticks must keep their choices |
 | the **proposer** | lessons: the rules and reads that kept revisions added, on this pack and on others in the pool | shown in the revision prompt, filtered to the read kinds this pack has |
 
 Still fixed: Jev (or CLM), the chat model that proposes, and the set of read kinds and rule forms, which are code.

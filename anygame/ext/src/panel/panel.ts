@@ -1,7 +1,7 @@
 // The side panel is the whole runtime: it captures the game tab, runs the pack, calls the sensor, sends input,
 // and shows the decision panel. Packs are bundled or authored here and cached in extension storage.
 import yaml from "js-yaml";
-import { Agent, BUNDLED_PACKS, loadPack, dumpPack, openSensor, Chat, VLMFallback, explore, digest as demoDigest, fingerprint, fpDistance, fpFromBase64, type Frame, outcome, Calibrator, hintsText, lessonsOf, type RevisionRecord, type Lesson, betterEpisode, medianEpisode, incidentOf, improve, LOST, type Decision, type Episode, type Incident, type Demo, type DemoEvent, type Keys, type Pack, type Rec, type Sensor } from "../core/index.js";
+import { Agent, BUNDLED_PACKS, loadPack, dumpPack, openSensor, Chat, VLMFallback, explore, digest as demoDigest, fingerprint, fpDistance, fpFromBase64, type Frame, outcome, Calibrator, hintsText, lessonsOf, type RevisionRecord, type Lesson, betterEpisode, medianEpisode, incidentOf, improve, LOST, Bank, type Decision, type Episode, type Incident, type Demo, type DemoEvent, type Keys, type Pack, type Rec, type Sensor } from "../core/index.js";
 import { author, checkPack, extractYaml, withFingerprints, frameToDataUrl } from "../core/author.js";
 import { TabDevice, type Region } from "../device/tab.js";
 
@@ -217,6 +217,7 @@ async function play() {
   bank.revisions = bank.revisions ?? []; bank.lessons = bank.lessons ?? [];
   const readKinds = new Set(Object.values(ag.base.reads).map((r) => String(r.kind)));
   const pastIncidents: Incident[] = [];                                 // this session's incidents with frames: a revision must not break them
+  const holdout = new Bank();   // in memory: held-out ordinary ticks with their frames, for this run
   $("playtext").textContent = pack.play; ($("playtext") as HTMLTextAreaElement).value = pack.play;
   ($("rulestext") as HTMLTextAreaElement).value = pack.rules.length ? yaml.dump(pack.rules) : "";
   $<HTMLButtonElement>("play").disabled = true; $<HTMLButtonElement>("stop").disabled = false; $<HTMLButtonElement>("author").disabled = true;
@@ -228,10 +229,17 @@ async function play() {
   for (let episodeN = bank.episodes.length + 1; ; episodeN++) {
     const records: Rec[] = [];
     const decisions: Decision[] = [];
+    const sample: Decision[] = []; let seen = 0; let rs = (episodeN * 2654435761) >>> 0;   // a reservoir of ordinary ticks for the held-out check
     ag.onRecord = (rec, frame) => {
       showRec(rec);
       records.push(rec); if (records.length > 2000) records.shift();
-      if (rec.choice && rec.choice !== "fallback") { decisions.push({ rec, frame }); if (decisions.length > 12) decisions.shift(); }
+      if (rec.choice && rec.choice !== "fallback") {
+        const d = { rec, frame };
+        decisions.push(d); if (decisions.length > 12) decisions.shift();
+        seen++;
+        if (sample.length < 6) sample.push(d);
+        else { rs = (Math.imul(rs, 1103515245) + 12345) >>> 0; const j = (rs >>> 8) % seen; if (j < 6) sample[j] = d; }
+      }
     };
     let last: Rec | null = null;
     try { last = await ag.run(() => stopping); }
@@ -255,7 +263,9 @@ async function play() {
       }
       incumbent = null;
     }
-    // ---- a loss becomes an incident; the chat model revises the pack; the revision must replay better
+    if (decisions.length) { const edge = decisions[0].rec.tick; holdout.addHoldout(sample.filter((d) => d.rec.tick < edge)); }
+    // ---- a loss becomes an incident; the chat model revises the pack; the revision must replay better, and the
+    //      decider re-asked under it must leave the banked losses and keep its choices on the held-out ordinary ticks
     if (ep.lost && decisions.length) {
       const inc: Incident = incidentOf(decisions, ep.reason, ag.tick);
       const stored: StoredIncident = { reason: inc.reason, tick: inc.tick, at: inc.at, recs: inc.decisions.map((d) => d.rec), frames: [] };
@@ -264,7 +274,7 @@ async function play() {
       try {
         const chat = new Chat(store.keys ?? {});
         const hints = hintsText([...((ag.base.raw.lessons ?? []) as Lesson[]), ...poolLessons], readKinds);
-        const res = await improve(chat, ag.base, inc, bank.episodes, log, { others: pastIncidents.slice(), hints, calibrator: new Calibrator(bank.revisions!) });
+        const res = await improve(chat, ag.base, inc, bank.episodes, log, { others: pastIncidents.slice(), hints, calibrator: new Calibrator(bank.revisions!), sensor: sensor ?? undefined, holdout: holdout.holdout.slice() });
         pastIncidents.push(inc); if (pastIncidents.length > 4) pastIncidents.shift();
         if (res.pack) {
           incumbent = { yaml: dumpPack(ag.base.raw), version, reason: ep.reason };

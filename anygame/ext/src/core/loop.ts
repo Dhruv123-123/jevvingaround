@@ -1,7 +1,7 @@
 // The loop: frame → reads → derived reads → state → one sensor call → rules → typed action. Port of anygame/loop.py.
 import { center, type Frame } from "./geometry.js";
 import { dumpPack, loadPack, type ActionDef, type Pack } from "./pack.js";
-import { aroundOf, readAll, type Values } from "./reads.js";
+import { aroundOf, marginOf, marginNum, readAll, type Values } from "./reads.js";
 import { TetrisTracker } from "./tetris.js";
 import { FingerprintIndex, fingerprint, fpToBase64, type Fingerprint } from "./fingerprint.js";
 import { palette } from "./color.js";
@@ -66,6 +66,9 @@ export class Agent {
   totalCost = 0;
   settling = 0;
   lastAnswers: Record<string, Answer> | null = null;
+  sensorEwmaMs = 0;        // what the decider has been taking lately: the per-tick budget is judged against it
+  budgetSkips = 0;         // consecutive ticks the decider was skipped for the budget
+  skippedBudget = 0;       // over the run
   trackers: Record<string, TetrisTracker> = {};
   onRecord?: (rec: Rec, frame: Frame, answers: Record<string, Answer> | null) => void;
   // ---- the hybrid: which screen is this, does the pack understand it, and who decides when it does not
@@ -192,9 +195,9 @@ export class Agent {
     return false;
   }
 
-  applyRules(answers: Record<string, Answer>, values: Values): string[] {
-    const applied: string[] = [];
-    const excluded = new Set<string>();
+  /** The rules whose condition holds on these answers and values, with why. */
+  hits(answers: Record<string, Answer>, values: Values): [any, string][] {
+    const out: [any, string][] = [];
     for (const rl of this.pack.rules) {
       const c = rl.if;
       let hit: boolean, why: string;
@@ -205,7 +208,25 @@ export class Agent {
         hit = "gte" in c ? p >= c.gte : p <= c.lte;
         why = `${c.noul}=${p.toFixed(2)}`;
       } else { hit = this.cond(c, values); why = `${c.read}=${get(values, c.read)}`; }
-      if (!hit) continue;
+      if (hit) out.push([rl, why]);
+    }
+    return out;
+  }
+
+  /** The actions the rules exclude here: the complement of what the decider is allowed to pick. */
+  excluded(answers: Record<string, Answer>, values: Values): Set<string> {
+    const exc = new Set<string>();
+    for (const [rl] of this.hits(answers, values)) for (const x of rl.exclude ?? []) {
+      const v = typeof x === "string" && x.startsWith("$") ? get(values, x.slice(1)) : x;
+      if (v !== undefined && v !== null && v !== "none") exc.add(String(v));
+    }
+    return exc;
+  }
+
+  applyRules(answers: Record<string, Answer>, values: Values): string[] {
+    const applied: string[] = [];
+    const excluded = new Set<string>();
+    for (const [rl, why] of this.hits(answers, values)) {
       for (const x of rl.exclude ?? []) {
         const v = typeof x === "string" && x.startsWith("$") ? get(values, x.slice(1)) : x;
         if (v !== undefined && v !== null && v !== "none") { excluded.add(String(v)); applied.push(`${why} → not ${v}`); }
@@ -222,6 +243,7 @@ export class Agent {
     if (excluded.size && act && act.choice && excluded.has(act.choice)) {
       const probs = Object.entries(act.probabilities ?? {}).filter(([k]) => !excluded.has(k));
       if (probs.length) { const best = probs.sort((a, b) => b[1] - a[1])[0][0]; answers.action = { ...act, choice: best }; applied.push(`→ ${best}`); }
+      else applied.push(`→ every action excluded; ${act.choice} stands`);   // infeasible rules: the trap closed ticks ago
     }
     return applied;
   }
@@ -260,6 +282,7 @@ export class Agent {
     for (const [rid, r] of Object.entries(pack.reads)) {
       if (r.kind === "predict") values[rid] = predictCell(values[r.of], values[`${r.of}_prev`], Number(r.steps ?? 1));
       if (r.kind === "around") values[rid] = aroundOf(values[r.of], raw[r.in], values[`${r.of}_moving`] ?? null, r);
+      else if (r.kind === "margin") values[rid] = r.in !== undefined ? marginOf(values[r.of], raw[r.in], r) : marginNum(values[r.of], r);
       else if (r.kind === "tetris") {
         if (!this.trackers[rid]) this.trackers[rid] = new TetrisTracker(r);
         values[rid] = this.trackers[rid].read(raw[r.in], r.next_in ? raw[r.next_in] : null);
@@ -422,14 +445,27 @@ export class Agent {
     if (!changed && last && last.action === "wait") { rec.action = "wait"; rec.reason = "screen unchanged"; return done(rec); }
     const qs = this.questions(values);
     let res: SensorResult;
-    try {
-      res = await this.sensor.ask(state, qs);
-    } catch (e) {
-      this.errors++;
-      if (this.pack.rules.length && this.lastAnswers) {
-        res = { answers: JSON.parse(JSON.stringify(this.lastAnswers)), latency_ms: 0, input_tokens: 0, cost_usd: 0 };
-        rec.sensor = `error → rules on last answers: ${String((e as Error).message ?? e).slice(0, 80)}`;
-      } else { rec.action = "wait"; rec.reason = `sensor error: ${String((e as Error).message ?? e).slice(0, 120)}`; return done(rec); }
+    const budget = Number(this.pack.raw.budget_ms ?? 0);
+    if (budget && this.lastAnswers && this.pack.rules.length && tPerc + this.sensorEwmaMs > budget && this.budgetSkips < Number(this.pack.raw.budget_skip_max ?? 2)) {
+      // the tick cannot afford the decider: the rules act on its last answers (the post-posed shield), at most
+      // budget_skip_max ticks in a row so a slow decider is never starved out of the loop
+      this.budgetSkips++; this.skippedBudget++;
+      res = { answers: JSON.parse(JSON.stringify(this.lastAnswers)), latency_ms: 0, input_tokens: 0, cost_usd: 0 };
+      rec.sensor = `budget: skipped the decider (perception ${Math.round(tPerc)} ms + expected ${Math.round(this.sensorEwmaMs)} ms > ${budget} ms) → rules on last answers`;
+      (rec as any).skipped = "budget";
+    } else {
+      this.budgetSkips = 0;
+      try {
+        res = await this.sensor.ask(state, qs);
+        const lat = Number(res.latency_ms ?? 0);
+        this.sensorEwmaMs = this.sensorEwmaMs ? 0.7 * this.sensorEwmaMs + 0.3 * lat : lat;
+      } catch (e) {
+        this.errors++;
+        if (this.pack.rules.length && this.lastAnswers) {
+          res = { answers: JSON.parse(JSON.stringify(this.lastAnswers)), latency_ms: 0, input_tokens: 0, cost_usd: 0 };
+          rec.sensor = `error → rules on last answers: ${String((e as Error).message ?? e).slice(0, 80)}`;
+        } else { rec.action = "wait"; rec.reason = `sensor error: ${String((e as Error).message ?? e).slice(0, 120)}`; return done(rec); }
+      }
     }
     const answers = res.answers;
     if (!rec.sensor) this.lastAnswers = JSON.parse(JSON.stringify(answers));

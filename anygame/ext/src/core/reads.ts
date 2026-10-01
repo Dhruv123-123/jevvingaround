@@ -119,15 +119,15 @@ export function runsOf(src: any, r: ReadDef): string[] {
   return out;
 }
 
-function space(cells: Map<string, string>, start: Cell, free: Set<string>): number {
-  if (!free.has(cells.get(key(start[0], start[1])) ?? "wall")) return 0;
+function space(cells: Map<string, string>, start: Cell, free: Set<string>, blocked: Set<string> = new Set()): number {
+  if (blocked.has(key(start[0], start[1])) || !free.has(cells.get(key(start[0], start[1])) ?? "wall")) return 0;
   const seen = new Set<string>([key(start[0], start[1])]);
   const todo: Cell[] = [start];
   while (todo.length) {
     const [c, r] = todo.pop()!;
     for (const [dc, dr] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
       const k = key(c + dc, r + dr);
-      if (!seen.has(k) && free.has(cells.get(k) ?? "wall")) { seen.add(k); todo.push([c + dc, r + dr]); }
+      if (!seen.has(k) && !blocked.has(k) && free.has(cells.get(k) ?? "wall")) { seen.add(k); todo.push([c + dc, r + dr]); }
     }
   }
   return seen.size;
@@ -152,7 +152,52 @@ export function aroundOf(cell: any, src: any, moving: string | null, r: ReadDef)
   return out;
 }
 
-/** The pixel and simple derived reads. Loop-state reads (around, tetris) are computed by the Agent. */
+const DIRS: [string, [number, number]][] = [["up", [0, -1]], ["down", [0, 1]], ["left", [-1, 0]], ["right", [1, 0]]];
+
+/** The safety margin after each move with the decision latency compensated (a discrete control barrier function on a
+ *  grid): `now` is the room reachable from the located cell; per direction, the room reachable from the cell the mover
+ *  will occupy when the action has landed (`lag` + 1 cells that way), 0 when the path is not free; `<dir>_ok` when the
+ *  room after keeps at least (1 - alpha) of the room now; `safe`, `best`. Same maths as perceive.margin_of. */
+export function marginOf(cell: any, src: any, r: ReadDef): Record<string, any> | null {
+  const m = String(cell ?? "").match(/^c(\d+)r(\d+)$/);
+  const cells = parseCells(src);
+  if (!m || !cells.size) return null;
+  const c = +m[1], rw = +m[2];
+  const free = new Set<string>(((r.free as any[]) ?? ["."]).map(String));
+  const lag = Math.max(0, Number(r.lag ?? 1)), alpha = Number(r.alpha ?? 0.5);
+  const out: Record<string, any> = {};
+  let now = 0;
+  for (const [, [dc, dr]] of DIRS) now = Math.max(now, space(cells, [c + dc, rw + dr], free));
+  out.now = now;
+  const safe: string[] = [];
+  for (const [name, [dc, dr]] of DIRS) {
+    const path: Cell[] = []; for (let i = 1; i <= lag + 1; i++) path.push([c + dc * i, rw + dr * i]);
+    let after = 0;
+    if (path.every(([x, y]) => free.has(cells.get(key(x, y)) ?? "wall"))) {
+      const blocked = new Set<string>(path.slice(0, -1).map(([x, y]) => key(x, y))); blocked.add(key(c, rw));
+      after = space(cells, path[path.length - 1], free, blocked);
+    }
+    out[name] = after;
+    const ok = after > 0 && after >= (1 - alpha) * now;
+    out[`${name}_ok`] = ok;
+    if (ok) safe.push(name);
+  }
+  out.safe = safe;
+  out.best = now ? DIRS.reduce((b, d) => (out[d[0]] > out[b] ? d[0] : b), DIRS[0][0]) : null;
+  return out;
+}
+
+/** The numeric form: how far a number is from the nearest of its bounds. */
+export function marginNum(v: any, r: ReadDef): number | null {
+  const x = Number(v);
+  if (v === null || v === undefined || v === "" || Number.isNaN(x)) return null;
+  const ds: number[] = [];
+  if (r.lower !== undefined) ds.push(x - Number(r.lower));
+  if (r.upper !== undefined) ds.push(Number(r.upper) - x);
+  return ds.length ? Math.round(Math.min(...ds) * 1000) / 1000 : null;
+}
+
+/** The pixel and simple derived reads. Loop-state reads (around, margin, tetris) are computed by the Agent. */
 /** Confidence per read, 0..1: how much of what the read looked for it actually found. The loop averages
  *  these into a support score; a screen the pack does not understand scores low. */
 export function readAll(pack: Pack, frame: Frame, only?: Set<string>, state?: any): { values: Values; timings: Record<string, number>; conf: Record<string, number> } {
@@ -169,7 +214,7 @@ export function readAll(pack: Pack, frame: Frame, only?: Set<string>, state?: an
       case "bar": values[rid] = readBar(frame, pack, r); conf[rid] = 1; break;
       case "locate": values[rid] = locate(values[r.in], r); if (!r.many) conf[rid] = values[rid] ? 1 : 0; break;
       case "runs": values[rid] = runsOf(values[r.in], r); break;
-      case "around": case "tetris": case "predict": continue;
+      case "around": case "tetris": case "predict": case "margin": continue;
       default: values[rid] = null;   // ocr, templates, blobs, vocab: not in the extension
     }
     timings[rid] = Math.round((performance.now() - t0) * 10) / 10;

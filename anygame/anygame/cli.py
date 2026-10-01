@@ -1,5 +1,6 @@
 from __future__ import annotations
 import argparse
+import random
 import json
 import os
 import sys
@@ -427,12 +428,22 @@ def cmd_learn(a):
             agent = Agent(pack, device, jev, None, log_path=str(bank.path / f"episode-{n}.jsonl"), max_ticks=a.max_ticks)
             agent.fallback, agent.goal = fallback, a.goal or ""
             agent.stall_ticks = 40          # a game that ended without the pack noticing ends the episode too
-            recs, decisions = [], []
+            recs, decisions, sample, seen = [], [], [], [0]
+            rng = random.Random(n)
             def _rec(rec, frame):
                 recs.append(rec)
                 if rec.get("choice") and rec.get("choice") != "fallback":
-                    decisions.append(Decision(rec, frame.copy(), getattr(agent, "last_state", None)))
+                    d = Decision(rec, frame.copy(), getattr(agent, "last_state", None))
+                    decisions.append(d)
                     del decisions[:-12]
+                    # a reservoir of ordinary ticks for the held-out check (those near the end are dropped below)
+                    seen[0] += 1
+                    if len(sample) < 6:
+                        sample.append(d)
+                    else:
+                        j = rng.randrange(seen[0])
+                        if j < 6:
+                            sample[j] = d
             agent.on_record = _rec
             if hasattr(device, "reload"):
                 device.reload()          # after the agent is built (its OCR worker is warm), so the game does not run unattended
@@ -470,6 +481,9 @@ def cmd_learn(a):
                     learned.write_text(dump_pack(pack.raw))
                 incumbent = None
             bank.add_episode(ep)
+            if decisions:
+                edge = decisions[0].rec.get("tick", 0)       # the oldest tick still in the fatal window
+                bank.add_holdout([d for d in sample if d.rec.get("tick", 0) < edge])
             if ep["lost"] and decisions:
                 inc = incident_of(decisions, ep["reason"], agent.tick)
                 earlier = bank.incidents()
@@ -490,7 +504,7 @@ def cmd_learn(a):
                     except Exception as e:  # noqa: BLE001
                         log(f"learn: audit skipped ({str(e)[:80]})")
                     res = improve(chat, pack, inc, bank.episodes, log, keep_rejected=bank.path / "rejected", others=earlier, hints=hints, calibrator=bank.calibrator(),
-                                  sensor=jev if a.requery else None)
+                                  sensor=jev if a.requery else None, holdout=bank.holdout() if a.requery else None)
                 except Exception as e:  # noqa: BLE001
                     res = {"pack": None}
                     log(f"learn: {str(e)[:140]}")
@@ -511,6 +525,65 @@ def cmd_learn(a):
                "revisions": {"kept": sum(1 for r in bank.revisions if r.get("kept")), "reverted": sum(1 for r in bank.revisions if r.get("kept") is False), "on_trial": sum(1 for r in bank.revisions if r.get("kept") is None)},
                "lessons": len(bank.lessons), "calibrator": "active" if bank.calibrator().active else "idle"}
     print(json.dumps(summary, indent=1))
+
+
+def cmd_audit(a):
+    """What the bank says about a pack without changing it: the value of every question, the reads the decider
+    ignores, and, with a sensor, the option-order A/B and the pack's counterfactual return on every banked loss."""
+    from .learn import Bank, audit_order, audit_questions, counterfactual_return, holdout_check, order_text, relevance, relevance_text
+    from .pack import load_pack, load_pack_text
+    from .sensors import open_sensor
+    src = Path(find_pack(a.pack))
+    pack = load_pack(src)
+    pack_dir = src if src.is_dir() else src.parent
+    learned = Path(a.out or (pack_dir / "pack.learned.yaml"))
+    if learned.exists():
+        pack = load_pack_text(learned.read_text(), pack.name)
+    bank = Bank(a.bank or (pack_dir / "bank"))
+    incidents = bank.incidents()
+    decisions = [d for inc in incidents for d in inc.decisions if not d.rec.get("never_acted")]
+    fatal = {inc.decisions[-1].rec.get("tick") for inc in incidents if inc.decisions}
+    out: dict = {"pack": pack.name, "version": bank.version, "episodes": len(bank.episodes), "incidents": len(incidents), "banked_decisions": len(decisions), "holdout": len(bank.holdout())}
+    out["questions"] = audit_questions(pack, decisions) if decisions else {}
+    logs = sorted(bank.path.glob("episode-*.jsonl"), key=lambda p: int(p.stem.split("-")[1]))
+    rel = []
+    for lg in reversed(logs):
+        recs = [json.loads(l) for l in lg.read_text().splitlines() if l.strip()]
+        rel = relevance(recs)
+        if rel:
+            break
+    out["relevance"] = rel[:10]
+    if a.sensor and a.sensor != "none" and decisions:
+        sensor = open_sensor(a.sensor, timeout=8.0)
+        log = lambda m: print(m, file=sys.stderr)  # noqa: E731
+        out["order"] = audit_order(sensor, pack, decisions, log, fatal=fatal)
+        out["counterfactual"] = counterfactual_return(sensor, pack, incidents, log)
+        ho = bank.holdout()
+        if ho:
+            out["holdout"] = holdout_check(sensor, pack, ho, log)
+    if a.json:
+        print(json.dumps(out, indent=1, default=str))
+        return
+    print(f"{pack.name} v{out['version']}: {out['episodes']} episodes, {out['incidents']} banked losses ({len(decisions)} decisions), {out['holdout']} held-out ordinary ticks")
+    for q, r in out["questions"].items():
+        print(f"  question {q}: {r['verdict']} (changes the action on {r['changes_action']} of {r['decisions']} decisions)")
+    if rel:
+        print("  " + relevance_text(rel).replace("\n", "\n  "))
+    if out.get("order"):
+        print("  action order (re-asked on the banked decisions; unsafe = picks an action the rules exclude):")
+        for o in out["order"]:
+            print(f"    {o['name']:<13} {o['order']}: unsafe {o['unsafe']:.0%}, first-listed picked {o['first_pick']:.0%}, agrees with the record {o['agreement']:.0%}" + (f", repeats the fatal choice {o['fatal_repeated']:.0%}" if o.get("fatal_repeated") is not None else ""))
+        t = order_text(out["order"])
+        if t:
+            print("  " + t)
+    if out.get("counterfactual"):
+        cf = out["counterfactual"]
+        print(f"  counterfactual: this pack would walk into {cf['walks_into']} of {cf['n']} banked losses (estimated loss {cf['candidate_loss']:.2f} vs {cf['incumbent_loss']:.2f} logged; {cf['diverged']} diverge before the end; ESS {cf['ess']}); re-asks cost ${cf['cost_usd']:.4f}")
+        for p_ in cf["per_incident"]:
+            print(f"    loss at tick {p_['tick']}: " + ("leaves it at tick %s" % p_["diverged_at"] if p_["diverged_at"] is not None else f"owns it with weight {p_['loss_weight']}") + f"  ratios {p_['ratios']}")
+    if out.get("holdout"):
+        h = out["holdout"]
+        print(f"  holdout: agrees with its own record on {h['agreement']:.0%} of {h['n']} ordinary ticks" + (f"; flips: " + "; ".join(f"t{f['tick']} {f['was']}→{f['now']}" for f in h["flips"][:6]) if h["flips"] else ""))
 
 
 def cmd_stamp(a):
@@ -600,6 +673,9 @@ def main(argv=None):
     ln.add_argument("--fallback", action="store_true", help="VLM fallback on screens the pack cannot read (restart prompts, game-over cards)")
     ln.add_argument("--bank", default=None, help="where episodes and incidents go (default <pack>/bank)"); ln.add_argument("--out", default=None, help="the learned pack (default <pack>/pack.learned.yaml)")
     ln.add_argument("--fresh", action="store_true", help="ignore an existing learned pack"); ln.add_argument("--no-requery", dest="requery", action="store_false", help="do not re-ask the decider on banked states when judging a revision"); ln.set_defaults(fn=cmd_learn, requery=True)
+    ad = sub.add_parser("audit", help="what the bank says about a pack: question value, ignored reads, option-order A/B, counterfactual return on banked losses")
+    ad.add_argument("pack"); ad.add_argument("--bank", default=None); ad.add_argument("--out", default=None, help="the learned pack to audit (default <pack>/pack.learned.yaml if it exists)")
+    ad.add_argument("--sensor", default="none", help="jev | clm | none: with a sensor the decider is re-asked on the banked states"); ad.add_argument("--json", action="store_true"); ad.set_defaults(fn=cmd_audit)
     st = sub.add_parser("stamp", help="write fixture fingerprints into pack.yaml (all packs, or the ones named)"); st.add_argument("packs", nargs="*"); st.set_defaults(fn=cmd_stamp)
     rd = sub.add_parser("render"); rd.add_argument("dir"); rd.add_argument("--out", default="demo.mp4"); rd.add_argument("--fps", type=float, default=4); rd.add_argument("--log", default=None, help="the run's --log file: draws a side panel per tick"); rd.set_defaults(fn=cmd_render)
     ev = sub.add_parser("eval"); ev.add_argument("pack"); ev.add_argument("--sensor", default="none", help="jev | none | random | llm:<model>"); ev.set_defaults(fn=cmd_eval)

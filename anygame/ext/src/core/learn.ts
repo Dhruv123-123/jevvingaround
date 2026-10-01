@@ -6,9 +6,9 @@
 // read the screens. Replay is deterministic and costs no model call: Jev's recorded answers are pushed through the
 // candidate's reads and rules. Same contract as anygame/learn.py.
 import type { Frame } from "./geometry.js";
-import { Agent, stableHash, type Rec, type Answer } from "./loop.js";
+import { Agent, stableHash, type Rec, type Answer, type Sensor } from "./loop.js";
 import type { Values } from "./reads.js";
-import { loadPack, dumpPack, type Pack } from "./pack.js";
+import { loadPack, dumpPack, type Pack, type ActionDef } from "./pack.js";
 import { extractYaml, frameToDataUrl } from "./author.js";
 import type { Chat } from "./chat.js";
 import { StillDevice } from "./index.js";
@@ -17,7 +17,7 @@ export interface Decision { rec: Rec; frame: Frame }
 /** The fatal window of an episode, oldest first; the last decision is the one that lost. */
 export interface Incident { reason: string; tick: number; decisions: Decision[]; at: string }
 export interface Episode { n: number; ticks: number; decisions: number; reason: string; score: number | null; won: boolean; lost: boolean; cost_usd: number; version: number; at: string }
-export interface Verdict { ok: boolean; why: string; guarded: boolean; distinguished: string[]; overblocked: number; support: number }
+export interface Verdict { ok: boolean; why: string; guarded: boolean; distinguished: string[]; overblocked: number; support: number; order_changed?: boolean; requery?: any; counterfactual?: any; holdout?: any; calibration?: string }
 
 export const LOST = /lost|dead|over|game_over|crash|died|stalled: playing/i;   // a deadlock mid-game is a failure to act: a loss
 export const WON = /won|win|victory|cleared/i;
@@ -79,6 +79,153 @@ export function replay(pack: Pack, inc: Incident): { values: Values[]; choices: 
   return { values, choices, applied, support };
 }
 
+/** A decider's probabilities restricted to what the rules allow: the policy that actually acts. */
+export function renorm(probs: Record<string, any>, excluded: Set<string>): Record<string, number> {
+  let keep = Object.fromEntries(Object.entries(probs).filter(([k]) => !excluded.has(k)).map(([k, v]) => [k, Math.max(0, Number(v ?? 0))]));
+  if (!Object.keys(keep).length) keep = Object.fromEntries(Object.keys(probs).filter((k) => !excluded.has(k)).map((k) => [k, 1]));
+  if (!Object.keys(keep).length) keep = Object.fromEntries(Object.entries(probs).map(([k, v]) => [k, Math.max(0, Number(v ?? 0))]));
+  const z = Object.values(keep).reduce((a, b) => a + b, 0), n = Object.keys(keep).length;
+  return Object.fromEntries(Object.entries(keep).map(([k, v]) => [k, z > 0 ? v / z : 1 / n]));
+}
+
+/** The incumbent's action distribution at a banked tick: Jev's probabilities renormalised over what its rules left. */
+export function loggedPolicy(rec: Rec): Record<string, number> {
+  const exc = new Set<string>();
+  for (const s of rec.rules ?? []) { const m = String(s).match(/ → not (.+)$/); if (m) exc.add(m[1]); }
+  const probs = rec.action_probs ?? (rec.choice ? { [rec.choice]: 1 } : {});
+  return renorm(probs, exc);
+}
+
+export interface Reask { raw: (string | null)[]; choices: (string | null)[]; probs: (Record<string, number> | null)[]; excluded: Set<string>[]; cost_usd: number }
+
+/** The frozen decider asked again, offline, on banked decisions, with THIS pack's typed frame, paragraph and questions
+ *  (and, if given, its actions listed in `actions` order). Per decision: the raw choice, the choice after this pack's
+ *  rules, the effective distribution and the excluded set; null where the sensor failed. */
+export async function reask(sensor: Sensor, pack: Pack, decisions: Decision[], log: (m: string) => void = () => {}, actions?: ActionDef[]): Promise<Reask> {
+  const pk = actions ? { ...pack, actions: [...actions] } : pack;
+  const ag = new Agent(pk, new StillDevice([], pk.size), null);
+  const out: Reask = { raw: [], choices: [], probs: [], excluded: [], cost_usd: 0 };
+  for (let k = 0; k < decisions.length; k++) {
+    const d = decisions[k];
+    const { values: v } = ag.observe(d.frame, pk);
+    ag.lastValues = v;
+    const st = { game: pk.name, tick: d.rec.tick ?? k, how_to_play: pk.play, screen: v, recent_actions: decisions.slice(Math.max(0, k - 6), k).map((x) => x.rec.action), last_action_changed_screen: true, actions_that_did_nothing_since_last_change: [] };
+    let res;
+    try { res = await sensor.ask(st, ag.questions(v)); } catch (e) {
+      log(`requery: sensor failed at tick ${d.rec.tick}: ${String((e as Error).message ?? e).slice(0, 80)}`);
+      out.raw.push(null); out.choices.push(null); out.probs.push(null); out.excluded.push(new Set()); continue;
+    }
+    const answers = res.answers;
+    out.raw.push(answers.action?.choice ?? null);
+    const exc = ag.excluded(answers, v);
+    ag.applyRules(answers, v);
+    const act = answers.action ?? {};
+    out.choices.push(act.choice ?? null);
+    out.probs.push(renorm(act.probabilities ?? (act.choice ? { [act.choice]: 1 } : {}), exc));
+    out.excluded.push(exc);
+    out.cost_usd += Number(res.cost_usd ?? 0);
+  }
+  out.cost_usd = Math.round(out.cost_usd * 1e6) / 1e6;
+  return out;
+}
+
+/** The decider re-asked on the incident under this pack: fatal avoided? agreement on the ordinary ticks? */
+export async function requery(sensor: Sensor, pack: Pack, inc: Incident, log: (m: string) => void = () => {}) {
+  const r = await reask(sensor, pack, inc.decisions, log);
+  const n = inc.decisions.length - 1, fatal = inc.decisions[n].rec.choice;
+  const ordinary = [...Array(n).keys()].filter((k) => r.choices[k] !== null);
+  const agreement = ordinary.length ? ordinary.filter((k) => r.choices[k] === inc.decisions[k].rec.choice).length / ordinary.length : 1;
+  return { choices: r.choices, probs: r.probs, fatal_avoided: r.choices[n] !== null && r.choices[n] !== fatal, agreement, cost_usd: r.cost_usd };
+}
+
+/** The candidate's return on one banked incident by per-decision importance sampling, truncated at divergence: the
+ *  weight walks the logged path (product of candidate/logged probability of the logged action, clipped at `cap`); at the
+ *  first tick where the candidate would almost surely not have taken the logged action (< eps) the walk is cut and the
+ *  loss is not attributed. `loss_weight` is how much of this loss the candidate still owns. Same maths as learn.py. */
+export function counterfactual(inc: Incident, candProbs: (Record<string, number> | null)[], cap = 5, eps = 0.05) {
+  const T = inc.decisions.length - 1, lost = LOST.test(inc.reason ?? "");
+  let w = 1, diverged: number | null = null;
+  const ratios: number[] = [];
+  for (let t = 0; t <= T; t++) {
+    const rec = inc.decisions[t].rec, a = rec.choice ?? "";
+    const pi = loggedPolicy(rec)[a] ?? 0, dist = candProbs[t] ?? null;
+    if (!dist) { ratios.push(1); continue; }
+    const pc = Number(dist[a] ?? 0), ratio = pc / Math.max(pi, 1e-6);
+    ratios.push(Math.round(Math.min(ratio, cap) * 1000) / 1000);
+    if (pc < eps && t < T) { diverged = rec.tick ?? t; w = 0; break; }
+    w = Math.min(cap, w * ratio);
+  }
+  return { loss_weight: Math.round((lost ? w : 0) * 1e4) / 1e4, lost, diverged_at: diverged, ratios, reached_end: diverged === null };
+}
+
+export function counterfactualSummary(parts: ReturnType<typeof counterfactual>[]) {
+  const n = parts.length;
+  if (!n) return { n: 0, candidate_loss: 0, incumbent_loss: 0, ess: 0, diverged: 0, walks_into: 0 };
+  const ws = parts.map((p) => p.loss_weight), sum = ws.reduce((a, b) => a + b, 0);
+  const ess = sum ? sum * sum / ws.reduce((a, b) => a + b * b, 0) : 0;
+  return { n, candidate_loss: Math.round(sum / n * 1000) / 1000, incumbent_loss: Math.round(parts.filter((p) => p.lost).length / n * 1000) / 1000, ess: Math.round(ess * 100) / 100,
+    diverged: parts.filter((p) => p.diverged_at !== null).length, walks_into: parts.filter((p) => p.lost && p.loss_weight >= 0.5).length };
+}
+
+/** Re-ask on every banked incident under `pack` and estimate its return there; `requeried` holds probabilities already obtained. */
+export async function counterfactualReturn(sensor: Sensor, pack: Pack, incidents: Incident[], log: (m: string) => void = () => {}, requeried: Record<number, (Record<string, number> | null)[]> = {}) {
+  const parts: any[] = []; let cost = 0;
+  for (let i = 0; i < incidents.length; i++) {
+    const inc = incidents[i];
+    if (!inc.decisions.length || (inc.decisions[inc.decisions.length - 1].rec as any).never_acted) continue;
+    let probs = requeried[i];
+    if (!probs) { const r = await reask(sensor, pack, inc.decisions, log); probs = r.probs; cost += r.cost_usd; }
+    parts.push({ tick: inc.tick, reason: inc.reason, ...counterfactual(inc, probs) });
+  }
+  return { ...counterfactualSummary(parts), per_incident: parts, cost_usd: Math.round(cost * 1e6) / 1e6 };
+}
+
+/** The decider re-asked on held-out ORDINARY ticks under the candidate: the fraction where it still makes the recorded choice. */
+export async function holdoutCheck(sensor: Sensor, pack: Pack, decisions: Decision[], log: (m: string) => void = () => {}) {
+  if (!decisions.length) return { n: 0, agreement: 1, flips: [] as { tick: number; was?: string; now: string | null }[], cost_usd: 0 };
+  const r = await reask(sensor, pack, decisions, log);
+  const asked = decisions.map((_, k) => k).filter((k) => r.choices[k] !== null);
+  const flips = asked.filter((k) => r.choices[k] !== decisions[k].rec.choice).map((k) => ({ tick: decisions[k].rec.tick, was: decisions[k].rec.choice, now: r.choices[k] }));
+  return { n: asked.length, agreement: asked.length ? Math.round((1 - flips.length / asked.length) * 1000) / 1000 : 1, flips, cost_usd: r.cost_usd };
+}
+
+/** The orders to A/B: as authored, reversed, alphabetical, and one shuffle. */
+export function actionOrders(pack: Pack, seed = 1): [string, ActionDef[]][] {
+  const acts = [...pack.actions], sh = [...acts];
+  let s = (seed || 1) >>> 0;
+  for (let i = sh.length - 1; i > 0; i--) { s = (Math.imul(s, 1103515245) + 12345) >>> 0; const j = (s >>> 8) % (i + 1); [sh[i], sh[j]] = [sh[j], sh[i]]; }
+  const cands: [string, ActionDef[]][] = [["as authored", acts], ["reversed", [...acts].reverse()], ["alphabetical", [...acts].sort((a, b) => a.id.localeCompare(b.id))], ["shuffled", sh]];
+  const seen = new Set<string>(), out: [string, ActionDef[]][] = [];
+  for (const [name, o] of cands) { const k = o.map((a) => a.id).join(","); if (!seen.has(k)) { seen.add(k); out.push([name, o]); } }
+  return out;
+}
+
+/** Option-order A/B on banked states: the same decider, the same frames, the actions listed in different orders. Best first. */
+export async function auditOrder(sensor: Sensor, pack: Pack, decisions: Decision[], log: (m: string) => void = () => {}, orders?: [string, ActionDef[]][], fatal: Set<number> = new Set()) {
+  const out: any[] = [];
+  for (const [name, acts] of orders ?? actionOrders(pack)) {
+    const r = await reask(sensor, pack, decisions, log, acts);
+    const asked = decisions.map((_, k) => k).filter((k) => r.raw[k] !== null);
+    if (!asked.length) continue;
+    const first = asked.filter((k) => r.raw[k] === acts[0].id).length / asked.length;
+    const unsafe = asked.filter((k) => r.excluded[k].has(r.raw[k]!)).length / asked.length;
+    const agree = asked.filter((k) => r.choices[k] === decisions[k].rec.choice).length / asked.length;
+    const ft = asked.filter((k) => fatal.has(decisions[k].rec.tick));
+    const rep = ft.length ? ft.filter((k) => r.raw[k] === decisions[k].rec.choice).length / ft.length : null;
+    out.push({ name, order: acts.map((a) => a.id), n: asked.length, first_pick: Math.round(first * 1000) / 1000, unsafe: Math.round(unsafe * 1000) / 1000, agreement: Math.round(agree * 1000) / 1000, fatal_repeated: rep === null ? null : Math.round(rep * 1000) / 1000, cost_usd: r.cost_usd });
+  }
+  out.sort((a, b) => a.unsafe - b.unsafe || (a.fatal_repeated ?? 0) - (b.fatal_repeated ?? 0) || b.agreement - a.agreement);
+  return out;
+}
+
+/** The A/B as a prompt section, when the order matters. */
+export function orderText(res: any[]): string {
+  if (res.length < 2) return "";
+  const k = Math.max(1, res[0].order.length), best = res[0], authored = res.find((o) => o.name === "as authored") ?? res[res.length - 1];
+  if (best === authored || best.unsafe >= authored.unsafe) return "";
+  return `ACTION ORDER (the decider re-asked on ${best.n} banked decisions with the actions listed in different orders; it picks a rule-excluded action ${Math.round(authored.unsafe * 100)}% of the time as authored [${authored.order.join(", ")}] and ${Math.round(best.unsafe * 100)}% listed as [${best.order.join(", ")}]; the first option listed is picked ${Math.round(authored.first_pick * 100)}% of the time, ${Math.round(100 / k)}% would be no position bias). You may reorder \`act\` to the better order; the ids and kinds stay the same.`;
+}
+
 /** The keys of the typed frame that separate the fatal tick from every healthy tick under this pack. */
 function separators(values: Values[]): string[] {
   if (values.length < 2) return [];
@@ -110,7 +257,7 @@ export function cellRule(candidate: Pack, incumbent: Pack): string {
 
 /** Does the candidate handle the incident better than the incumbent, by replay alone? `others` are earlier incidents:
  *  the candidate must not block their ordinary decisions either (a rule that fits one loss and breaks the rest is out). */
-export function verifyRevision(candidate: Pack, incumbent: Pack, inc: Incident, threshold = 0.7, maxOverblock = 0.34, others: Incident[] = []): Verdict {
+export function verifyRevision(candidate: Pack, incumbent: Pack, inc: Incident, threshold = 0.7, maxOverblock = 0.34, others: Incident[] = [], allowOrder = false): Verdict {
   if (!inc.decisions.length) return { ok: false, why: "no decisions to replay", guarded: false, distinguished: [], overblocked: 0, support: 0 };
   const narrow = cellRule(candidate, incumbent);
   if (narrow) return { ok: false, why: `rule on ${narrow} tests the exact cell of a located read; it would fire only there`, guarded: false, distinguished: [], overblocked: 0, support: 0 };
@@ -135,11 +282,18 @@ export function verifyRevision(candidate: Pack, incumbent: Pack, inc: Incident, 
   }
   const overblocked = total ? changed / total : 0;
   if (overblocked > maxOverblock) return { ok: false, why: `blocks ${changed} of ${total} ordinary decisions too`, guarded, distinguished, overblocked, support };
-  if (!guarded && !distinguished.length) return { ok: false, why: "the fatal decision is neither excluded by a rule nor visible in the typed frame", guarded, distinguished, overblocked, support };
+  if (!guarded && !distinguished.length) {
+    const ci = candidate.actions.map((a) => a.id), ii = incumbent.actions.map((a) => a.id);
+    if (allowOrder && ci.join(",") !== ii.join(",") && new Set(ci).size === new Set([...ci, ...ii]).size && ci.length === ii.length) {
+      // replay cannot see an order change (the recorded answers were given under the old order); only re-query can
+      return { ok: true, why: "the actions are listed in a new order; only re-asking the decider can judge it", guarded: false, distinguished: [], overblocked, support, order_changed: true };
+    }
+    return { ok: false, why: "the fatal decision is neither excluded by a rule nor visible in the typed frame", guarded, distinguished, overblocked, support };
+  }
   return { ok: true, why: guarded ? `rule now excludes ${fatalRec.choice} at the fatal tick` : `typed frame now separates the fatal tick: ${distinguished.slice(0, 4).join(", ")}`, guarded, distinguished, overblocked, support };
 }
 
-export const FEATURES = ["guarded", "distinguished", "overblocked", "support", "rules_added", "reads_added", "questions_added", "play_changed"] as const;
+export const FEATURES = ["guarded", "distinguished", "overblocked", "support", "rules_added", "reads_added", "questions_added", "play_changed", "requery_avoided", "requery_agreement", "cf_loss", "holdout_agreement", "order_changed"] as const;
 export type RevisionFeatures = Record<string, number>;
 export interface RevisionRecord { version: number; features: RevisionFeatures; why: string; kept: boolean | null; at: string }
 export interface Lesson { kind: "rule" | "read"; yaml: string; reason?: string; from?: string }
@@ -153,6 +307,8 @@ export function revisionFeatures(v: Verdict, candidate: Pack, incumbent: Pack): 
     reads_added: Object.keys(candidate.reads).filter((k) => !(k in incumbent.reads)).length,
     questions_added: Math.max(0, candidate.questions.length - incumbent.questions.length),
     play_changed: candidate.play.trim() !== incumbent.play.trim() ? 1 : 0,
+    requery_avoided: 0, requery_agreement: 0, cf_loss: 0, holdout_agreement: 1,      // filled in when the decider was re-asked
+    order_changed: candidate.actions.map((a) => a.id).join(",") !== incumbent.actions.map((a) => a.id).join(",") ? 1 : 0,
   };
 }
 
@@ -161,35 +317,60 @@ export function revisionFeatures(v: Verdict, candidate: Pack, incumbent: Pack): 
 export class Calibrator {
   rows: RevisionRecord[];
   w: number[] | null = null; mu: number[] = []; sd: number[] = [];
-  constructor(history: RevisionRecord[], public minLabelled = 6, public floor = 0.35) {
+  conformal: number | null = null;
+  nKept = 0;
+  /** The floor is conformal: every kept revision is scored by a model fitted without it, and the floor is the
+   *  ⌊α(n_kept+1)⌋-th smallest of those scores (capped at maxFloor), so a future revision as good as the kept ones is
+   *  refused with probability at most α; with too few kept revisions no veto is justified and the trial decides. */
+  constructor(history: RevisionRecord[], public minLabelled = 6, public fixedFloor = 0.35, public alpha: number | null = 0.25, public maxFloor = 0.9) {
     this.rows = history.filter((h) => h.kept !== null && h.features);
-    if (this.rows.length >= minLabelled && new Set(this.rows.map((h) => !!h.kept)).size === 2) this.fit();
+    this.nKept = this.rows.filter((h) => h.kept).length;
+    if (this.rows.length >= minLabelled && new Set(this.rows.map((h) => !!h.kept)).size === 2) {
+      [this.w, this.mu, this.sd] = Calibrator.fit(this.rows);
+      if (alpha !== null) this.conformal = this.conformalFloor();
+    }
   }
-  private fit() {
-    const X = this.rows.map((h) => FEATURES.map((f) => Number(h.features[f] ?? 0)));
-    const y = this.rows.map((h) => (h.kept ? 1 : 0));
+  static fit(rows: RevisionRecord[]): [number[], number[], number[]] {
+    const X = rows.map((h) => FEATURES.map((f) => Number(h.features[f] ?? 0)));
+    const y = rows.map((h) => (h.kept ? 1 : 0));
     const n = X.length, d = FEATURES.length;
-    this.mu = FEATURES.map((_, j) => X.reduce((a, r) => a + r[j], 0) / n);
-    this.sd = FEATURES.map((_, j) => Math.sqrt(X.reduce((a, r) => a + (r[j] - this.mu[j]) ** 2, 0) / n) + 1e-6);
-    const Z = X.map((r) => [...r.map((v, j) => (v - this.mu[j]) / this.sd[j]), 1]);
+    const mu = FEATURES.map((_, j) => X.reduce((a, r) => a + r[j], 0) / n);
+    const sd = FEATURES.map((_, j) => Math.sqrt(X.reduce((a, r) => a + (r[j] - mu[j]) ** 2, 0) / n) + 1e-6);
+    const Z = X.map((r) => [...r.map((v, j) => (v - mu[j]) / sd[j]), 1]);
     const w = new Array(d + 1).fill(0);
     for (let it = 0; it < 400; it++) {
       const g = new Array(d + 1).fill(0);
       for (let i = 0; i < n; i++) { const p = 1 / (1 + Math.exp(-Z[i].reduce((a, z, j) => a + z * w[j], 0))); for (let j = 0; j <= d; j++) g[j] += (p - y[i]) * Z[i][j] / n; }
       for (let j = 0; j <= d; j++) w[j] -= 0.5 * (g[j] + (j < d ? 0.01 * w[j] : 0));
     }
-    this.w = w;
+    return [w, mu, sd];
   }
+  static p(f: RevisionFeatures, w: number[], mu: number[], sd: number[]): number {
+    const z = [...FEATURES.map((k, j) => (Number(f[k] ?? 0) - mu[j]) / sd[j]), 1];
+    return 1 / (1 + Math.exp(-z.reduce((a, v, j) => a + v * w[j], 0)));
+  }
+  private conformalFloor(): number {
+    const kept = this.rows.map((h, i) => (h.kept ? i : -1)).filter((i) => i >= 0);
+    const k = Math.floor((this.alpha ?? 0) * (kept.length + 1));
+    if (k < 1) return 0;
+    const scores: number[] = [];
+    for (const i of kept) {
+      const rest = this.rows.filter((_, j) => j !== i);
+      if (new Set(rest.map((h) => !!h.kept)).size < 2) continue;
+      const [w, mu, sd] = Calibrator.fit(rest);
+      scores.push(Calibrator.p(this.rows[i].features, w, mu, sd));
+    }
+    return scores.length >= k ? Math.min(scores.sort((a, b) => a - b)[k - 1], this.maxFloor) : 0;
+  }
+  get floor() { return this.conformal ?? this.fixedFloor; }
   get active() { return this.w !== null; }
-  pKeep(f: RevisionFeatures): number | null {
-    if (!this.w) return null;
-    const z = [...FEATURES.map((k, j) => (Number(f[k] ?? 0) - this.mu[j]) / this.sd[j]), 1];
-    return 1 / (1 + Math.exp(-z.reduce((a, v, j) => a + v * this.w![j], 0)));
-  }
+  pKeep(f: RevisionFeatures): number | null { return this.w ? Calibrator.p(f, this.w, this.mu, this.sd) : null; }
   judge(f: RevisionFeatures): [boolean, string] {
     const p = this.pKeep(f);
     if (p === null) return [true, `calibrator idle (${this.rows.length} labelled revisions, needs ${this.minLabelled} with both outcomes)`];
-    return [p >= this.floor, `calibrated keep probability ${p.toFixed(2)} from ${this.rows.length} trials`];
+    const how = this.conformal !== null && this.floor > 0 ? `conformal floor ${this.floor.toFixed(2)} from ${this.nKept} kept, α=${this.alpha}`
+      : this.conformal !== null ? `no floor yet: ${this.nKept} kept revisions justify no veto at α=${this.alpha}` : `floor ${this.floor.toFixed(2)}`;
+    return [p >= this.floor, `calibrated keep probability ${p.toFixed(2)} from ${this.rows.length} trials; ${how}`];
   }
 }
 
@@ -238,7 +419,9 @@ export const REVISION_RULES =
   "(a rule excludes it from the values the reads had at that tick) or visible (a new read separates that tick from the ordinary ones), " +
   "and the ordinary decisions in the window must stay allowed. Every rule must only name reads that exist. A rule must " +
   "generalise: never test the exact cell of a located read (it would fire only there); test relations instead (around, " +
-  "<dir>_free, <dir>_space, runs, history). " +
+  "<dir>_free, <dir>_space, margin, runs, history). A `margin` read gives the room left after each move with the decision latency " +
+  "compensated (the game advances while the decider thinks), and a rule on it is the strongest guard against moving into a pocket. " +
+  "You may also reorder `act` (same ids, same kinds): the decider is sensitive to the order options are listed in. " +
   "Return the whole pack.yaml in one fenced yaml block.";
 
 export const PACK_SCHEMA_HINT =
@@ -246,6 +429,7 @@ export const PACK_SCHEMA_HINT =
   "- locate: { kind: locate, in: <matrix read id>, symbol: \"<char>\", many: true|false, row: N, col: N } → a cell \"c<col>r<row>\" (a list with many)\n" +
   "- runs: { kind: runs, in: <matrix read id>, symbol: \"<char>\", length: N, gravity: down } → the empty cells that would complete N in a line\n" +
   "- around: { kind: around, of: <locate read id>, in: <matrix read id>, free: [\"<char>\", …] } → { up, down, left, right, ahead, <dir>_free, <dir>_space }\n" +
+  "- margin: { kind: margin, of: <locate read id>, in: <matrix read id>, free: [\"<char>\", …], lag: 1, alpha: 0.5 } → { now, up, down, left, right (room reachable after that move, 0 = death), <dir>_ok, safe: [dirs], best }; numeric form { kind: margin, of: <number read id>, lower: 0, upper: 100 } → distance to the nearest bound\n" +
   "- history: put `history: 1` on a read → <id>_prev; on a locate also <id>_moving and <id>_reverse\n" +
   "- rule: { if: { read: <id or id.path>, equals|in|not|gte|lte: v }, exclude: [<action id or $read>] } or { if: { noul: <question id>, gte|lte: p }, set: { <action>__cell: <choice question id> } }; avoid/only: { <action>__cell: <read id> }\n" +
   "- question: { id, type: noul|choice|score, instructions, criteria: { <option>: <meaning> } }\n" +
@@ -253,7 +437,7 @@ export const PACK_SCHEMA_HINT =
 
 /** A revision: incident → chat model → candidate → replay verdict, with one repair round when the candidate does not
  *  load or the replay rejects it. Returns the accepted pack or null. */
-export async function improve(chat: Chat, pack: Pack, inc: Incident, episodes: Episode[] = [], log: (m: string) => void = () => {}, opts: { threshold?: number; maxTokens?: number; rounds?: number; others?: Incident[]; hints?: string; calibrator?: Calibrator } = {}): Promise<{ pack: Pack | null; verdict: Verdict | null; yaml: string | null; features: RevisionFeatures | null }> {
+export async function improve(chat: Chat, pack: Pack, inc: Incident, episodes: Episode[] = [], log: (m: string) => void = () => {}, opts: { threshold?: number; maxTokens?: number; rounds?: number; others?: Incident[]; hints?: string; calibrator?: Calibrator; sensor?: Sensor; minAgreement?: number; holdout?: Decision[]; minHoldout?: number } = {}): Promise<{ pack: Pack | null; verdict: Verdict | null; yaml: string | null; features: RevisionFeatures | null }> {
   const parts: any[] = [{ type: "text", text: REVISION_RULES + "\n\n" + PACK_SCHEMA_HINT + (opts.hints ? "\n\n" + opts.hints : "") + "\n\n" + incidentDigest(inc, episodes) + "\n\n```yaml\n" + dumpPack(pack.raw) + "\n```" }];
   const n = inc.decisions.length;
   for (const k of n > 1 ? [n - 2, n - 1] : [n - 1]) {
@@ -277,16 +461,41 @@ export async function improve(chat: Chat, pack: Pack, inc: Incident, episodes: E
         cand.raw.fingerprints = { ...(pack.raw.fingerprints ?? {}), ...(cand.raw.fingerprints ?? {}) };
         cand.raw.modes = cand.raw.modes ?? pack.raw.modes;
         cand = loadPack(dumpPack(cand.raw), pack.name);
-        v = verifyRevision(cand, pack, inc, threshold, 0.34, opts.others ?? []);
+        v = verifyRevision(cand, pack, inc, threshold, 0.34, opts.others ?? [], !!opts.sensor);
         lastVerdict = v;
         if (!v.ok) problem = `replaying the loss through it: ${v.why}`;
         else {
           feats = revisionFeatures(v, cand, pack);
-          if (opts.calibrator) { const [ok, why] = opts.calibrator.judge(feats); (v as any).calibration = why; if (!ok) problem = `revisions shaped like this were reverted on trial before (${why}); change the approach`; }
+          if (opts.sensor) {
+            // the decider itself, re-asked: on the incident, on every banked loss (the counterfactual return), on the held-out ordinary ticks
+            const rq = await requery(opts.sensor, cand, inc, log);
+            v.requery = { fatal_avoided: rq.fatal_avoided, agreement: Math.round(rq.agreement * 100) / 100, cost_usd: rq.cost_usd };
+            feats.requery_avoided = rq.fatal_avoided ? 1 : 0; feats.requery_agreement = rq.agreement;
+            if (!rq.fatal_avoided && !v.guarded) problem = `re-asked on the fatal state with this frame, the decider still picks ${inc.decisions[inc.decisions.length - 1].rec.choice}; a rule must guard it or the frame must show why`;
+            else if (rq.agreement < (opts.minAgreement ?? 0.5)) problem = `with this frame the decider changes its mind on ${Math.round((1 - rq.agreement) * 100)}% of the ordinary decisions too; the frame drifted`;
+            if (!problem) {
+              const all = [inc, ...(opts.others ?? []).filter((o) => o.decisions.length)];
+              const cf = await counterfactualReturn(opts.sensor, cand, all, log, { 0: rq.probs });
+              v.counterfactual = { n: cf.n, candidate_loss: cf.candidate_loss, incumbent_loss: cf.incumbent_loss, ess: cf.ess, diverged: cf.diverged, walks_into: cf.walks_into };
+              feats.cf_loss = cf.n ? cf.candidate_loss / Math.max(cf.incumbent_loss, 1e-6) : 0;
+              if (cf.n && cf.incumbent_loss > 0 && cf.candidate_loss >= cf.incumbent_loss) problem = `re-asked on all ${cf.n} banked losses, the decider would walk the same path into ${cf.walks_into} of them (estimated loss ${cf.candidate_loss.toFixed(2)} vs ${cf.incumbent_loss.toFixed(2)} logged)`;
+            }
+            if (!problem && opts.holdout?.length) {
+              const ho = await holdoutCheck(opts.sensor, cand, opts.holdout, log);
+              v.holdout = { n: ho.n, agreement: ho.agreement };
+              feats.holdout_agreement = ho.agreement;
+              if (ho.n && ho.agreement < (opts.minHoldout ?? 0.6)) problem = `on ${ho.n} held-out ordinary ticks (no loss near them) the decider changes its choice ${Math.round((1 - ho.agreement) * 100)}% of the time under this frame (${ho.flips.slice(0, 3).map((f) => `tick ${f.tick}: ${f.was} → ${f.now}`).join("; ")}); the revision fits the loss by drifting everywhere else`;
+            }
+          }
+          if (!problem && opts.calibrator) { const [ok, why] = opts.calibrator.judge(feats); v.calibration = why; if (!ok) problem = `revisions shaped like this were reverted on trial before (${why}); change the approach`; }
         }
       } catch (e) { problem = `it does not load: ${(e as Error).message.slice(0, 200)}`; }
     }
-    if (!problem && cand && v) { log(`learn: accepted (round ${round}): ${v.why}${(v as any).calibration ? " · " + (v as any).calibration : ""}`); return { pack: cand, verdict: v, yaml: y, features: feats }; }
+    if (!problem && cand && v) {
+      const extra = (v.counterfactual ? ` · counterfactual: leaves ${v.counterfactual.n - v.counterfactual.walks_into} of ${v.counterfactual.n} banked losses` : "") + (v.holdout ? ` · holdout agreement ${v.holdout.agreement.toFixed(2)} on ${v.holdout.n}` : "") + (v.calibration ? " · " + v.calibration : "");
+      log(`learn: accepted (round ${round}): ${v.why}${extra}`);
+      return { pack: cand, verdict: v, yaml: y, features: feats };
+    }
     log(`learn: round ${round} rejected: ${problem}`);
     messages = [...messages, { role: "assistant", content: text }, { role: "user", content: `That revision was rejected: ${problem}.\n${PACK_SCHEMA_HINT}\nReturn the whole corrected pack.yaml in one fenced yaml block.` }];
   }
@@ -311,6 +520,8 @@ export class Bank {
   }
   calibrator(): Calibrator { return new Calibrator(this.revisions); }
   addIncident(i: Incident) { this.incidents.push(i); if (this.incidents.length > this.maxIncidents) this.incidents.shift(); }
+  holdout: Decision[] = [];               // ordinary ticks sampled outside any fatal window: what a revision is re-asked on for drift
+  addHoldout(decisions: Decision[], max = 24) { this.holdout.push(...decisions); if (this.holdout.length > max) this.holdout.splice(0, this.holdout.length - max); }
   /** Episodes played with a given pack version. */
   ofVersion(v: number): Episode[] { return this.episodes.filter((e) => e.version === v); }
 }

@@ -256,3 +256,172 @@ def test_question_audit_and_relevance_and_predict_read():
     assert r["values"][1]["head_next"] == "c8r6" and r["values"][0].get("head_next") is None
     with pytest.raises(Exception):
         raw4 = yaml.safe_load(dump_pack(full().raw)); raw4["read"]["food_next"] = {"kind": "predict", "of": "food"}; load_pack_text(dump_pack(raw4), "x")
+
+
+def _stub(port):
+    import subprocess, sys, time, socket
+    srv = subprocess.Popen([sys.executable, os.path.join(ROOT, "test", "clm_stub.py"), str(port)], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    for _ in range(50):
+        try:
+            socket.create_connection(("127.0.0.1", port), timeout=0.2).close(); break
+        except OSError:
+            time.sleep(0.1)
+    return srv
+
+
+def test_counterfactual_return_truncates_at_divergence_and_counts_only_owned_losses():
+    from anygame.learn import counterfactual, counterfactual_summary, logged_policy
+    inc = snake_incident()
+    # the logged policy: Jev's probabilities over what the rules allowed (a '… → not X' line removes X)
+    r = dict(rec(5, "left", {"right": 0.5, "left": 0.3, "up": 0.2}, rules=["head_around.right=wall → not right", "→ left"]))
+    lp = logged_policy(r)
+    assert "right" not in lp and abs(lp["left"] - 0.6) < 1e-6 and abs(sum(lp.values()) - 1) < 1e-9
+    # a candidate identical to the incumbent walks the same path: it owns the loss with weight ~1
+    same = [{"right": 0.8, "up": 0.1, "down": 0.1}, {"right": 0.8, "up": 0.1, "down": 0.1}, {"right": 0.6, "up": 0.3, "down": 0.1}]
+    c1 = counterfactual(inc, same)
+    assert c1["lost"] and c1["diverged_at"] is None and abs(c1["loss_weight"] - 1.0) < 1e-6
+    # a candidate whose rules exclude the fatal move: ratio 0 at the fatal tick, loss not owned
+    guarded = same[:2] + [{"up": 0.75, "down": 0.25}]
+    c2 = counterfactual(inc, guarded)
+    assert c2["loss_weight"] == 0.0 and c2["reached_end"]
+    # a candidate that would have turned earlier: the logged path says nothing past that tick (truncation)
+    early = [{"right": 0.8, "up": 0.1, "down": 0.1}, {"up": 0.9, "right": 0.02, "down": 0.08}, {"right": 0.6, "up": 0.3, "down": 0.1}]
+    c3 = counterfactual(inc, early)
+    assert c3["diverged_at"] == 12 and c3["loss_weight"] == 0.0 and len(c3["ratios"]) == 2
+    # a candidate that likes the logged path more than the incumbent did is clipped at the cap
+    keen = [{"right": 1.0}, {"right": 1.0}, {"right": 1.0}]
+    assert counterfactual(inc, keen, cap=2.0)["loss_weight"] == 2.0
+    # a failed re-query is a neutral step, never a divergence
+    assert counterfactual(inc, [None, None, None])["loss_weight"] == 1.0
+    s = counterfactual_summary([c1, c2, c3])
+    assert s["n"] == 3 and s["incumbent_loss"] == 1.0 and abs(s["candidate_loss"] - 1 / 3) < 1e-3 and s["walks_into"] == 1 and s["diverged"] == 1 and s["ess"] == 1.0
+    # a won incident contributes no loss whatever the weights
+    won = incident_of(inc.decisions, "status is won", 21)
+    assert counterfactual(won, same)["loss_weight"] == 0.0 and not counterfactual(won, same)["lost"]
+
+
+def test_holdout_check_order_audit_and_the_gates_against_the_stub(tmp_path):
+    from anygame.sensors import open_sensor
+    from anygame.learn import holdout_check, audit_order, order_text, counterfactual_return, Bank, action_orders
+    srv = _stub(8792)
+    try:
+        s = open_sensor("clm:http://127.0.0.1:8792", timeout=2.0)
+        inc = snake_incident()
+        # the bank keeps held-out ordinary ticks with their frames, newest first, capped
+        bank = Bank(tmp_path / "bank")
+        bank.add_holdout(inc.decisions[:2], max_holdout=3)
+        bank.add_holdout(inc.decisions[:2], max_holdout=3)
+        ho = Bank(tmp_path / "bank").holdout()
+        assert len(ho) == 3 and ho[-1].rec["tick"] == 12 and ho[0].frame.shape == inc.decisions[0].frame.shape
+        # the stub picks the first option named in the state text; with the full pack the rules shape the final choice
+        h = holdout_check(s, full(), ho)
+        assert h["n"] == 3 and 0.0 <= h["agreement"] <= 1.0 and all({"tick", "was", "now"} <= set(f) for f in h["flips"])
+        assert holdout_check(s, full(), [])["n"] == 0
+        # the order A/B: four distinct orders, each measured on the same banked decisions, best (fewest unsafe picks) first
+        orders = action_orders(full())
+        assert len(orders) == 4 and {n for n, _ in orders} == {"as authored", "reversed", "alphabetical", "shuffled"}
+        res = audit_order(s, full(), inc.decisions, fatal={20})
+        assert len(res) == 4 and all(0 <= o["unsafe"] <= 1 and 0 <= o["first_pick"] <= 1 and o["n"] == 3 and o["fatal_repeated"] is not None for o in res)
+        assert res == sorted(res, key=lambda o: (o["unsafe"], o["fatal_repeated"] or 0.0, -o["agreement"]))
+        assert isinstance(order_text(res), str)
+        # the counterfactual over several banked incidents, the first one's re-query reused
+        inc2 = incident_of(inc.decisions, "status is dead", 40)
+        cf = counterfactual_return(s, full(), [inc, inc2], requeried={0: [{"right": 1.0}] * 3})
+        assert cf["n"] == 2 and cf["per_incident"][0]["loss_weight"] >= 1.0 and cf["per_incident"][1]["loss_weight"] == 0.0 and cf["cost_usd"] >= 0
+        # improve with the sensor: the gates are reported in the verdict, and a drifting revision is refused
+        class _Chat:
+            model = "fake"
+            def __init__(self, text): self.text = text
+            def complete(self, messages, **kw): return (self.text, 0.0)
+        log = []
+        # (the stub disagrees with the recorded choices by design, so both agreement floors are off for the accepting call)
+        out = improve(_Chat("```yaml\n" + dump_pack(full().raw) + "\n```"), stripped(), inc, log=log.append, sensor=s, rounds=1, holdout=ho, others=[inc2], min_agreement=0.0, min_holdout=0.0)
+        assert out["pack"] is not None and out["verdict"]["counterfactual"]["n"] == 2 and "holdout" in out["verdict"] and out["features"]["cf_loss"] < 1.0 and 0 <= out["features"]["holdout_agreement"] <= 1
+        out2 = improve(_Chat("```yaml\n" + dump_pack(full().raw) + "\n```"), stripped(), inc, log=log.append, sensor=s, rounds=1, holdout=ho, min_agreement=0.0, min_holdout=1.01)
+        assert out2["pack"] is None and any("held-out" in m for m in log)
+    finally:
+        srv.terminate()
+
+
+def test_order_only_revision_needs_a_sensor_and_the_feature_marks_it():
+    from anygame.learn import revision_features
+    inc = snake_incident()
+    base = full()
+    raw = yaml.safe_load(dump_pack(base.raw)); raw["act"] = list(reversed(raw["act"]))
+    reordered = load_pack_text(dump_pack(raw), "snake")
+    assert not verify_revision(reordered, base, inc)["ok"]
+    v = verify_revision(reordered, base, inc, allow_order=True)
+    assert v["ok"] and v.get("order_changed") and not v["guarded"]
+    assert revision_features(v, reordered, base)["order_changed"] == 1.0 and revision_features(v, base, base)["order_changed"] == 0.0
+
+
+def test_conformal_floor_vetoes_only_what_the_kept_revisions_justify():
+    from anygame.learn import Calibrator
+    good = lambda i: {"guarded": 1.0, "distinguished": 2.0, "overblocked": 0.0, "support": 1.0, "rules_added": 1.0, "reads_added": 1.0, "requery_avoided": 1.0, "requery_agreement": 0.9, "holdout_agreement": 0.9 - i * 0.01}
+    bad = lambda i: {"guarded": 0.0, "distinguished": 0.0, "overblocked": 0.3 + i * 0.02, "support": 0.8, "rules_added": 3.0, "reads_added": 0.0, "requery_avoided": 0.0, "requery_agreement": 0.5, "holdout_agreement": 0.5}
+    rows = [{"features": good(i), "kept": True} for i in range(5)] + [{"features": bad(i), "kept": False} for i in range(5)]
+    c = Calibrator(rows)
+    assert c.active and c.conformal is not None and c.n_kept == 5
+    # k = floor(0.25 * 6) = 1: the floor is the smallest leave-one-out score among the kept rows, so each kept row clears it
+    loo = [Calibrator._p(r["features"], *Calibrator._fit(rows[:i] + rows[i + 1:])) for i, r in enumerate(rows) if r["kept"]]
+    assert abs(c.floor - min(min(loo), 0.9)) < 1e-9 and 0 < c.floor < 1
+    ok, why = c.judge(good(9)); assert ok and "conformal floor" in why
+    ok, why = c.judge(bad(9)); assert not ok
+    # with two kept rows the floor is 0: nothing is vetoed, the trial decides
+    few = rows[:2] + rows[5:]
+    c2 = Calibrator(few)
+    assert c2.active and c2.floor == 0.0 and c2.judge(bad(9))[0] and "no floor yet" in c2.judge(bad(9))[1]
+    # alpha=None keeps the fixed floor
+    c3 = Calibrator(rows, alpha=None)
+    assert c3.conformal is None and c3.floor == 0.35
+
+
+def test_margin_read_and_the_per_tick_budget():
+    from anygame.perceive import margin_of, margin_num
+    from anygame.learn import replay
+    cells = {f"c{c}r{r}": "." for c in range(1, 7) for r in range(1, 7)}
+    # a pocket: the head at c2r1 with the body walling off the top-left corner except one cell
+    for k in ("c1r2", "c2r2", "c3r2", "c3r1"):
+        cells[k] = "s"
+    cells["c2r1"] = "H"
+    m = margin_of("c2r1", cells, {"free": [".", "F"], "lag": 0})
+    assert m["left"] == 1 and m["right"] == 0 and m["up"] == 0 and m["down"] == 0 and m["now"] == 1 and m["safe"] == ["left"] and m["best"] == "left"
+    # open board: with lag 1 the mover advances a cell while we think; the reachable room is the board minus the path
+    cells2 = {f"c{c}r{r}": "." for c in range(1, 7) for r in range(1, 7)}
+    cells2["c3r3"] = "H"
+    m2 = margin_of("c3r3", cells2, {"free": ["."], "lag": 1})
+    assert m2["now"] == 35 and m2["right"] == 34 and m2["right_ok"] and set(m2["safe"]) == {"up", "down", "left", "right"}
+    # with lag 2 going up runs into the wall on the way: death that way, not ok
+    m3 = margin_of("c3r3", cells2, {"free": ["."], "lag": 2})
+    assert m3["up"] == 0 and not m3["up_ok"] and m3["down"] > 0
+    assert margin_of(None, cells2, {}) is None and margin_num(7, {"lower": 0, "upper": 10}) == 3 and margin_num("x", {"lower": 0}) is None
+    # in a pack: a rule on the margin excludes the move into the pocket at replay time
+    raw = yaml.safe_load(dump_pack(full().raw))
+    raw["read"]["room"] = {"kind": "margin", "of": "head", "in": "cells", "free": [".", "F"], "lag": 1}
+    raw["rules"].append({"if": {"read": "room.right_ok", "equals": False}, "exclude": ["right"]})
+    pk = load_pack_text(dump_pack(raw), "snake")
+    r = replay(pk, snake_incident())
+    assert r["values"][2]["room"]["right"] == 0 and r["choices"][2] != "right"
+    with pytest.raises(Exception):
+        raw2 = yaml.safe_load(dump_pack(full().raw)); raw2["read"]["bad"] = {"kind": "margin", "of": "head"}; load_pack_text(dump_pack(raw2), "x")
+    # the budget: a sensor that reports 500 ms is skipped when perception + expected latency exceeds budget_ms, at most
+    # budget_skip_max ticks in a row, and the rules act on its last answers meanwhile
+    from anygame.loop import Agent
+    from anygame.pack import load_pack
+    from test_state import StateDevice
+    class Slow:
+        model = "slow"
+        def __init__(self): self.calls = 0
+        def ask(self, state, qs):
+            self.calls += 1
+            crit = list(qs["action"]["criteria"])
+            return {"answers": {"action": {"type": "choice", "choice": "right", "probabilities": {c: (0.9 if c == "right" else 0.1 / (len(crit) - 1)) for c in crit}}}, "latency_ms": 500, "input_tokens": 10, "cost_usd": 0.0}
+    pack = load_pack(os.path.join(ROOT, "packs", "snake-state"))
+    pack.raw["budget_ms"], pack.raw["budget_skip_max"] = 100, 2
+    states = [{"snake": [[3 + i, 6], [2 + i, 6], [1 + i, 6]], "food": [9, 2], "score": 0, "over": False} for i in range(6)]
+    slow = Slow()
+    ag = Agent(pack, StateDevice(states), slow)
+    recs = [ag.step() for _ in range(6)]
+    skipped = [r.get("skipped") == "budget" for r in recs]
+    assert slow.calls == 2 and skipped == [False, True, True, False, True, True] and ag.skipped_budget == 4
+    assert all(r["choice"] for r in recs) and all("rules on last answers" in r["sensor"] for r in recs if r.get("skipped"))

@@ -25,7 +25,7 @@ typed actions); it has hit a screen it cannot read. You see the frame. Answer wi
   "mode": { ... }           // only for "mode": how to play THIS screen, same keys as a pack (zones with rect_px, read with
                             // colour options, act, play, questions, rules, act_when, stop_when), as a JSON object.
                             // Read kinds that exist, nothing else: color {zone, options: {name: "#hex"}, max_dist, otherwise},
-                            // ocr {zone, parse: int}, locate {in: <matrix read>, symbol}, around {of, in, free}, runs {in, symbol},
+                            // ocr {zone, parse: int}, locate {in: <matrix read>, symbol}, around {of, in, free}, margin {of, in, free, lag}, runs {in, symbol},
                             // bar {zone, color}, templates. A read with any other kind is rejected and the mode is lost.
   "expect": { "<read id>": <value>, ... }   // for "mode": what the mode's reads must return on this exact frame
 }
