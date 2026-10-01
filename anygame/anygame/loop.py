@@ -614,10 +614,16 @@ class Agent:
         act = answers.get("action")
         if excluded and act and act.get("choice") in excluded:
             probs = {k: v for k, v in (act.get("probabilities") or {}).items() if k not in excluded}
+            allowed = [a.id for a in self.pack.actions if a.id not in excluded]
             if probs:
                 best = max(probs, key=probs.get)
                 answers["action"] = {**act, "choice": best}
                 applied.append(f"→ {best}")
+            elif len(allowed) == 1:
+                # the decider's answer (often a stale one, under budget_ms) never offered the one action the rules
+                # leave: take it, the rules have decided
+                answers["action"] = {**act, "choice": allowed[0]}
+                applied.append(f"→ {allowed[0]} (the only action the rules allow)")
             else:
                 # the rules are infeasible here: every action is excluded. The choice stands, and the record says so,
                 # because a trap that closed ticks ago is an incident for the reads that should have seen it coming

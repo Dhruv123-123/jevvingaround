@@ -5,8 +5,8 @@ site: chromedino.com
 # tick (budget_ms) and its last answers stand in between.
 screen: { orientation: portrait, size: [540, 560] }
 zones:
-  near:   { rect_px: [100, 242, 230, 262] }      # just ahead of the dino's nose, cactus height
-  mid:    { rect_px: [230, 242, 400, 262] }
+  near:   { rect_px: [100, 242, 165, 262] }      # just ahead of the dino's nose, cactus height (a jump started further out lands on it)
+  mid:    { rect_px: [165, 242, 400, 262] }
   far:    { rect_px: [400, 242, 540, 262] }
   banner: { rect_px: [170, 175, 375, 195] }      # "GAME OVER"
 read:
@@ -19,7 +19,7 @@ act:
   - { id: keep, kind: wait, description: "keep running" }
 tick_hz: 12
 budget_ms: 120
-budget_skip_max: 2
+budget_skip_max: 6         # ask Jev every 7th tick: a blocking call costs ~120 px of cactus travel
 stop_when: { read: status, equals: over }
 play: >
   The Chrome dinosaur runs right; cacti come from the right. `near` is the ground just ahead of the dino, `mid`

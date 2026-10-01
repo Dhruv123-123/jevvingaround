@@ -77,7 +77,7 @@ def snake_compare(values, truth):
         if hc not in ends:
             wrong["head"] = {"read": h, "page_ends": sorted(f"c{x + 1}r{y + 1}" for x, y in ends)}
     dead = values.get("status") == "dead"
-    if dead != (truth["state"] == "ended"):
+    if dead != ("ended" in truth["state"]):
         wrong["status"] = {"read": values.get("status"), "page": truth["state"]}
     return wrong
 
@@ -104,7 +104,7 @@ def dino_compare(values, truth):
         if values.get("status") != "over":
             wrong["status"] = {"read": values.get("status"), "page": "crashed"}
         return wrong
-    for k, (x0, x1) in {"near": (100, 230), "mid": (230, 400), "far": (400, 540)}.items():
+    for k, (x0, x1) in {"near": (100, 165), "mid": (165, 400), "far": (400, 540)}.items():
         if values.get(k) != band(x0, x1):
             wrong[k] = {"read": values.get(k), "page": band(x0, x1), "obs": truth.get("obs")}
     if values.get("status") == "over":
@@ -120,7 +120,7 @@ def dino_start(dev):
     page = dev._page
     page.wait_for_timeout(1500)
     page.keyboard.press("Space")
-    page.wait_for_function("Runner.instance_ && Runner.instance_.playing && Runner.instance_.tRex.yPos >= 90", timeout=15000)
+    page.wait_for_function("Runner.instance_ && Runner.instance_.activated && !Runner.instance_.crashed && Runner.instance_.tRex.yPos >= 90", timeout=15000)
 
 
 GAMES = {
