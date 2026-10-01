@@ -1,7 +1,7 @@
 // The side panel is the whole runtime: it captures the game tab, runs the pack, calls the sensor, sends input,
 // and shows the decision panel. Packs are bundled or authored here and cached in extension storage.
 import yaml from "js-yaml";
-import { Agent, BUNDLED_PACKS, loadPack, dumpPack, openSensor, Chat, VLMFallback, explore, digest as demoDigest, fingerprint, fpDistance, fpFromBase64, type Frame, outcome, Calibrator, hintsText, lessonsOf, type RevisionRecord, type Lesson, betterEpisode, medianEpisode, incidentOf, improve, LOST, Bank, chooseOrder, tasksText, type Decision, type Episode, type Incident, type Demo, type DemoEvent, type Keys, type Pack, type Rec, type Sensor } from "../core/index.js";
+import { Agent, BUNDLED_PACKS, loadPack, dumpPack, openSensor, Chat, VLMFallback, explore, digest as demoDigest, fingerprint, fpDistance, fpFromBase64, type Frame, outcome, Calibrator, hintsText, lessonsOf, type RevisionRecord, type Lesson, betterEpisode, medianEpisode, incidentOf, improve, LOST, Bank, chooseOrder, tasksText, proposeTasks, rateEpisode, calibrateRater, type Rating, type TaskDef, type Decision, type Episode, type Incident, type Demo, type DemoEvent, type Keys, type Pack, type Rec, type Sensor } from "../core/index.js";
 import { author, checkPack, extractYaml, withFingerprints, frameToDataUrl } from "../core/author.js";
 import { TabDevice, type Region } from "../device/tab.js";
 
@@ -9,8 +9,8 @@ const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getEleme
 const log = (m: string) => { const el = $("log"); el.textContent = (el.textContent + "\n" + m).split("\n").slice(-200).join("\n"); el.scrollTop = el.scrollHeight; };
 
 interface StoredIncident { reason: string; tick: number; at: string; recs: Rec[]; frames: string[] }
-interface StoredBank { episodes: Episode[]; incidents: StoredIncident[]; version: number; revisions?: RevisionRecord[]; lessons?: Lesson[] }
-interface Store { keys?: Keys; sensor?: string; regions?: Record<string, Region>; states?: Record<string, string>; packs?: Record<string, string>; packFor?: Record<string, string>; bank?: Record<string, StoredBank> }
+interface StoredBank { episodes: (Episode & { rating?: Rating })[]; incidents: StoredIncident[]; version: number; revisions?: RevisionRecord[]; lessons?: Lesson[] }
+interface Store { keys?: Keys; sensor?: string; regions?: Record<string, Region>; states?: Record<string, string>; packs?: Record<string, string>; packFor?: Record<string, string>; bank?: Record<string, StoredBank>; practice?: { setTasks: boolean; k: number; rate: boolean } }
 async function load(): Promise<Store> { return (await chrome.storage.local.get(null)) as Store; }
 async function save(patch: Partial<Store>) { await chrome.storage.local.set(patch); }
 
@@ -23,6 +23,8 @@ let stopping = false;
 let demo: Demo | null = null;               // the last recording or exploration, for the author
 let recording: { t0: number; events: DemoEvent[]; frames: Demo["frames"]; timer: number; dev: TabDevice } | null = null;
 let currentPackName = "";
+let lastSeen: { rec: Rec; frame: Frame } | null = null;   // the newest main-mode tick: what the task setter looks at
+let proposing = false;
 
 async function currentTab(): Promise<chrome.tabs.Tab> {
   if (tabId !== null) return chrome.tabs.get(tabId);
@@ -180,6 +182,40 @@ async function makeDevice(store: Store, pack: Pack | null, name_is_authored = fa
   return d;
 }
 
+/** The pack's tasks and their record, shown in the practice box. */
+function showTasks(tasks: TaskDef[], results: Parameters<typeof tasksText>[1]) {
+  $("tasklist").textContent = tasks.length ? tasksText(tasks, results) + " · limits " + tasks.map((t) => `${t.id} ${t.limit_ticks}`).join(", ") : "this pack has no tasks yet: turn the setter on, or press propose while playing";
+}
+
+async function savePractice() {
+  await save({ practice: { setTasks: ($("settasks") as HTMLInputElement).checked, k: Number($<HTMLSelectElement>("settasksk").value), rate: ($("rate") as HTMLInputElement).checked } });
+}
+
+/** The task setter: the chat model proposes up to k tasks from the newest main-mode screen; the bounded ones join the
+ *  pack (and are saved with it), the setter's order is redone so the weakest categories come first. */
+async function setTasks(why: string) {
+  if (!agent || !lastSeen || proposing) { if (!agent) log("tasks: start playing first: the setter needs a screen to look at"); return; }
+  const store = await load();
+  let chat: Chat;
+  try { chat = new Chat(store.keys ?? {}); } catch (e) { log(`tasks: the setter needs a chat model: ${(e as Error).message} (open "keys and models")`); return; }
+  proposing = true; $<HTMLButtonElement>("proposenow").disabled = true; $("setterinfo").textContent = `asking the setter (${why})…`;
+  const ag = agent, seen = lastSeen;
+  try {
+    const k = Number($<HTMLSelectElement>("settasksk").value) || 3;
+    const fresh = await proposeTasks(chat, ag.base, seen.frame, seen.rec.screen, holdoutNow?.taskResults ?? [], k, log, ($("game") as HTMLInputElement).value.trim());
+    if (!fresh.length) { $("setterinfo").textContent = "the setter proposed nothing usable this time (see the log)"; return; }
+    ag.base.tasks.push(...fresh);
+    ag.base.raw.tasks = [...(ag.base.raw.tasks ?? []), ...fresh];
+    ag.taskOrder = chooseOrder(ag.base.tasks, holdoutNow?.taskResults ?? []);
+    log("tasks: set " + fresh.map((t) => `${t.id} [${t.category}, ${t.limit_ticks} ticks]: ${t.instruction.slice(0, 60)}`).join("; "));
+    $("setterinfo").textContent = `added ${fresh.map((t) => t.id).join(", ")}`;
+    showTasks(ag.base.tasks, holdoutNow?.taskResults ?? []);
+    await ag.onPackChange?.(dumpPack(ag.base.raw), `learned ${fresh.length} task(s) from the setter`);
+  } catch (e) { log(`tasks: ${(e as Error).message.slice(0, 140)}`); }
+  finally { proposing = false; $<HTMLButtonElement>("proposenow").disabled = !agent; }
+}
+let holdoutNow: Bank | null = null;      // the running play's task record, for the setter button
+
 async function play() {
   const store = await load();
   const name = $<HTMLSelectElement>("pack").value;
@@ -218,17 +254,23 @@ async function play() {
   const readKinds = new Set(Object.values(ag.base.reads).map((r) => String(r.kind)));
   const pastIncidents: Incident[] = [];                                 // this session's incidents with frames: a revision must not break them
   const holdout = new Bank();   // in memory: held-out ordinary ticks with their frames, and the task record, for this run
+  holdoutNow = holdout;
+  showTasks(ag.base.tasks, holdout.taskResults);
   const successes: Incident[] = [];   // spans that completed a task or won: a revision must keep their choices allowed
   $("playtext").textContent = pack.play; ($("playtext") as HTMLTextAreaElement).value = pack.play;
   ($("rulestext") as HTMLTextAreaElement).value = pack.rules.length ? yaml.dump(pack.rules) : "";
-  $<HTMLButtonElement>("play").disabled = true; $<HTMLButtonElement>("stop").disabled = false; $<HTMLButtonElement>("author").disabled = true;
+  $<HTMLButtonElement>("play").disabled = true; $<HTMLButtonElement>("stop").disabled = false; $<HTMLButtonElement>("author").disabled = true; $<HTMLButtonElement>("proposenow").disabled = false;
   stopping = false;
   log(`playing ${pack.name} on tab ${device.tabId} with ${sensorSpec} · frame ${device.size().join("x")}${learning ? ` · learning (pack v${version}, ${bank.episodes.length} episodes banked)` : ""}`);
   const persistBank = async () => { const s = await load(); await save({ bank: { ...(s.bank ?? {}), [packKey]: bank } }); };
   const scoreRead = typeof ag.base.raw.score_read === "string" ? ag.base.raw.score_read : (ag.base.reads.score ? "score" : undefined);
   // ---- the episode loop: play until the game ends, bank it, learn from a loss, restart, keep what plays better
-  for (let episodeN = bank.episodes.length + 1; ; episodeN++) {
+  const firstEpisode = bank.episodes.length + 1;
+  for (let episodeN = firstEpisode; ; episodeN++) {
     const records: Rec[] = [];
+    let kept: [number, Frame][] = [];      // frames spread across the episode, for the rater
+    // the setter runs on the first episode and every other one after, once the screen has settled a few ticks
+    let setterDue = ($("settasks") as HTMLInputElement).checked && (episodeN === firstEpisode || episodeN % 2 === 1);
     const decisions: Decision[] = [];
     const sample: Decision[] = []; let seen = 0; let rs = (episodeN * 2654435761) >>> 0;   // a reservoir of ordinary ticks for the held-out check
     // tasks: the pack's practice goals; a completion banks the span as a success incident every revision must keep allowed
@@ -236,11 +278,19 @@ async function play() {
     ag.onTask = (ev) => {
       holdout.addTaskResult(ev, version, episodeN);
       log(`task ${ev.id} [${ev.category}]: ${ev.outcome} after ${ev.ticks} ticks`);
+      showTasks(ag.base.tasks, holdout.taskResults);
       if (ev.outcome === "done" && decisions.length) { successes.push({ reason: `done: ${ev.id}`, tick: ev.tick, decisions: decisions.slice(-12), at: new Date().toISOString(), kind: "success" }); if (successes.length > 4) successes.shift(); }
     };
     ag.onRecord = (rec, frame) => {
       showRec(rec);
+      $("taskline").textContent = ag.task ? `task: ${ag.task.instruction} (${ag.tick - ag.taskStarted}/${ag.task.limit_ticks} ticks)` : ag.base.tasks.length ? "task: none available on this screen" : "";
       records.push(rec); if (records.length > 2000) records.shift();
+      if ((rec.mode ?? "main") === "main") lastSeen = { rec, frame };
+      if (setterDue && rec.tick >= 3 && (rec.mode ?? "main") === "main") { setterDue = false; setTasks(`episode ${episodeN}`).catch((e) => log(String(e))); }
+      if (($("rate") as HTMLInputElement).checked) {
+        kept.push([rec.tick, frame]);
+        if (kept.length > 24) kept = kept.filter((_, i) => i === 0 || i === kept.length - 1 || i % 2 === 0);   // thin the middle, keep the ends
+      }
       if (rec.choice && rec.choice !== "fallback") {
         const d = { rec, frame };
         decisions.push(d); if (decisions.length > 12) decisions.shift();
@@ -252,7 +302,20 @@ async function play() {
     let last: Rec | null = null;
     try { last = await ag.run(() => stopping); }
     catch (e) { log(`error: ${(e as Error).message}`); break; }
-    const ep = outcome(records, episodeN, version, scoreRead);
+    const ep: Episode & { rating?: Rating } = outcome(records, episodeN, version, scoreRead);
+    if (($("rate") as HTMLInputElement).checked && kept.length && !stopping) {
+      // the rater: completion and directedness 0..100 from sampled frames; the score where the pack has none
+      try {
+        const tsk = ag.taskLog.map((e) => e.id).join(", ") || (ag.task?.instruction ?? "");
+        const rating = await rateEpisode(new Chat(store.keys ?? {}), kept, records, ag.goal, tsk, ep.reason);
+        ep.rating = rating;
+        if (ep.score === null && rating.completion !== null) ep.score = rating.completion;
+        log(`rater: completion ${rating.completion}, directedness ${rating.directedness}: ${rating.note}`);
+        const cal = calibrateRater([...bank.episodes, ep]);
+        $("rating").textContent = `rater, episode ${episodeN}: completion ${rating.completion ?? "–"}, directedness ${rating.directedness ?? "–"} · ${rating.note}` +
+          (cal.pairs ? ` · agrees with the trial order on ${cal.agreement} of ${cal.pairs} pairs` : ` · ${cal.rated} rated, no comparable pairs yet`);
+      } catch (e) { log(`rater: ${(e as Error).message.slice(0, 120)} (set a chat model in "keys and models")`); }
+    }
     log(`episode ${episodeN}: ${last.action}${last.reason ? " · " + last.reason : ""} after ${ag.tick} ticks, $${ag.totalCost.toFixed(4)}${ep.score !== null ? `, score ${ep.score}` : ""}`);
     if (stopping || !learning) break;
     bank.episodes.push(ep); if (bank.episodes.length > 60) bank.episodes.shift();
@@ -383,7 +446,8 @@ async function go() {
 async function stop() {
   stopping = true;
   await device?.close().catch(() => {});
-  device = null; agent = null;
+  device = null; agent = null; lastSeen = null; holdoutNow = null;
+  $<HTMLButtonElement>("proposenow").disabled = true;
   $<HTMLButtonElement>("play").disabled = false; $<HTMLButtonElement>("stop").disabled = true; $<HTMLButtonElement>("author").disabled = false;
 }
 
@@ -438,6 +502,11 @@ async function main() {
   $("regioninfo").textContent = region ? `${region.w}×${region.h} at (${region.x},${region.y})` : "whole page";
   ($("stateexpr") as HTMLInputElement).value = store.states?.[originOf(tabUrl)] ?? "";
   if (store.sensor) $<HTMLSelectElement>("sensor").value = store.sensor;
+  if (store.practice) { ($("settasks") as HTMLInputElement).checked = store.practice.setTasks; $<HTMLSelectElement>("settasksk").value = String(store.practice.k); ($("rate") as HTMLInputElement).checked = store.practice.rate; }
+  for (const id of ["settasks", "settasksk", "rate"]) $(id).onchange = () => savePractice().catch((e) => log(String(e)));
+  $("proposenow").onclick = () => setTasks("asked from the panel").catch((e) => log(String(e)));
+  const packTasks = async () => { try { const t = packText(await load(), $<HTMLSelectElement>("pack").value); if (t) showTasks(loadPack(t, "pack").tasks, []); } catch { /* shown when played */ } };
+  $<HTMLSelectElement>("pack").onchange = packTasks; packTasks();
   for (const k of ["openrouter", "llmBase", "llmKey", "llmModel", "clmBase", "clmKey"] as const) ($(`k_${k}`) as HTMLInputElement).value = (store.keys as any)?.[k] ?? "";
   $("savekeys").onclick = async () => {
     const keys: Keys = {};
