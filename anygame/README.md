@@ -243,8 +243,8 @@ loop never notices because score is not the reward.
 
 Jev always goes to OpenRouter (`OPENROUTER_API_KEY`) or `JEV_BASE_URL`. Every other model call, the authoring
 model and any `llm:` sensor, goes wherever `ANYGAME_LLM_BASE` points. There is no default: with nothing set,
-authoring, revision and `llm:` sensors stop with a message naming these variables. Claude Sonnet through
-OpenRouter is refused.
+authoring, revision and `llm:` sensors stop with a message naming these variables. OpenRouter is for Jev
+only: a chat model pointed at it is refused, whatever the model.
 
 ```bash
 # Azure OpenAI / Foundry v1 endpoint: paste the portal's URL as is, the model is your deployment name

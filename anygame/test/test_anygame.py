@@ -371,7 +371,7 @@ def _chat_env(monkeypatch):
     monkeypatch.setenv("ANYGAME_LLM_MODEL", "stub-model")
 
 
-def test_chat_without_config_stops_and_never_falls_back_to_sonnet(monkeypatch):
+def test_chat_without_config_stops_and_openrouter_is_jev_only(monkeypatch):
     import pytest
     from anygame.chat import Chat
     for k in ("ANYGAME_LLM_BASE", "ANYGAME_LLM_KEY", "ANYGAME_LLM_MODEL", "ANYGAME_LLM_API", "AZURE_OPENAI_API_KEY", "ANYGAME_AUTHOR_MODEL"):
@@ -382,9 +382,15 @@ def test_chat_without_config_stops_and_never_falls_back_to_sonnet(monkeypatch):
     assert "ANYGAME_LLM_BASE" in str(e.value) and "ANYGAME_LLM_MODEL" in str(e.value)
     with pytest.raises(SystemExit):
         Chat(base_url="https://openrouter.ai/api/v1")        # no model named: no default model either
-    with pytest.raises(SystemExit) as e:
-        Chat(model="anthropic/claude-sonnet-5", base_url="https://openrouter.ai/api/v1")
-    assert "refusing" in str(e.value)
+    for m in ("anthropic/claude-sonnet-5", "openai/gpt-5.6-luna"):    # OpenRouter is for Jev only, whatever the model
+        with pytest.raises(SystemExit) as e:
+            Chat(model=m, base_url="https://openrouter.ai/api/v1", api_key="k")
+        assert "Jev only" in str(e.value)
+    from anygame.jev import Jev
+    monkeypatch.delenv("JEV_API_KEY", raising=False); monkeypatch.delenv("JEV_BASE_URL", raising=False)
+    monkeypatch.setenv("JEV_MODEL", "anthropic/claude-sonnet-5")    # nor can JEV_MODEL send another model there
+    with pytest.raises(RuntimeError):
+        Jev()
 
 
 def test_chat_routes_azure_and_openai_compatible(monkeypatch):
@@ -396,8 +402,8 @@ def test_chat_routes_azure_and_openai_compatible(monkeypatch):
     assert v1.url() == "https://myres.openai.azure.com/openai/v1/chat/completions"
     fo = Chat(model="Llama-3.3-70B", base_url="https://myres.services.ai.azure.com")
     assert fo.api == "azure-models" and "/models/chat/completions" in fo.url()
-    orr = Chat(model="openai/gpt-5.6-luna", base_url="https://openrouter.ai/api/v1")
-    assert orr.api == "openai" and orr.headers()["authorization"] == "Bearer k"
+    oai = Chat(model="m", base_url="https://example.com/v1")
+    assert oai.api == "openai" and oai.headers()["authorization"] == "Bearer k"
     fv1 = Chat(model="gpt-5.6-luna", base_url="https://myres.services.ai.azure.com/openai/v1/responses")   # the portal's full URL
     assert fv1.api == "azure" and fv1.url() == "https://myres.services.ai.azure.com/openai/v1/chat/completions" and fv1.headers()["api-key"] == "k"
 

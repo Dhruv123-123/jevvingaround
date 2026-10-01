@@ -19,6 +19,8 @@ class Jev:
         if not key:
             raise RuntimeError("set OPENROUTER_API_KEY (or JEV_API_KEY)")
         self.key, self.base, self.model = key, (base or "https://api.typesafe.ai").rstrip("/"), mdl or "jev-latest"
+        if "openrouter" in self.base.lower() and not self.model.startswith("typesafe/jev"):
+            raise RuntimeError(f"OpenRouter is for Jev only, not {self.model}")
         self.timeout = timeout if timeout is not None else float(os.environ.get("ANYGAME_JEV_TIMEOUT", "4"))
         self.s = requests.Session()
 

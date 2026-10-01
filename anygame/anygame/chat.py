@@ -1,10 +1,10 @@
 """One chat-completion client for every model that is not Jev: the authoring model and the `llm:` sensor.
 
 Jev always goes to OpenRouter (or JEV_BASE_URL). Everything else goes wherever ANYGAME_LLM_BASE points. There is
-no default: with nothing set, Chat() stops and names the variables, it never picks a model on its own. Claude
-Sonnet through OpenRouter is refused outright.
+no default: with nothing set, Chat() stops and names the variables, it never picks a model on its own.
+OpenRouter is for Jev only: a chat model pointed at OpenRouter is refused, whatever the model.
 
-  Any OpenAI-compatible server:
+  Any other OpenAI-compatible server:
     ANYGAME_LLM_BASE=https://…/v1   ANYGAME_LLM_KEY=…   ANYGAME_LLM_MODEL=…
   Azure OpenAI (model = your deployment name):
     ANYGAME_LLM_API=azure  ANYGAME_LLM_BASE=https://<resource>.openai.azure.com  ANYGAME_LLM_KEY=<api key>
@@ -24,9 +24,9 @@ NOT_CONFIGURED = ("no chat model configured: set ANYGAME_LLM_BASE, ANYGAME_LLM_K
                   "(and ANYGAME_LLM_API for Azure; see anygame/chat.py), or pass --model with a base and key")
 
 
-def forbidden(base: str, model: str) -> bool:
-    """Claude Sonnet through OpenRouter is never used, by the project's rule."""
-    return "openrouter" in base.lower() and "sonnet" in model.lower()
+def forbidden(base: str) -> bool:
+    """OpenRouter is for Jev only, by the project's rule: no chat model goes through it."""
+    return "openrouter" in base.lower()
 
 
 class Chat:
@@ -42,9 +42,9 @@ class Chat:
         self.model = model or os.environ.get("ANYGAME_LLM_MODEL")
         if not self.model:
             raise SystemExit("set ANYGAME_LLM_MODEL (on Azure: the deployment name) or pass --model")
-        if forbidden(self.base, self.model):
-            raise SystemExit(f"refusing {self.model} through OpenRouter: Claude Sonnet on OpenRouter is not used. Point ANYGAME_LLM_BASE / ANYGAME_LLM_MODEL at another chat model.")
-        self.key = api_key or os.environ.get("ANYGAME_LLM_KEY") or os.environ.get("AZURE_OPENAI_API_KEY") or (os.environ.get("OPENROUTER_API_KEY") if "openrouter" in self.base else None)
+        if forbidden(self.base):
+            raise SystemExit("OpenRouter is for Jev only: point ANYGAME_LLM_BASE at another endpoint (e.g. Azure) for the chat model")
+        self.key = api_key or os.environ.get("ANYGAME_LLM_KEY") or os.environ.get("AZURE_OPENAI_API_KEY")
         if not self.key:
             raise SystemExit(f"no key for {self.base}: set ANYGAME_LLM_KEY")
         self.version = os.environ.get("ANYGAME_LLM_API_VERSION", "2024-10-21")
@@ -67,7 +67,7 @@ class Chat:
         return {"authorization": f"Bearer {self.key}", "content-type": "application/json"}
 
     def complete(self, messages: list[dict[str, Any]], max_tokens: int = 1000, temperature: float = 0.0) -> tuple[str, dict[str, Any], int]:
-        """Returns (text, usage, latency_ms). Adds to self.cost when the server reports a cost (OpenRouter does)."""
+        """Returns (text, usage, latency_ms). Adds to self.cost when the server reports a cost."""
         body: dict[str, Any] = {"messages": messages, "model": self.model}
         # newer OpenAI-family models take max_completion_tokens and only the default temperature
         strict = self.api.startswith("azure") or self.model.split("/")[-1].startswith(("gpt-5", "o1", "o3", "o4"))
@@ -76,8 +76,6 @@ class Chat:
         else:
             body["max_tokens"] = max_tokens
             body["temperature"] = temperature
-        if "openrouter" in self.base:
-            body["usage"] = {"include": True}
         t0 = time.perf_counter()
         for attempt in range(4):
             try:
