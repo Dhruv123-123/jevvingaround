@@ -44,10 +44,12 @@ def cmd_play(a):
     from .loop import Agent
     from .pack import load_pack
     pack = load_pack(find_pack(a.pack))
-    device = open_device(a.device, pack.size)
+    device = open_device(("coach://" + a.device) if getattr(a, "coach", False) else a.device, pack.size)
     from .sensors import open_sensor
     jev = open_sensor(a.sensor, timeout=float(pack.raw.get("sensor_timeout_s", os.environ.get("ANYGAME_JEV_TIMEOUT", "4"))))
     hud = Hud(a.hud) if a.hud else None
+    if getattr(a, "coach", False):
+        print("coach mode: every move is shown on the HUD as a suggestion and never performed", file=sys.stderr)
     if hud:
         print(f"HUD on http://localhost:{a.hud}", file=sys.stderr)
     agent = Agent(pack, device, jev, hud, log_path=a.log, max_ticks=a.max_ticks, record_dir=a.record)
@@ -810,7 +812,8 @@ def main(argv=None):
     pl.add_argument("--goal", default=None, help="what the game is about, for the fallback")
     pl.add_argument("--hud", type=int, default=int(os.environ.get("HUD_PORT", "8080"))); pl.add_argument("--no-hud", dest="hud", action="store_const", const=0); pl.add_argument("--log", default="anygame.log.jsonl")
     pl.add_argument("--max-ticks", type=int); pl.add_argument("--hold", action="store_true", help="keep the HUD up after the game ends")
-    pl.add_argument("--record", help="save annotated frames here (then `anygame render`)"); pl.set_defaults(fn=cmd_play)
+    pl.add_argument("--record", help="save annotated frames here (then `anygame render`)")
+    pl.add_argument("--coach", action="store_true", help="suggest every move on the HUD and never perform it (for games whose anti-cheat forbids injected input)"); pl.set_defaults(fn=cmd_play)
     ln = sub.add_parser("learn", help="play episode after episode; a loss becomes a revision that must replay better; keep what plays better")
     ln.add_argument("pack"); ln.add_argument("--device", default=os.environ.get("DEVICE", "adb")); ln.add_argument("--sensor", default="jev")
     ln.add_argument("--episodes", type=int, default=5, help="0 = forever"); ln.add_argument("--max-ticks", type=int, default=None); ln.add_argument("--goal", default=None)

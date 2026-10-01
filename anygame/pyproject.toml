@@ -11,7 +11,8 @@ dependencies = [
 ]
 [project.optional-dependencies]
 render = ["imageio-ffmpeg>=0.5"]
-desktop = ["mss>=9", "pynput>=1.7"]          # screen://: this computer's screen and input
+desktop = ["mss>=9", "pynput>=1.7", "python-xlib>=0.33; sys_platform == 'linux'", "evdev>=1.6; sys_platform == 'linux'"]   # screen://, window://, pad://, nested://
+pad-windows = ["vgamepad>=0.1"]               # pad://?backend=vigem (needs the ViGEmBus driver)
 stream = ["websocket-client>=1.6", "websockets>=12"]   # stream://ws://…: a game that publishes its state; websockets serves games/snake_ws.py
 emulator = ["pyboy>=2.0"]
 vocab = ["ultralytics"]

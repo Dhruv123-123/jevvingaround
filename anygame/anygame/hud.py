@@ -102,6 +102,11 @@ class Hud:
             cv2.rectangle(img, (x0, y0), (x1, y1), (80, 220, 120), 2)
             cv2.putText(img, f"{d['label']} {d.get('conf', 0):.2f}", (x0, max(12, y0 - 4)), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (80, 220, 120), 1)
         label = f"{rec.get('action', '')}   jev {rec.get('jev_ms', '-')} ms   ${rec.get('total_cost_usd', 0):.4f}"
+        g = rec.get("guard") or {}
+        if g.get("paused"):
+            label = "PAUSED: a person is using the input   " + label
+        elif str(rec.get("action", "")).startswith("suggest:"):
+            label = "SUGGESTED (coach mode)   " + label
         cv2.rectangle(img, (0, h - 30), (w, h), (0, 0, 0), -1)
         cv2.putText(img, label, (10, h - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
         ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 80])

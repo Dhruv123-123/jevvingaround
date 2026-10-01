@@ -421,6 +421,14 @@ class Agent:
             self._tasks_tick(values, rec)
             if self.task is not None:
                 state["task"] = self.task["instruction"]
+        if getattr(self.device, "paused", False):
+            # a person is using the keyboard or mouse: read, show, do not act
+            rec["action"] = "wait"
+            rec["reason"] = "paused: a person is using the input"
+            rec["guard"] = self.device.guard_status() if hasattr(self.device, "guard_status") else {"paused": True}
+            self.last_hash = h
+            self._emit(rec, frame, dets, None)
+            return rec
         # the hybrid: a screen the pack cannot read goes to the VLM, which acts now and may define a mode
         if not supported and not known:
             self.miss_ticks += 1
@@ -541,6 +549,11 @@ class Agent:
         except Exception:
             action = Action("wait", "wait")
         done = self.act(action, answers)
+        if getattr(self.device, "coach", False):
+            done = "suggest: " + done            # coach mode: shown, never performed
+        g = self.device.guard_status() if hasattr(self.device, "guard_status") else None
+        if g and (g.get("dropped") or g.get("human_events")):
+            rec["guard"] = g
         self.total_cost += res["cost_usd"]
         rec.update({"action": done, "choice": choice, "rules": applied, "acted_after_ms": round((time.perf_counter() - t0) * 1000), "action_probs": answers.get("action", {}).get("probabilities"),
                     "nouls": {k: round(v["noul"], 2) for k, v in answers.items() if v.get("type") == "noul"},

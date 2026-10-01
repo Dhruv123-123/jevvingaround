@@ -150,7 +150,11 @@ The runtime does not care how it learns about the game, only that a device gives
 | device | what it is | frames | state |
 |---|---|---|---|
 | `web://<url>` | a page in headless Chromium | screenshots | `#state=window.__state()` evaluates an expression on the page every tick |
-| `screen://x,y,w,h` | this computer's screen and input (`pip install anygame[desktop]`: mss + pynput); any window, any game | a region of the monitor | no |
+| `screen://x,y,w,h` | this computer's screen and input (`pip install anygame[desktop]`: mss + pynput); any window, any game. The one device that shares the person's keyboard and mouse, so the guard rails are on: it pauses after any input it did not send, Ctrl+Alt+Q stops it, and it sends at most 300 inputs a minute | a region of the monitor | no |
+| `window://<title>` | one window: inputs are delivered to that window only (X11 XSendEvent, Windows PostMessage) and the person's focus, keyboard and mouse stay theirs. Browsers, toolkits and casual games take them; a game that reads raw input ignores them | that window's rectangle | no |
+| `pad://x,y,w,h` | a virtual gamepad (`?backend=uinput` on Linux through python-evdev, `?backend=vigem` on Windows through vgamepad): the game sees a second controller, the person keeps their own input; keys map to buttons and the d-pad, `mouse_move` deflects the right stick | a region of the monitor | no |
+| `nested://:99?run=<cmd>` | a display the runtime owns: Xvfb (invisible) or `&viewer=xephyr` (a window on the desktop showing the sandbox), the game launched inside it, frames and input bound to it; the person's desktop is never touched | that display | no |
+| `coach://<device>` | suggest, never act: every move is shown on the HUD and performed by the person, or not (`anygame play --coach`); for games whose anti-cheat forbids injected input | the inner device's | the inner device's |
 | `stream://ws://…`, `stream://http://…`, `stream://file:…`, `stream://stdin` | a game that publishes its state as JSON (`anygame[stream]` for WebSockets); `?input=screen://…` pairs an input device | the input device's, or blank | the latest JSON object |
 | `pyboy://rom.gb`, `adb://host:port`, `replay://dir` | an emulator, a phone, recorded frames | yes | no |
 | the Chrome extension | the tab you are looking at, through the debugger API | yes | a state expression in the panel |
@@ -513,7 +517,7 @@ so every pack is testable in CI with no hardware and no account beyond the model
 
 ```bash
 anygame packs
-anygame play <pack> --device web://…[#state=<js>]|screen://x,y,w,h|stream://ws://…|pyboy://<rom>|adb://…|replay://<dir> [--hud 8080] [--max-ticks N] [--sensor none]
+anygame play <pack> --device web://…[#state=<js>]|screen://x,y,w,h|window://<title>|pad://x,y,w,h|nested://:99?run=…|coach://<device>|stream://ws://…|pyboy://<rom>|adb://…|replay://<dir> [--hud 8080] [--max-ticks N] [--sensor none] [--coach]
 anygame eval <pack> [--sensor jev]        # perception tests on the pack's frames; action checks with a sensor
 anygame audit <pack> [--bank DIR] [--sensor jev]   # what the bank says: question value, ignored reads, option-order A/B, counterfactual return, tasks, rater
 anygame suite <pack,pack> --device "web://games/snake.html?seed={seed}" --seeds 1,2,3 [--learned] [--out suite.jsonl]   # tasks done within the limit and at all, per category
@@ -530,6 +534,20 @@ anygame bench <pack> --device "<url with {seed}>" --sensor jev|random|llm:<model
 ```
 
 `--sensor none` runs perception and the HUD with no model, for authoring a pack against a live screen.
+
+## Acting without taking the computer over
+
+Every way of acting goes through one `Device` interface; what differs is where the inputs land. The extension
+acts on one tab through the debugger API. `stream://` hands inputs to the game's own socket. `window://` posts
+them to one window, `pad://` presents a virtual controller, `nested://` runs the game on a display the runtime
+owns, and `coach://` only suggests. `screen://` is the one path that drives the real keyboard and mouse, and it
+carries the guard rails: a listener marks any input the device did not inject itself (its own injections are
+recognised by timing) and pauses acting for three seconds while the loop keeps reading and says why on the HUD;
+Ctrl+Alt+Q stops the run; and an action budget drops and counts anything past 300 inputs a minute, so a loop that
+goes wrong cannot flood the game. The pack's `act` list is the only input vocabulary the loop can ever use, so an
+allowlist is structural. The honest limits: synthetic window events are ignored by games that read raw input, a
+virtual pad only helps games that take one, and anti-cheat systems treat every injected input as cheating, which
+is what coach mode is for.
 
 ## Honest notes
 

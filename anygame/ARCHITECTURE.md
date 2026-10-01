@@ -124,7 +124,7 @@ reload the tab, play again, forever until *stop*. In the CLI it is `anygame lear
 
 | artifact | what it is | how it is made |
 |---|---|---|
-| `anygame` wheel | the CLI and the desktop application: every device, the author, the learning loop, the HUD; `[desktop]` adds the screen device, `[stream]` WebSocket streams | `scripts/dist.sh` → `dist/anygame-*.whl` |
+| `anygame` wheel | the CLI and the desktop application: every device, the author, the learning loop, the HUD; `[desktop]` adds the screen, window, pad and nested devices (with their guard rails), `[stream]` WebSocket streams | `scripts/dist.sh` → `dist/anygame-*.whl` |
 | the Chrome extension | the whole runtime in a side panel; frames and input through the debugger API; the pool, the author, the learning loop, the state expression | `scripts/dist.sh` → `ext/anygame-extension.zip` |
 | the pool | `packs/pool.json` on `main`: every pack with its site hints and screen fingerprints | `npm run build` in `ext/` after `anygame stamp` |
 
