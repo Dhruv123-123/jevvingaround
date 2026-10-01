@@ -492,7 +492,7 @@ def cmd_learn(a):
             if str(last.get("reason", "")).startswith("stalled") and fallback is not None:
                 # the pack could not tell that the game ended: one look by the vision model labels the episode
                 verdict = fallback.outcome(device.frame(), a.goal or pack.play[:300])
-                last["reason"] = f"stalled: {verdict['outcome']} ({verdict['note']})"
+                last["reason"] = f"stalled: {verdict['outcome']} ({verdict['note']})" + (f"; implausible read: {last['implausible'][0]}" if last.get("implausible") else "")
                 recs[-1]["reason"] = last["reason"]
                 log(f"episode {n}: the screen stalled; the vision model says {verdict['outcome']}: {verdict['note']}")
             if not decisions and str(last.get("reason", "")).startswith("stalled") and "playing" in str(last.get("reason", "")):

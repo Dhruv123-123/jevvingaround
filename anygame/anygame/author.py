@@ -84,6 +84,13 @@ rules:                                                    # policy the runtime e
   - { if: { noul: <belief>, gte: 0.5 }, set: { <action>__cell: <choice question id> } }
   - { if: { read: <id>, equals: our_turn }, avoid: { <action>__cell: <read listing cells> } }   # drop those cells
   - { if: { read: <id>, equals: our_turn }, only:  { <action>__cell: <read listing cells> } }   # offer only those cells
+plausible:                                                # optional: what a correct reading can never do; a reading that breaks one is read
+                                                          # again, never acted on, and ends the episode if it persists (a wrong read caught)
+  - { read: <grid read>, sticky: [X, O] }                 # a placed piece never changes or vanishes (a cleared board is a restart)
+  - { read: <grid read>, max_changes: 2 }                 # at most N cells change between two ticks
+  - { read: <grid read>, count: [X, O], diff: [0, 1] }    # count(X) - count(O) stays in [lo, hi]
+  - { when: { line: <grid read>, symbols: [X, O], length: 3 }, require: { read: <status read>, in: [<end states>] } }
+  - { when: { read: <status read>, equals: our_turn }, read: <grid read>, count: [X, O], diff: [0, 0] }
 tasks:                                                    # optional practice goals the runtime verifies from the reads
   - { id: <snake_case>, instruction: "<one line the player follows>", category: navigate|collect|score|survive|clear|build|avoid|other,
       done: { read: <id or id.path>, equals|in|not|gte|lte: <value> },   # or a list of conditions that must all hold
