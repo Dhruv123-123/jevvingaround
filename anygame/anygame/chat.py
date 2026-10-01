@@ -2,7 +2,7 @@
 
 Jev always goes to OpenRouter (or JEV_BASE_URL). Everything else goes wherever ANYGAME_LLM_BASE points:
 
-  OpenRouter / any OpenAI-compatible server (default):
+  OpenRouter / any OpenAI-compatible server (default base; ANYGAME_LLM_MODEL is required, there is no default model):
     ANYGAME_LLM_BASE=https://openrouter.ai/api/v1   ANYGAME_LLM_KEY=…   (falls back to OPENROUTER_API_KEY)
   Azure OpenAI (model = your deployment name):
     ANYGAME_LLM_API=azure  ANYGAME_LLM_BASE=https://<resource>.openai.azure.com  ANYGAME_LLM_KEY=<api key>
@@ -25,9 +25,9 @@ class Chat:
             self.base = self.base.rsplit("/", 1)[0]          # accept the full URL from the Azure portal
         self.api = (api or os.environ.get("ANYGAME_LLM_API") or
                     ("azure" if (self.base.endswith("/openai/v1") or ".openai.azure.com" in self.base) else "azure-models" if ".services.ai.azure.com" in self.base else "openai")).lower()
-        self.model = model or os.environ.get("ANYGAME_LLM_MODEL") or ("anthropic/claude-sonnet-5" if "openrouter" in self.base else None)
+        self.model = model or os.environ.get("ANYGAME_LLM_MODEL")      # no default: the chat model is always chosen explicitly
         if not self.model:
-            raise SystemExit("set ANYGAME_LLM_MODEL (on Azure: the deployment name) or pass --model")
+            raise SystemExit("set ANYGAME_LLM_MODEL (on Azure: the deployment name) or pass --model; there is no default chat model")
         self.key = api_key or os.environ.get("ANYGAME_LLM_KEY") or os.environ.get("AZURE_OPENAI_API_KEY") or (os.environ.get("OPENROUTER_API_KEY") if "openrouter" in self.base else None)
         if not self.key:
             raise SystemExit(f"no key for {self.base}: set ANYGAME_LLM_KEY")

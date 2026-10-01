@@ -15,8 +15,8 @@ export class Chat {
     if (base.endsWith("/responses") || base.endsWith("/chat/completions")) base = base.slice(0, base.lastIndexOf("/"));
     this.base = base;
     this.api = keys.llmApi ?? (base.endsWith("/openai/v1") || base.includes(".openai.azure.com") ? "azure" : base.includes(".services.ai.azure.com") ? "azure-models" : "openai");
-    this.model = keys.llmModel ?? (base.includes("openrouter") ? "anthropic/claude-sonnet-5" : "");
-    if (!this.model) throw new Error("set the authoring model (on Azure: the deployment name)");
+    this.model = keys.llmModel ?? "";   // no default: the chat model is always chosen explicitly
+    if (!this.model) throw new Error("set the authoring model (on Azure: the deployment name); there is no default");
     this.key = keys.llmKey ?? (base.includes("openrouter") ? keys.openrouter ?? "" : "");
     if (!this.key) throw new Error(`no key for ${this.base}`);
     this.version = keys.llmApiVersion ?? "2024-10-21";

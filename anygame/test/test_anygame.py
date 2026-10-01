@@ -328,7 +328,7 @@ def test_random_sensor_and_llm_answer_parsing(monkeypatch):
         def json(self):
             return {"choices": [{"message": {"content": 'Sure: {"action": "b", "risk": 0.9}'}}], "usage": {"prompt_tokens": 50, "cost": 0.00001}}
 
-    monkeypatch.setenv("OPENROUTER_API_KEY", "x")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "x"); monkeypatch.setenv("ANYGAME_LLM_MODEL", "stub")
     llm = LLMSensor("some/model")
     monkeypatch.setattr(llm.chat.s, "post", lambda *a, **k: Resp())
     out = llm.ask({"screen": {}}, qs)
@@ -350,7 +350,7 @@ def test_author_tune_loop_plays_digests_and_keeps_a_passing_pack(monkeypatch, tm
         body += "\ntests:\n  - { frame: fixtures/probe-1.png, expect: { status: our_turn, board: ['...', '...', '...'] } }\n"
         return "here you go\n```yaml\n" + body + "```\n"
 
-    monkeypatch.setenv("OPENROUTER_API_KEY", "x")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "x"); monkeypatch.setenv("ANYGAME_LLM_MODEL", "stub")
     monkeypatch.setattr(A.Author, "ask", fake_ask)
     out = tmp_path / "ttt"
     ok, path = A.author("web://" + os.path.join(ROOT, "games", "tictactoe.html?seed=2"), "Tic-tac-toe", out,
@@ -465,7 +465,7 @@ def test_author_rejects_expectations_bent_to_a_wrong_read(monkeypatch, tmp_path)
     exp = A.expectations(tmp_path)
     assert exp == {"fixtures/probe-2.png": {"board": ["...", ".X.", "..."]}}
     before = {"fixtures/probe-2.png": {"board": ["...", ".X.", "O.."]}}
-    monkeypatch.setenv("OPENROUTER_API_KEY", "x")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "x"); monkeypatch.setenv("ANYGAME_LLM_MODEL", "stub")
     asked = []
     monkeypatch.setattr(A.Author, "ask", lambda self, parts: (asked.append(parts), '{"1": false}')[1])
     au = A.Author()
@@ -571,7 +571,7 @@ def test_demonstration_digest_and_author_from_demo(monkeypatch, tmp_path):
     def fake_ask(self, parts):
         seen.append(" ".join(p.get("text", "") for p in parts if p.get("type") == "text"))
         return "```yaml\n" + yaml_text + "\ntests:\n  - { frame: fixtures/probe-1.png, expect: {} }\n```"
-    monkeypatch.setenv("OPENROUTER_API_KEY", "x")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "x"); monkeypatch.setenv("ANYGAME_LLM_MODEL", "stub")
     monkeypatch.setattr(A.Author, "ask", fake_ask)
     out = tmp_path / "out"
     ok, _ = A.author("web://unused", "x", out, rounds=1, log=lambda m: None, demo=d, size=(200, 200))
