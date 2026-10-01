@@ -53,6 +53,7 @@ def cmd_play(a):
     if hud:
         print(f"HUD on http://localhost:{a.hud}", file=sys.stderr)
     agent = Agent(pack, device, jev, hud, log_path=a.log, max_ticks=a.max_ticks, record_dir=a.record)
+    _start_fresh(device)
     if a.fallback:
         from .fallback import VLMFallback
         agent.fallback = VLMFallback()
@@ -139,6 +140,14 @@ def cmd_eval(a):
     sys.exit(1 if failed else 0)
 
 
+def _start_fresh(device):
+    """Building the Agent (OCR models, the sensor) takes seconds, and a real-time game opened before it runs unwatched
+    meanwhile: Snake was dead at tick 1 when four benches started together. A device that can restart its game cheaply
+    does it here, as `learn` already does before each episode, so the episode starts when the agent can see it."""
+    if hasattr(device, "reload"):
+        device.reload()
+
+
 def cmd_play_inline(pack_dir, device_url: str, ticks: int, log_path: str | None = None, sensor: str = "jev", record_dir: str | None = None) -> dict:
     """Play a pack for N ticks and return the summary (used by `author --play-ticks` and `bench`)."""
     from .device import open_device
@@ -149,6 +158,7 @@ def cmd_play_inline(pack_dir, device_url: str, ticks: int, log_path: str | None 
     device = open_device(device_url, pack.size)
     jev = open_sensor(sensor, timeout=float(pack.raw.get("sensor_timeout_s", os.environ.get("ANYGAME_JEV_TIMEOUT", "4"))))
     agent = Agent(pack, device, jev, None, log_path=log_path, max_ticks=ticks, record_dir=record_dir)
+    _start_fresh(device)
     try:
         last = agent.run()
     finally:
@@ -293,6 +303,7 @@ def cmd_go(a):
     if hud:
         print(f"playing {pack.name} from {known}  HUD on http://localhost:{a.hud}", file=sys.stderr)
     agent = Agent(pack, device, open_sensor(a.sensor), hud, max_ticks=a.max_ticks)
+    _start_fresh(device)
     try:
         last = agent.run()
     finally:
@@ -617,6 +628,7 @@ def cmd_suite(a):
             device = open_device(a.device.replace("{seed}", seed.strip()), pack.size)
             jev = open_sensor(a.sensor, timeout=float(pack.raw.get("sensor_timeout_s", os.environ.get("ANYGAME_JEV_TIMEOUT", "4"))))
             agent = Agent(pack, device, jev, None, max_ticks=a.max_ticks)
+            _start_fresh(device)
             agent.stall_ticks = 40
             recs, events = [], []
             agent.on_record = lambda rec, frame: recs.append(rec)

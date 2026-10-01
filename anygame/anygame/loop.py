@@ -2,6 +2,7 @@
 from __future__ import annotations
 import hashlib
 import json
+import os
 import time
 from pathlib import Path
 from typing import Any
@@ -417,6 +418,8 @@ class Agent:
         self.last_values = values
         rec: dict[str, Any] = {"tick": self.tick, "t": round(t0, 3), "hash": h, "perception_ms": round(t_perc), "timings_ms": timings, "screen": values,
                                "mode": self.mode, "support": round(support, 2), "known": known}
+        if self.last_state is not None and os.environ.get("ANYGAME_LOG_TRUTH"):
+            rec["truth"] = self.last_state   # the page's own state beside the pixel reads, to check perception offline
         if self.mode == "main" and self.base.tasks:
             self._tasks_tick(values, rec)
             if self.task is not None:
@@ -581,6 +584,11 @@ class Agent:
             for target, source in (rl.get("set") or {}).items():
                 src = answers.get(source)
                 if src and src.get("type") == "choice" and src.get("choice") not in (None, "none") and target in answers:
+                    if f"{target.split('__', 1)[0]}→{src['choice']}" in self.noops:
+                        # the same System 0 guard the question already had: a value that changed nothing (a full column)
+                        # is not forced again by a rule, or a wrong belief taps it until the tick cap
+                        applied.append(f"{why} → {target} = {source} ({src['choice']}) skipped: it changed nothing")
+                        continue
                     if answers[target].get("choice") != src["choice"]:
                         answers[target] = {**answers[target], "choice": src["choice"]}
                         applied.append(f"{why} → {target} = {source} ({src['choice']})")
