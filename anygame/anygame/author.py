@@ -458,9 +458,10 @@ def _better(a: dict[str, Any] | None, b: dict[str, Any], score_read: str | None)
     def key(s):
         reason = str(s.get("reason") or "")
         won = "we_won" in reason or "won" in reason
-        lost = "we_lost" in reason or "dead" in reason or "over" in reason
+        lost = "we_lost" in reason or "dead" in reason or "over" in reason or "unchanged" in reason    # a stall is a loss
         score = (s.get("final_screen") or {}).get(score_read or "score")
-        return (1 if won else 0, 0 if lost else 1, s.get("ticks", 0) if lost else 0, float(score) if isinstance(score, (int, float)) else 0.0)
+        return (1 if won else 0, 0 if lost else 1, s.get("ticks", 0) if lost else 0, float(score) if isinstance(score, (int, float)) else 0.0,
+                s.get("decisions", 0))      # equal otherwise: the pack that kept making moves
     return key(b) > key(a)
 
 
@@ -608,6 +609,7 @@ def author(device_url: str, game: str, out: Path, play: str | None = None, round
             if not y:
                 break
             (out / "pack.yaml").write_text(y)
+            (out / f"pack-tune-{t + 1}.yaml").write_text(y)        # every revision stays inspectable, kept or not
             ok2, report = check_pack(out, frames)
             if not ok2:
                 log("tuned pack broke perception; keeping the previous one\n" + report)
