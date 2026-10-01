@@ -80,15 +80,15 @@ whole trial cost $0.033 in Jev calls.
 
 ## Authored with Azure (2026-10-01, later the same day)
 
-The same three sites, with packs written by `anygame author` on Azure (`gpt-5.6-luna`) and played by Jev. About 14
+The same three sites, with packs written by `anygame author` on Azure (`gpt-5.6-luna`) and played by Jev. About 22
 authoring calls in all, because the key is rate-limited. The packs are in `packs/web-*-authored/`, each with its
 probe frames and `fixtures/probe.json` (what led to each frame, and whether the game was in motion).
 
 | game | authoring | sees gameplay | Jev play |
 |---|---|---|---|
 | tic-tac-toe | passed in round 1; one revision from a play log fixed its move rules | yes: every board read right | 20 games: 5 won, 6 tied, 9 lost (the page's own scoreboard) |
-| snake | passed after 4 rounds; two revisions from play logs | its tests do, but it has no head or food read | starts the Slug level, never steers |
-| dino | passed after 3 rounds; one revision | yes: the obstacle grid in front of the dino | restarts each run, dies at the first or second cactus (scores 17–44) |
+| snake | passed after 6 rounds (the flipping OCR test below cost 3); two revisions from play logs | its tests do, but it has no head or food read | starts the Slug level, never steers |
+| dino | passed after 4 rounds; one revision | yes: the obstacle grid in front of the dino | restarts each run, dies at the first or second cactus (scores 17–44) |
 
 What had to change for authoring to work at all:
 
