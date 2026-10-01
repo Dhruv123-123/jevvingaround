@@ -1,0 +1,57 @@
+game: web-tictactoe
+site: playtictactoe.org
+# Hand-written for the real-web trial (2026-10-01). The page is monochrome: X and O are both white, so the
+# board is read by shape (templates), and a finished game by colour (the losing marks fade to grey).
+screen: { orientation: portrait, size: [540, 560] }
+zones:
+  board: { rect_px: [120, 75, 420, 375], grid: [3, 3] }
+read:
+  board:  { kind: templates, zone: board, assets: "assets/*.png", inset: 0.08, threshold: 0.6, otherwise: ".", as: matrix }
+  shade:  { kind: color, zone: board, stat: accent, inset: 0.15, max_dist: 90, otherwise: none,
+            options: { none: "#000000", white: "#ffffff", grey: "#808080" } }
+  faded:  { kind: locate, in: shade, symbol: grey, many: true }        # a finished game greys out the loser's marks
+  x_wins_at: { kind: runs, in: board, symbol: X, length: 3, empty: "." }
+  o_wins_at: { kind: runs, in: board, symbol: O, length: 3, empty: "." }
+  empty:  { kind: locate, in: board, symbol: ".", many: true }
+act:
+  - { id: mark, kind: tap, zone: board, description: "put an X in an empty cell" }
+tick_hz: 0.8          # no turn indicator on the page: give the computer time to reply before deciding again
+stop_when: { read: faded, not: [] }
+settle: screen_change
+play: >
+  Tic-tac-toe on a 3x3 grid against the page's computer, cells c1r1 (top-left) to c3r3 (bottom-right). We are X,
+  the computer is O; who starts alternates between games. `board` shows the rows top to bottom. Priorities: if
+  x_wins_at lists a cell, mark it; else if o_wins_at lists a cell, mark it to block; else take the centre c2r2 if
+  empty; else a corner; else any cell in `empty`.
+questions:
+  - id: can_win_now
+    type: noul
+    instructions: Is x_wins_at non-empty (a cell is listed)?
+    criteria: { true: "A cell is listed in x_wins_at.", false: "x_wins_at is empty." }
+  - id: must_block
+    type: noul
+    instructions: Is o_wins_at non-empty (a cell is listed)?
+    criteria: { true: "A cell is listed in o_wins_at.", false: "o_wins_at is empty." }
+  - id: win_cell
+    type: choice
+    instructions: The first cell in x_wins_at, or none if it is empty.
+    criteria: { none: null, c1r1: null, c2r1: null, c3r1: null, c1r2: null, c2r2: null, c3r2: null, c1r3: null, c2r3: null, c3r3: null }
+  - id: block_cell
+    type: choice
+    instructions: The first cell in o_wins_at, or none if it is empty.
+    criteria: { none: null, c1r1: null, c2r1: null, c3r1: null, c1r2: null, c2r2: null, c3r2: null, c1r3: null, c2r3: null, c3r3: null }
+  - id: mark__cell
+    type: choice
+    instructions: Which empty cell to mark, following the priorities in the play notes.
+    criteria: { c1r1: null, c2r1: null, c3r1: null, c1r2: null, c2r2: null, c3r2: null, c1r3: null, c2r3: null, c3r3: null }
+rules:
+  - { if: { read: faded, equals: [] }, only: { mark__cell: empty } }
+  - { if: { noul: must_block, gte: 0.5 }, set: { mark__cell: block_cell } }
+  - { if: { noul: can_win_now, gte: 0.5 }, set: { mark__cell: win_cell } }
+tests:
+  - frame: fixtures/empty.png
+    expect: { board: ["...", "...", "..."], faded: [] }
+  - frame: fixtures/midgame.png
+    expect: { board: ["X..", ".O.", "..."], faded: [] }
+  - frame: fixtures/won.png
+    expect: { board: ["XXX", ".O.", "..O"], faded: [c2r2, c3r3] }

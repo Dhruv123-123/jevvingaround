@@ -71,7 +71,7 @@ def read_all(pack: Pack, frame: np.ndarray, only: set[str] | None = None, tick: 
                 conf[rid] = 1.0 if cells else 0.0
             timings[rid] = 0.0
             continue
-        if kind in ("around", "tetris", "predict", "margin"):
+        if kind in ("around", "tetris", "predict", "margin", "head"):
             continue  # derived in the loop (needs direction / history / per-run tracker state)
         if kind == "runs":
             values[rid] = runs_of(values.get(r["in"], {}), r)

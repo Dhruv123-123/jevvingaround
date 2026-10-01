@@ -349,6 +349,11 @@ class Agent:
         raw_values = values
         values = self._present(values, pack)
         for rid, r in pack.reads.items():
+            if r.get("kind") == "head":
+                # the moving end of a body drawn in one colour: the cell that newly took the symbol and has one
+                # neighbour of it (a page that draws head and body alike, like most real snakes)
+                values[rid] = self._head(rid, raw_values.get(r["in"]), str(r.get("symbol", "s")))
+        for rid, r in pack.reads.items():
             if not r.get("history"):
                 continue
             cur = values.get(rid)
@@ -356,7 +361,7 @@ class Agent:
                 self.prev_distinct[rid] = self.last_values[rid]
             if rid in self.prev_distinct:
                 values[f"{rid}_prev"] = self.prev_distinct[rid]
-                if r.get("kind") == "locate" and isinstance(cur, str) and isinstance(self.prev_distinct[rid], str):
+                if r.get("kind") in ("locate", "head") and isinstance(cur, str) and isinstance(self.prev_distinct[rid], str):
                     values[f"{rid}_moving"] = _direction(self.prev_distinct[rid], cur)
                     values[f"{rid}_reverse"] = {"up": "down", "down": "up", "left": "right", "right": "left"}.get(values[f"{rid}_moving"], "none")
         for rid, r in pack.reads.items():
@@ -375,6 +380,28 @@ class Agent:
                     self.trackers[rid] = TetrisTracker(r)
                 values[rid] = self.trackers[rid].read(raw_values.get(r["in"]), raw_values.get(r["next_in"]) if r.get("next_in") else None)
         return values, dets, timings
+
+    def _head(self, rid: str, grid: Any, sym: str) -> str | None:
+        import re as _re
+        if not isinstance(grid, dict):
+            return None
+        cells = {(int(m.group(1)), int(m.group(2))) for k, v in grid.items() if str(v) == sym and (m := _re.match(r"c(\d+)r(\d+)$", k))}
+        prev_cells, prev_head = self.trackers.get(rid, (None, None))
+        head = prev_head
+        if prev_cells is not None:
+            new = cells - prev_cells
+            ends = [c for c in new if sum((c[0] + dc, c[1] + dr) in cells for dc, dr in ((1, 0), (-1, 0), (0, 1), (0, -1))) <= 1]
+            if len(ends) == 1:
+                head = ends[0]
+            elif len(new) == 1:
+                head = next(iter(new))
+            elif len(ends) > 1 and prev_head is not None:
+                # it moved its whole length since the last look: the head is the end farther from where it was
+                head = max(ends, key=lambda c: abs(c[0] - prev_head[0]) + abs(c[1] - prev_head[1]))
+        if head is not None and head not in cells:
+            head = None
+        self.trackers[rid] = (cells, head)
+        return f"c{head[0]}r{head[1]}" if head else None
 
     # ---- one tick --------------------------------------------------------------------------------
     def step(self) -> dict[str, Any]:
@@ -587,10 +614,16 @@ class Agent:
         act = answers.get("action")
         if excluded and act and act.get("choice") in excluded:
             probs = {k: v for k, v in (act.get("probabilities") or {}).items() if k not in excluded}
+            allowed = [a.id for a in self.pack.actions if a.id not in excluded]
             if probs:
                 best = max(probs, key=probs.get)
                 answers["action"] = {**act, "choice": best}
                 applied.append(f"→ {best}")
+            elif len(allowed) == 1:
+                # the decider's answer (often a stale one, under budget_ms) never offered the one action the rules
+                # leave: take it, the rules have decided
+                answers["action"] = {**act, "choice": allowed[0]}
+                applied.append(f"→ {allowed[0]} (the only action the rules allow)")
             else:
                 # the rules are infeasible here: every action is excluded. The choice stands, and the record says so,
                 # because a trap that closed ticks ago is an incident for the reads that should have seen it coming
