@@ -35,6 +35,8 @@ read:                                                     # each read is one key
         # as row strings (top row first). parse: int turns labels into numbers. stat: accent reads the colour
         # of whatever is DRAWN on the cell (a glyph, an icon, a piece) instead of the background: use it when
         # the symbols are letters or shapes on a flat cell, with the background colour as the empty option.
+        # hollow: <label> (with stat: accent) returns that label when the glyph's middle is background: an O or a
+        # ring versus an X or a filled disc OF THE SAME COLOUR, e.g. options { ".": "#000000", X: "#ffffff" }, hollow: O
   <id>: { kind: ocr, zone: <zone>, parse: int, every: 4 }   # text/number by OCR; slow, so refresh every N ticks
   <id>: { kind: bar, zone: <zone>, color: "#hex", scale: 10 }   # fraction of a bar filled with a colour, times scale
   <id>: { kind: locate, in: <grid read id>, symbol: <label>, many: true, row: 1 }   # cell(s) holding a label
