@@ -403,7 +403,7 @@ async function runAuthor() {
   const store = await load();
   const game = ($("game") as HTMLInputElement).value.trim();
   if (!game) { log("describe the game in a sentence first"); return; }
-  if (!store.keys?.llmBase && !store.keys?.openrouter) { log("the author needs a chat model: open \"keys and models\""); return; }
+  if (!store.keys?.llmBase) { log("the author needs a chat model: open \"keys and models\""); return; }
   const sensorSpec = $<HTMLSelectElement>("sensor").value;
   let sensor: Sensor | null = null;
   try { sensor = await openSensor(sensorSpec === "llm" ? "llm" : sensorSpec, store.keys ?? {}); } catch { sensor = null; }

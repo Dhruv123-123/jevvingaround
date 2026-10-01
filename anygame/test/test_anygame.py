@@ -328,7 +328,7 @@ def test_random_sensor_and_llm_answer_parsing(monkeypatch):
         def json(self):
             return {"choices": [{"message": {"content": 'Sure: {"action": "b", "risk": 0.9}'}}], "usage": {"prompt_tokens": 50, "cost": 0.00001}}
 
-    monkeypatch.setenv("OPENROUTER_API_KEY", "x")
+    _chat_env(monkeypatch)
     llm = LLMSensor("some/model")
     monkeypatch.setattr(llm.chat.s, "post", lambda *a, **k: Resp())
     out = llm.ask({"screen": {}}, qs)
@@ -350,7 +350,7 @@ def test_author_tune_loop_plays_digests_and_keeps_a_passing_pack(monkeypatch, tm
         body += "\ntests:\n  - { frame: fixtures/probe-1.png, expect: { status: our_turn, board: ['...', '...', '...'] } }\n"
         return "here you go\n```yaml\n" + body + "```\n"
 
-    monkeypatch.setenv("OPENROUTER_API_KEY", "x")
+    _chat_env(monkeypatch)
     monkeypatch.setattr(A.Author, "ask", fake_ask)
     out = tmp_path / "ttt"
     ok, path = A.author("web://" + os.path.join(ROOT, "games", "tictactoe.html?seed=2"), "Tic-tac-toe", out,
@@ -363,6 +363,30 @@ def test_author_tune_loop_plays_digests_and_keeps_a_passing_pack(monkeypatch, tm
     assert A._better(None, {"reason": "x"}, None) and A._better({"reason": "status is we_lost", "ticks": 5}, {"reason": "status is draw", "ticks": 9}, None)
 
 
+def _chat_env(monkeypatch):
+    for k in ("ANYGAME_LLM_API", "ANYGAME_AUTHOR_MODEL"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("ANYGAME_LLM_BASE", "https://example.test/v1")
+    monkeypatch.setenv("ANYGAME_LLM_KEY", "x")
+    monkeypatch.setenv("ANYGAME_LLM_MODEL", "stub-model")
+
+
+def test_chat_without_config_stops_and_never_falls_back_to_sonnet(monkeypatch):
+    import pytest
+    from anygame.chat import Chat
+    for k in ("ANYGAME_LLM_BASE", "ANYGAME_LLM_KEY", "ANYGAME_LLM_MODEL", "ANYGAME_LLM_API", "AZURE_OPENAI_API_KEY", "ANYGAME_AUTHOR_MODEL"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "x")          # Jev's key alone must not turn on a chat model
+    with pytest.raises(SystemExit) as e:
+        Chat()
+    assert "ANYGAME_LLM_BASE" in str(e.value) and "ANYGAME_LLM_MODEL" in str(e.value)
+    with pytest.raises(SystemExit):
+        Chat(base_url="https://openrouter.ai/api/v1")        # no model named: no default model either
+    with pytest.raises(SystemExit) as e:
+        Chat(model="anthropic/claude-sonnet-5", base_url="https://openrouter.ai/api/v1")
+    assert "refusing" in str(e.value)
+
+
 def test_chat_routes_azure_and_openai_compatible(monkeypatch):
     from anygame.chat import Chat
     monkeypatch.setenv("ANYGAME_LLM_KEY", "k")
@@ -372,7 +396,7 @@ def test_chat_routes_azure_and_openai_compatible(monkeypatch):
     assert v1.url() == "https://myres.openai.azure.com/openai/v1/chat/completions"
     fo = Chat(model="Llama-3.3-70B", base_url="https://myres.services.ai.azure.com")
     assert fo.api == "azure-models" and "/models/chat/completions" in fo.url()
-    orr = Chat(model="anthropic/claude-sonnet-5", base_url="https://openrouter.ai/api/v1")
+    orr = Chat(model="openai/gpt-5.6-luna", base_url="https://openrouter.ai/api/v1")
     assert orr.api == "openai" and orr.headers()["authorization"] == "Bearer k"
     fv1 = Chat(model="gpt-5.6-luna", base_url="https://myres.services.ai.azure.com/openai/v1/responses")   # the portal's full URL
     assert fv1.api == "azure" and fv1.url() == "https://myres.services.ai.azure.com/openai/v1/chat/completions" and fv1.headers()["api-key"] == "k"
@@ -465,7 +489,7 @@ def test_author_rejects_expectations_bent_to_a_wrong_read(monkeypatch, tmp_path)
     exp = A.expectations(tmp_path)
     assert exp == {"fixtures/probe-2.png": {"board": ["...", ".X.", "..."]}}
     before = {"fixtures/probe-2.png": {"board": ["...", ".X.", "O.."]}}
-    monkeypatch.setenv("OPENROUTER_API_KEY", "x")
+    _chat_env(monkeypatch)
     asked = []
     monkeypatch.setattr(A.Author, "ask", lambda self, parts: (asked.append(parts), '{"1": false}')[1])
     au = A.Author()
@@ -571,7 +595,7 @@ def test_demonstration_digest_and_author_from_demo(monkeypatch, tmp_path):
     def fake_ask(self, parts):
         seen.append(" ".join(p.get("text", "") for p in parts if p.get("type") == "text"))
         return "```yaml\n" + yaml_text + "\ntests:\n  - { frame: fixtures/probe-1.png, expect: {} }\n```"
-    monkeypatch.setenv("OPENROUTER_API_KEY", "x")
+    _chat_env(monkeypatch)
     monkeypatch.setattr(A.Author, "ask", fake_ask)
     out = tmp_path / "out"
     ok, _ = A.author("web://unused", "x", out, rounds=1, log=lambda m: None, demo=d, size=(200, 200))

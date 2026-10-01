@@ -1,6 +1,13 @@
 // One chat-completion client for every model that is not Jev: the authoring model and llm: sensors.
 // Azure OpenAI / Foundry v1 endpoints (paste the portal URL), classic Azure deployments, or any OpenAI-compatible server.
+// There is no default endpoint or model, and Claude Sonnet through OpenRouter is refused.
 import type { Keys } from "./sensors.js";
+
+export const NOT_CONFIGURED = "no chat model configured: set the chat model endpoint, key and model in \"keys and models\"";
+
+export function forbidden(base: string, model: string): boolean {
+  return base.toLowerCase().includes("openrouter") && model.toLowerCase().includes("sonnet");
+}
 
 export class Chat {
   base: string;
@@ -11,12 +18,14 @@ export class Chat {
   cost = 0;
 
   constructor(keys: Keys, private timeoutMs = 240000) {
-    let base = (keys.llmBase ?? "https://openrouter.ai/api/v1").replace(/\/$/, "");
+    if (!keys.llmBase) throw new Error(NOT_CONFIGURED);
+    let base = keys.llmBase.replace(/\/$/, "");
     if (base.endsWith("/responses") || base.endsWith("/chat/completions")) base = base.slice(0, base.lastIndexOf("/"));
     this.base = base;
     this.api = keys.llmApi ?? (base.endsWith("/openai/v1") || base.includes(".openai.azure.com") ? "azure" : base.includes(".services.ai.azure.com") ? "azure-models" : "openai");
-    this.model = keys.llmModel ?? (base.includes("openrouter") ? "anthropic/claude-sonnet-5" : "");
+    this.model = keys.llmModel ?? "";
     if (!this.model) throw new Error("set the authoring model (on Azure: the deployment name)");
+    if (forbidden(base, this.model)) throw new Error(`refusing ${this.model} through OpenRouter: Claude Sonnet on OpenRouter is not used`);
     this.key = keys.llmKey ?? (base.includes("openrouter") ? keys.openrouter ?? "" : "");
     if (!this.key) throw new Error(`no key for ${this.base}`);
     this.version = keys.llmApiVersion ?? "2024-10-21";

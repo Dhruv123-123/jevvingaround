@@ -4,7 +4,7 @@ a key (`random`).
 
   jev            TypeSafe Jev (anygame.jev.Jev)
   random         uniform choices, nouls at 0.5: the floor every model must beat
-  llm:<model>    any OpenAI-compatible chat model answering in JSON (through OpenRouter by default)
+  llm:<model>    any OpenAI-compatible chat model answering in JSON (wherever ANYGAME_LLM_BASE points)
 """
 from __future__ import annotations
 import json

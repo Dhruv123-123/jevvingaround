@@ -115,3 +115,11 @@ test("demonstrations: clicks cluster into candidate zones and the digest names k
   assert.equal(d.keys.ArrowLeft, 2); assert.ok(d.pairs.length >= 1); assert.deepEqual(d.intents, ["take the centre"]);
   assert.ok(d.changeMap[4].some((v) => v > 0.15) && d.text.includes("DEMONSTRATION (human)"));
 });
+
+test("chat: no chat model configured stops, and Sonnet on OpenRouter is refused", async () => {
+  const { Chat } = await import("../dist/core.js");
+  assert.throws(() => new Chat({ openrouter: "sk-or-x" }), /no chat model configured/);
+  assert.throws(() => new Chat({ openrouter: "sk-or-x", llmBase: "https://openrouter.ai/api/v1" }), /authoring model/);
+  assert.throws(() => new Chat({ llmBase: "https://openrouter.ai/api/v1", llmKey: "k", llmModel: "anthropic/claude-sonnet-5" }), /refusing/);
+  assert.equal(new Chat({ llmBase: "https://r.openai.azure.com/openai/v1", llmKey: "k", llmModel: "gpt-5.6-luna" }).api, "azure");
+});

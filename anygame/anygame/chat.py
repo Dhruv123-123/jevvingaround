@@ -1,9 +1,11 @@
 """One chat-completion client for every model that is not Jev: the authoring model and the `llm:` sensor.
 
-Jev always goes to OpenRouter (or JEV_BASE_URL). Everything else goes wherever ANYGAME_LLM_BASE points:
+Jev always goes to OpenRouter (or JEV_BASE_URL). Everything else goes wherever ANYGAME_LLM_BASE points. There is
+no default: with nothing set, Chat() stops and names the variables, it never picks a model on its own. Claude
+Sonnet through OpenRouter is refused outright.
 
-  OpenRouter / any OpenAI-compatible server (default):
-    ANYGAME_LLM_BASE=https://openrouter.ai/api/v1   ANYGAME_LLM_KEY=…   (falls back to OPENROUTER_API_KEY)
+  Any OpenAI-compatible server:
+    ANYGAME_LLM_BASE=https://…/v1   ANYGAME_LLM_KEY=…   ANYGAME_LLM_MODEL=…
   Azure OpenAI (model = your deployment name):
     ANYGAME_LLM_API=azure  ANYGAME_LLM_BASE=https://<resource>.openai.azure.com  ANYGAME_LLM_KEY=<api key>
     ANYGAME_LLM_API_VERSION=2024-10-21 (optional)
@@ -18,16 +20,30 @@ from typing import Any
 import requests
 
 
+NOT_CONFIGURED = ("no chat model configured: set ANYGAME_LLM_BASE, ANYGAME_LLM_KEY and ANYGAME_LLM_MODEL "
+                  "(and ANYGAME_LLM_API for Azure; see anygame/chat.py), or pass --model with a base and key")
+
+
+def forbidden(base: str, model: str) -> bool:
+    """Claude Sonnet through OpenRouter is never used, by the project's rule."""
+    return "openrouter" in base.lower() and "sonnet" in model.lower()
+
+
 class Chat:
     def __init__(self, model: str | None = None, api_key: str | None = None, base_url: str | None = None, api: str | None = None, timeout: float = 240):
-        self.base = (base_url or os.environ.get("ANYGAME_LLM_BASE") or "https://openrouter.ai/api/v1").rstrip("/")
+        base = base_url or os.environ.get("ANYGAME_LLM_BASE")
+        if not base:
+            raise SystemExit(NOT_CONFIGURED)
+        self.base = base.rstrip("/")
         if self.base.endswith("/responses") or self.base.endswith("/chat/completions"):
             self.base = self.base.rsplit("/", 1)[0]          # accept the full URL from the Azure portal
         self.api = (api or os.environ.get("ANYGAME_LLM_API") or
                     ("azure" if (self.base.endswith("/openai/v1") or ".openai.azure.com" in self.base) else "azure-models" if ".services.ai.azure.com" in self.base else "openai")).lower()
-        self.model = model or os.environ.get("ANYGAME_LLM_MODEL") or ("anthropic/claude-sonnet-5" if "openrouter" in self.base else None)
+        self.model = model or os.environ.get("ANYGAME_LLM_MODEL")
         if not self.model:
             raise SystemExit("set ANYGAME_LLM_MODEL (on Azure: the deployment name) or pass --model")
+        if forbidden(self.base, self.model):
+            raise SystemExit(f"refusing {self.model} through OpenRouter: Claude Sonnet on OpenRouter is not used. Point ANYGAME_LLM_BASE / ANYGAME_LLM_MODEL at another chat model.")
         self.key = api_key or os.environ.get("ANYGAME_LLM_KEY") or os.environ.get("AZURE_OPENAI_API_KEY") or (os.environ.get("OPENROUTER_API_KEY") if "openrouter" in self.base else None)
         if not self.key:
             raise SystemExit(f"no key for {self.base}: set ANYGAME_LLM_KEY")

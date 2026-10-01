@@ -1,6 +1,6 @@
 """`anygame author`: a slow model writes the pack, the runtime checks it, the fast model plays it.
 
-The slow model (any vision model on OpenRouter; Claude by default) gets probe frames with a pixel grid, the
+The slow model (whatever vision model ANYGAME_LLM_* configures; there is no default) gets probe frames with a pixel grid, the
 dominant colours with their hex codes, the pack format and three real packs, and writes a pack.yaml with
 tests over the probe frames. The runtime then loads the pack, runs its reads on every frame and hands the
 model exactly what its reads produced, so it can correct colours, rects and expectations. A few rounds of
