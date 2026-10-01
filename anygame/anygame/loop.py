@@ -58,7 +58,8 @@ def stable_hash(v: Any) -> str:
 
 
 class Agent:
-    def __init__(self, pack: Pack, device: Device, jev: Jev | None, hud=None, log_path: str | None = None, max_ticks: int | None = None, record_dir: str | None = None):
+    def __init__(self, pack: Pack, device: Device, jev: Jev | None, hud=None, log_path: str | None = None, max_ticks: int | None = None, record_dir: str | None = None,
+                 background: bool = True):
         self.pack, self.device, self.jev, self.hud = pack, device, jev, hud
         self.max_ticks = max_ticks
         self.record_dir = Path(record_dir) if record_dir else None
@@ -97,7 +98,8 @@ class Agent:
         # the browser, a process does not, and the loop only ever waits on the first value
         import multiprocessing
         from concurrent.futures import ProcessPoolExecutor
-        self.pool = ProcessPoolExecutor(max_workers=1, mp_context=multiprocessing.get_context("fork")) if any(int(r.get("every", 1)) > 1 for r in self.pack.reads.values()) else None
+        # background=False (eval, the author's check): every read runs on every frame, so a test never sees a slow read's null
+        self.pool = ProcessPoolExecutor(max_workers=1, mp_context=multiprocessing.get_context("fork")) if background and any(int(r.get("every", 1)) > 1 for r in self.pack.reads.values()) else None
         self.pending: dict[str, Any] = {}
         if self.pool is not None:
             # warm the worker (fork + OCR model load, ~2 s) before the first tick, so a real-time game does not run

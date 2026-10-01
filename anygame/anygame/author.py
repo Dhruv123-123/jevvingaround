@@ -402,10 +402,9 @@ def check_pack(pack_dir: Path, frames: list[Path]) -> tuple[bool, str]:
         return False, f"PACK ERROR: {e}"
     lines = []
     ok = True
-    ag = Agent(pack, device=_Dummy(pack.size), jev=None)
-    if ag.pool is not None:     # every read runs on every test frame: no background worker, no `every: N` carry-over,
-        ag.close()              # or a throttled OCR read comes back null on some frames and the tests flip between rounds
-        ag.pool = None
+    # every read runs on every test frame (no background worker, no `every: N` carry-over), or a throttled OCR
+    # read comes back null on some frames and the tests flip between rounds
+    ag = Agent(pack, device=_Dummy(pack.size), jev=None, background=False)
 
     def observe(frame):
         ag.last_values = None

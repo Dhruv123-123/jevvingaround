@@ -1,0 +1,27 @@
+[
+ {
+  "frame": "fixtures/probe-1.png",
+  "note": "the page as loaded, before any input",
+  "gameplay": false
+ },
+ {
+  "frame": "fixtures/probe-2.png",
+  "note": "in motion with no input, 0.3 s after tap at (267, 269)",
+  "gameplay": true
+ },
+ {
+  "frame": "fixtures/probe-3.png",
+  "note": "gameplay: in motion, 4 keys after tap at (267, 269)",
+  "gameplay": true
+ },
+ {
+  "frame": "fixtures/probe-4.png",
+  "note": "just after tap at (348, 326)",
+  "gameplay": false
+ },
+ {
+  "frame": "fixtures/probe-5.png",
+  "note": "gameplay: in motion, 1 keys after tap at (376, 392)",
+  "gameplay": true
+ }
+]

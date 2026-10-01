@@ -106,7 +106,7 @@ def cmd_eval(a):
         frame = cv2.imread(str(pack.path.parent / t["frame"])) if t.get("frame") else np.zeros((pack.size[1], pack.size[0], 3), np.uint8)
         state = json.loads((pack.path.parent / t["state"]).read_text()) if t.get("state") else None
         t0 = time.perf_counter()
-        values, _, timings = Agent(pack, device=_Dummy(pack.size), jev=None).observe(frame, state=state)
+        values, _, timings = Agent(pack, device=_Dummy(pack.size), jev=None, background=False).observe(frame, state=state)
         ms = (time.perf_counter() - t0) * 1000
         misses = {k: (v, values.get(k)) for k, v in t["expect"].items() if not _match(v, values.get(k))}
         ok = not misses

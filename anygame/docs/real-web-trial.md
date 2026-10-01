@@ -77,3 +77,47 @@ whole trial cost $0.033 in Jev calls.
   author's probe needs to get past a start menu, or the pack should fail when every fixture is the same screen.
 - **Chromium setup.** Headless Chromium in the cloud did not trust the agent proxy until its CA was added to
   `~/.pki/nssdb` with `certutil`.
+
+## Authored with Azure (2026-10-01, later the same day)
+
+The same three sites, with packs written by `anygame author` on Azure (`gpt-5.6-luna`) and played by Jev. About 14
+authoring calls in all, because the key is rate-limited. The packs are in `packs/web-*-authored/`, each with its
+probe frames and `fixtures/probe.json` (what led to each frame, and whether the game was in motion).
+
+| game | authoring | sees gameplay | Jev play |
+|---|---|---|---|
+| tic-tac-toe | passed in round 1; one revision from a play log fixed its move rules | yes: every board read right | 20 games: 5 won, 6 tied, 9 lost (the page's own scoreboard) |
+| snake | passed after 4 rounds; two revisions from play logs | its tests do, but it has no head or food read | starts the Slug level, never steers |
+| dino | passed after 3 rounds; one revision | yes: the obstacle grid in front of the dino | restarts each run, dies at the first or second cactus (scores 17–44) |
+
+What had to change for authoring to work at all:
+
+1. **The probe never reached gameplay.** It tapped a fixed 3x3 grid and pressed keys, kept the first four frames
+   that differed, and on playsnake.org all four were the level menu. It now presses keys first, then taps the
+   labels and buttons a person would (word-sized shapes, top to bottom, following a new screen's labels), watches a
+   screen that moves on its own and keeps pressing keys, and picks the start frame, then gameplay frames, then the
+   most different rest. On chromedino.com its taps hit ads and the author was handed four frames of other sites; a
+   navigation now sends it back and the frames are dropped.
+2. **X and O are the same white.** A colour read saw both as X. `hollow: O` on a `stat: accent` read returns O when
+   the glyph's middle is background. Grid accent reads also found the background wrongly when a large glyph
+   touched the inset edge.
+3. **Tests flipped between rounds.** The pack check, and `anygame eval`, shared a background OCR worker, so a read
+   with `every: 4` came back null on some frames. The author bent its expectations to the nulls each round. Both now
+   run every read on every frame (this also makes the bundled 2048 and 2048gb packs pass `eval`).
+4. **A pack crashed the loop.** The dino pack wrote `only: [start]`; it loaded and passed its tests, then crashed on
+   the first tick. Malformed `only`, `avoid`, `set` and `exclude` are now refused at load, so the author fixes them.
+5. **The best pack was picked wrongly.** Two plays that both ended without a win or loss tied, and the tune step
+   kept the one that had stalled on its first move. Ties now go to the pack that made more decisions.
+   `author --resume` revises the pack already in `--out` without probing or writing anew.
+
+What is still wrong:
+
+- **Passing its own tests says little about play.** The snake pack passes all five tests and keys its whole state
+  off OCR of the overlay text (`GAME OUER!`, `000`), acts only while the overlay reads `Go!`, and has a 15x10 grid
+  on a board of about 21x15 cells. Two play-log revisions got it to start the level but not to steer.
+- **Tic-tac-toe loses to timing**, as the hand-written pack did: the page has no turn indicator, so taps during
+  the computer's move are ignored. The revision did not slow the pack down.
+- **Dino is too fast for a 350 ms decision**, as before, and the authored pack presses Space whenever an obstacle
+  is anywhere in its grid rather than at a distance.
+- **The sites change.** chromedino.com served three different layouts in one hour, one with an ad banner that kept
+  the game from starting during a revision's play run.
