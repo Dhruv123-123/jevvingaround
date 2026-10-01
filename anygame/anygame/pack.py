@@ -221,6 +221,12 @@ def load_pack(path: str | os.PathLike, _allow_no_tests: bool = False) -> Pack:
             raise PackError(f"{p}: rule needs if: {{noul, gte|lte}} or if: {{read, equals|in|not|gte|lte}}")
         if not any(k in rl for k in ("exclude", "set", "avoid", "only")):
             raise PackError(f"{p}: rule needs 'exclude: [actions]', 'set: {{param_question: from_question}}', 'avoid: {{param_question: read}}' or 'only: {{param_question: read}}'")
+        for k in ("set", "avoid", "only"):
+            if k in rl and not isinstance(rl[k], dict):
+                raise PackError(f"{p}: rule {k}: must map a parameter question to a read ({k}: {{<action>__cell: <read>}}), got {rl[k]!r}"
+                                + ("; to allow only some actions, exclude the others with exclude: [actions]" if k == "only" else ""))
+        if "exclude" in rl and not isinstance(rl["exclude"], list):
+            raise PackError(f"{p}: rule exclude: must be a list of action ids, got {rl['exclude']!r}")
     tests = raw.get("tests") or []
     if not tests and not _allow_no_tests:
         raise PackError(f"{p}: a pack without tests is refused; add at least one frame under 'tests'")
