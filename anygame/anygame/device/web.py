@@ -19,13 +19,17 @@ class WebDevice(Device):
         kwargs = {"headless": True, "args": ["--no-sandbox"]}
         if exe:
             kwargs["executable_path"] = exe
+        proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
+        if proxy and not url.startswith(("file:", "/", ".")) and "://" in url:      # Chromium ignores the proxy env vars
+            kwargs["proxy"] = {"server": proxy}
         self._browser = self._pw.chromium.launch(**kwargs)
         self._page = self._browser.new_page(viewport={"width": size[0], "height": size[1]}, device_scale_factor=1)
         self._size = size
         self._state_js = None
         if "#state=" in url:
             url, self._state_js = url.split("#state=", 1)
-        self._page.goto(url if "://" in url else "file://" + os.path.abspath(url))
+        self._url = url if "://" in url else "file://" + os.path.abspath(url)
+        self._page.goto(self._url)
         self._page.wait_for_load_state("load")
 
     def size(self):
@@ -62,6 +66,17 @@ class WebDevice(Device):
         w, h = self.size()
         self._mx, self._my = max(0, min(w - 1, self._mx)), max(0, min(h - 1, self._my))
         self._page.mouse.move(self._mx, self._my, steps=max(2, int(np.hypot(dx, dy) // 8)))
+
+    def back_if_navigated(self) -> bool:
+        """A tap that followed a link left the game: go back to it. True when it had to."""
+        if self._page.url.split("#")[0] == self._url.split("#")[0]:
+            return False
+        try:
+            self._page.goto(self._url)
+            self._page.wait_for_load_state("load")
+        except Exception:  # noqa: BLE001
+            pass
+        return True
 
     def reload(self):
         """Reload the page: the cheapest restart for a browser game between episodes."""

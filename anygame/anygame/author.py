@@ -140,53 +140,159 @@ def palette(frame: np.ndarray, k: int = 14) -> list[dict[str, Any]]:
     return sorted(out, key=lambda d: -d["share"])
 
 
-def probe(device, out_dir: Path, n: int = 4, keys: bool = True) -> list[Path]:
-    """Frames from a short exploration: the start, then after taps and keys, keeping only frames that differ."""
+def _gray(f: np.ndarray, side: int = 128) -> np.ndarray:
+    return cv2.cvtColor(cv2.resize(f, (side, side), interpolation=cv2.INTER_AREA), cv2.COLOR_BGR2GRAY).astype(np.int16)
+
+
+def changed(a: np.ndarray, b: np.ndarray) -> float:
+    """Fraction of a 128x128 grey thumbnail that differs between two frames (0 = same screen)."""
+    return float((np.abs(_gray(a) - _gray(b)) > 24).mean())
+
+
+def targets(frame: np.ndarray, cap: int = 12) -> list[tuple[int, int]]:
+    """Centres of word- and button-sized things on the screen (menu entries, Play buttons), top to bottom.
+    A start menu is a few labels on a plain background; tapping them is how a person gets into the game."""
+    h, w = frame.shape[:2]
+    edges = cv2.Canny(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), 60, 160)
+    merged = cv2.dilate(edges, cv2.getStructuringElement(cv2.MORPH_RECT, (9, 3)))
+    n, _, stats, _ = cv2.connectedComponentsWithStats(merged)
+    out = []
+    for x, y, bw, bh, area in stats[1:n]:
+        if not (16 <= bw <= 0.5 * w and 8 <= bh <= 0.15 * h and area >= 60):
+            continue
+        cx, cy = int(x + bw / 2), int(y + bh / 2)
+        if (cx < 0.12 * w or cx > 0.88 * w) and (cy < 0.12 * h or cy > 0.88 * h):
+            continue        # corner icons are settings, links and sound toggles, not the game
+        out.append((cy, cx))
+    return [(x, y) for y, x in sorted(out)][:cap]
+
+
+LIVE = 0.004        # a screen that changes this much in half a second with no input is a game in motion
+MOVED = 0.01        # an input that changes this much of the screen did something
+
+
+def probe(device, out_dir: Path, n: int = 4, keys: bool = True, seconds: float = 45, log=lambda m: None) -> list[Path]:
+    """Frames from a short exploration that gets past the start menu: tap the labels and buttons a person would,
+    then the grid, then keys; once the screen moves on its own the game is running, so keep pressing keys and keep
+    those frames. Returns n frames: the start screen, gameplay frames (at least half when there are any), then the
+    most different of the rest. fixtures/probe.json says what led to each frame and whether it was in motion, so the
+    author knows which frames are gameplay and the tests cover it rather than the menu."""
     from .loop import stable_hash
     out_dir.mkdir(parents=True, exist_ok=True)
     w, h = device.size()
-    frames: list[Path] = []
+    t_end = time.time() + seconds
+    cands: list[dict[str, Any]] = []
     seen: set[str] = set()
 
-    def keep():
-        f = device.frame()
+    def keep(f: np.ndarray, note: str, live: bool, played: bool = False) -> None:
         hsh = stable_hash(cv2.resize(f, (64, 64)).tolist())
-        if hsh in seen or len(frames) >= n:
+        if hsh in seen or any(changed(f, c["frame"]) < 0.002 for c in cands):
             return
         seen.add(hsh)
-        p = out_dir / f"probe-{len(frames) + 1}.png"
-        cv2.imwrite(str(p), f)
-        frames.append(p)
+        cands.append({"frame": f, "note": note, "live": live, "played": played, "order": len(cands)})
 
-    time.sleep(0.5)
-    keep()
-    # after every input, look twice: right away (a transient state such as the opponent's turn) and once settled
-    moves = [("tap", w // 2, h // 2), ("tap", w // 4, h // 2), ("tap", 3 * w // 4, h // 2), ("tap", w // 2, h // 4), ("tap", w // 2, 3 * h // 4),
-             ("tap", w // 4, h // 4), ("tap", 3 * w // 4, 3 * h // 4), ("tap", w // 4, 3 * h // 4), ("tap", 3 * w // 4, h // 4)]
-    for m in moves:
-        if len(frames) >= n:
-            break
-        try:
-            device.tap(m[1], m[2])
-        except Exception:  # noqa: BLE001
-            break
-        time.sleep(0.12)
-        keep()
-        time.sleep(0.8)
-        keep()
-    if keys:
-        for k in ("ArrowLeft", "ArrowUp", "ArrowRight", "ArrowDown", "Space"):
-            if len(frames) >= n:
-                break
-            try:
+    def act(inp: tuple) -> None:
+        if inp[0] == "tap":
+            device.tap(inp[1], inp[2])
+        else:
+            device.key(inp[1])
+        back = getattr(device, "back_if_navigated", None)
+        if back and back():
+            log(f"probe: {inp} left the page; went back")
+
+    def say(inp: tuple) -> str:
+        return f"tap at ({inp[1]}, {inp[2]})" if inp[0] == "tap" else f"key {inp[1]}"
+
+    def run_while_live(first: np.ndarray, how: str) -> None:
+        """The game is running: watch it briefly (a countdown ends, play begins), then keep it busy with keys and
+        keep frames until it stops moving (the game ended). Frames after the first key are the surest gameplay."""
+        prev, still = first, 0
+        plan = [None] * 3 + ["ArrowRight", "ArrowDown", "ArrowLeft", "ArrowUp", "Space"] * 4
+        for i, k in enumerate(plan):
+            if time.time() > t_end:
+                return
+            if k and keys:
                 device.key(k)
-            except Exception:  # noqa: BLE001
+            time.sleep(0.35)
+            f = device.frame()
+            moving = changed(prev, f) > LIVE
+            pressed = sum(1 for x in plan[:i + 1] if x)
+            keep(f, (f"gameplay: in motion, {pressed} keys after {how}" if pressed else f"in motion with no input, {0.35 * (i + 1):.1f} s after {how}")
+                 if moving else f"after {how} and {pressed} keys, the screen stopped moving (a game over, or a pause)", moving, played=moving and pressed > 0)
+            still = 0 if moving else still + 1
+            if still >= 2:
+                return
+            prev = f
+
+    time.sleep(0.8)
+    start = device.frame()
+    keep(start, "the page as loaded, before any input", False)
+    grid = [(w // 2, h // 2), (w // 4, h // 2), (3 * w // 4, h // 2), (w // 2, h // 4), (w // 2, 3 * h // 4),
+            (w // 4, h // 4), (3 * w // 4, 3 * h // 4), (w // 4, 3 * h // 4), (3 * w // 4, h // 4)]
+    queue: list[tuple] = [("tap", x, y) for x, y in targets(start)] + [("tap", x, y) for x, y in grid]
+    if keys:
+        queue += [("key", k) for k in ("Enter", "Space", "ArrowUp", "ArrowRight", "ArrowDown", "ArrowLeft")]
+    done: set[tuple] = set()
+    went_live = False
+    while queue and time.time() < t_end and len(done) < 40:
+        inp = queue.pop(0)
+        if inp in done:
+            continue
+        done.add(inp)
+        before = device.frame()
+        try:
+            act(inp)
+        except Exception:  # noqa: BLE001
+            continue
+        time.sleep(0.15)
+        f1 = device.frame()
+        time.sleep(0.5)
+        f2 = device.frame()
+        live = changed(f1, f2) > LIVE
+        did = max(changed(before, f1), changed(before, f2)) > MOVED
+        keep(f1, f"just after {say(inp)}" + (" (screen in motion)" if live else ""), live)
+        keep(f2, f"half a second after {say(inp)}" + (" (screen in motion)" if live else ""), live)
+        if live:
+            went_live = True
+            run_while_live(f2, say(inp))
+        elif did and inp[0] == "tap":
+            # a new screen (a submenu, a level picker): its labels come next
+            queue = [("tap", x, y) for x, y in targets(f2) if ("tap", x, y) not in done] + queue
+    live_c = [c for c in cands if c["live"]]
+    log(f"probe: {len(cands)} distinct frames, {len(live_c)} with the game in motion" + ("" if went_live else " (the screen never moved on its own: a turn-based game, or the game never started)"))
+
+    def spread(pool: list[dict[str, Any]], chosen: list[dict[str, Any]], k: int) -> list[dict[str, Any]]:
+        ids = {c["order"] for c in chosen}
+        pool = [c for c in pool if c["order"] not in ids]
+        for _ in range(k):
+            if not pool:
                 break
-            time.sleep(0.12)
-            keep()
-            time.sleep(0.8)
-            keep()
+            best = max(pool, key=lambda c: min((changed(c["frame"], d["frame"]) for d in chosen), default=1.0))
+            chosen.append(best)
+            pool = [c for c in pool if c["order"] != best["order"]]
+        return chosen
+
+    chosen = [cands[0]]
+    if live_c:          # gameplay first: frames in motion after a key, then any in motion (a countdown is in motion too)
+        chosen = spread([c for c in live_c if c["played"]], chosen, max(1, n // 2))
+        chosen = spread(live_c, chosen, max(0, max(1, n // 2) + 1 - len(chosen)))
+    chosen = spread(cands, chosen, n - len(chosen))
+    chosen.sort(key=lambda c: c["order"])
+    frames, meta = [], []
+    for i, c in enumerate(chosen, 1):
+        p = out_dir / f"probe-{i}.png"
+        cv2.imwrite(str(p), c["frame"])
+        frames.append(p)
+        meta.append({"frame": f"fixtures/{p.name}", "note": c["note"], "gameplay": c["live"]})
+    (out_dir / "probe.json").write_text(json.dumps(meta, indent=1))
     return frames
+
+
+def probe_notes(fixtures: Path) -> list[dict[str, Any]]:
+    try:
+        return json.loads((fixtures / "probe.json").read_text())
+    except (OSError, json.JSONDecodeError):
+        return []
 
 
 def _b64(img: np.ndarray) -> str:
@@ -378,24 +484,30 @@ def author(device_url: str, game: str, out: Path, play: str | None = None, round
     else:
         dev = open_device(device_url, size)
         try:
-            frames = probe(dev, fixtures, n=frames_n, keys=device_url.startswith("web://"))
+            frames = probe(dev, fixtures, n=frames_n, keys=device_url.startswith("web://"), log=log)
         finally:
             dev.close()
         log(f"probed {len(frames)} distinct frames into {fixtures}")
     w, h = size
+    notes = probe_notes(fixtures)
     au = Author(model=model)
     parts: list[dict[str, Any]] = [{"type": "text", "text":
         f"Game: {game}\nDevice: {device_url}\nFrame size: {w}x{h} pixels (write rect_px in these pixels).\n"
         + (f"How the user wants it played: {play}\n" if play else "")
         + (f"\nThe frames fixtures/probe-1.png … fixtures/probe-{len(frames)}.png are sampled from a demonstration of someone playing (details below)." if demo is not None else
-           f"\nProbe frames are fixtures/probe-1.png … fixtures/probe-{len(frames)}.png, in order: the start screen, then after "
-           "taps at the centre / left / right / top / bottom and arrow keys.")
+           f"\nProbe frames are fixtures/probe-1.png … fixtures/probe-{len(frames)}.png, from a short exploration that tapped the "
+           "menu labels and pressed keys. What led to each frame, and whether the game was in motion (gameplay), is said with "
+           "each frame. Gameplay frames are what the pack plays on: their reads and tests matter most. Menu or game-over "
+           "frames need a read that tells them apart from play (for act_when/stop_when) and, for a menu, an action that "
+           "starts the game (the tap or key that left it).")
         + " Each is shown twice: raw, then with a 50 px grid.\n" + demo_text
         + FORMAT + "\n\n" + examples_text()}]
     for i, f in enumerate(frames, 1):
         img = cv2.imread(str(f))
         pal = palette(img)
-        parts.append({"type": "text", "text": f"--- fixtures/probe-{i}.png raw, then with grid. Dominant colours (median hex, share, bbox px): {json.dumps(pal)}"})
+        note = next((m for m in notes if m.get("frame") == f"fixtures/{f.name}"), None)
+        what = f" ({note['note']}; {'GAMEPLAY' if note['gameplay'] else 'not in motion'})" if note else ""
+        parts.append({"type": "text", "text": f"--- fixtures/probe-{i}.png{what} raw, then with grid. Dominant colours (median hex, share, bbox px): {json.dumps(pal)}"})
         parts.append({"type": "image_url", "image_url": {"url": _b64(img)}})
         parts.append({"type": "image_url", "image_url": {"url": _b64(grid_overlay(img))}})
     parts.extend(demo_parts)
