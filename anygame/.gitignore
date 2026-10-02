@@ -8,3 +8,4 @@ rec-*/
 dist/
 ext/anygame-extension.zip
 build/
+runs/
