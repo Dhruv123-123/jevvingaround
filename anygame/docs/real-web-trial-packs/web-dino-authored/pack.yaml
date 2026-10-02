@@ -1,0 +1,276 @@
+game: chrome dino runner
+screen: { orientation: portrait, size: [540, 560] }
+
+zones:
+  board:  { rect_px: [0, 100, 540, 350], grid: [27, 14] }
+  detail: { rect_px: [0, 100, 540, 350], grid: [54, 28] }
+  text:   { rect_px: [90, 130, 450, 235] }
+  score:  { rect_px: [365, 135, 535, 170] }
+  ground_hazards: { rect_px: [120, 215, 540, 335], grid: [21, 6] }
+  overhead_hazards: { rect_px: [120, 145, 540, 225], grid: [21, 4] }
+
+read:
+  ink:
+    kind: color
+    zone: board
+    inset: 0.12
+    max_dist: 60
+    otherwise: "."
+    as: matrix
+    options:
+      ".": "#f6f6f6"
+      "#": "#545555"
+
+  fine_ink:
+    kind: color
+    zone: detail
+    inset: 0.18
+    max_dist: 60
+    otherwise: "."
+    as: matrix
+    options:
+      ".": "#f6f6f6"
+      "#": "#545555"
+
+  canvas_text:
+    kind: ocr
+    zone: text
+    every: 1
+
+  score:
+    kind: ocr
+    zone: score
+    parse: int
+    every: 1
+
+  ground_cells:
+    kind: color
+    zone: ground_hazards
+    inset: 0.15
+    max_dist: 60
+    otherwise: "."
+    as: matrix
+    options:
+      ".": "#f6f6f6"
+      "#": "#545555"
+
+  overhead_cells:
+    kind: color
+    zone: overhead_hazards
+    inset: 0.15
+    max_dist: 60
+    otherwise: "."
+    as: matrix
+    options:
+      ".": "#f6f6f6"
+      "#": "#545555"
+
+  ground_obstacle:
+    kind: locate
+    in: ground_cells
+    symbol: "#"
+    many: true
+
+  overhead_obstacle:
+    kind: locate
+    in: overhead_cells
+    symbol: "#"
+    many: true
+
+act:
+  - { id: start, kind: key, key: Space, description: "start the runner from the initial screen" }
+  - { id: jump, kind: key, key: Space, description: "jump over an approaching ground obstacle" }
+  - { id: duck, kind: key, key: ArrowDown, hold_ms: 250, description: "duck under an approaching overhead obstacle" }
+  - { id: keep, kind: wait, description: "keep running when no obstacle requires a response" }
+
+tick_hz: 4
+settle: screen_change
+
+act_when:
+  read: canvas_text
+  not: in
+  values:
+    - "GAME yer 山"
+    - "HI tb000 GAME 口 EP R"
+    - "GAME DYE ER"
+
+stop_when:
+  read: canvas_text
+  in:
+    - "GAME yer 山"
+    - "HI tb000 GAME 口 EP R"
+    - "GAME DYE ER"
+
+play: >
+  The dino runs automatically. `score` distinguishes the untouched initial screen (0) from a run after
+  the first score appears. Use `start` only while score is 0. During play, `ground_obstacle` lists dark
+  cells in the forward ground-hazard zone and `overhead_obstacle` lists dark cells in the forward
+  overhead-hazard zone. Jump when a ground obstacle is listed, duck when an overhead obstacle is listed,
+  and keep only when both lists are empty. Do not repeatedly press Space: after the run has started,
+  Space is reserved for an actual ground obstacle. Game-over text stops the run.
+
+questions:
+  - id: ground_obstacle_ahead
+    type: noul
+    instructions: Is ground_obstacle non-empty, showing a ground obstacle in the forward hazard zone?
+    criteria:
+      true: "At least one forward ground-hazard cell is occupied; jump."
+      false: "The forward ground-hazard zone is clear."
+
+  - id: overhead_obstacle_ahead
+    type: noul
+    instructions: Is overhead_obstacle non-empty, showing an overhead obstacle in the forward hazard zone?
+    criteria:
+      true: "At least one forward overhead-hazard cell is occupied; duck."
+      false: "The forward overhead-hazard zone is clear."
+
+  - id: action
+    type: choice
+    instructions: Choose start only at score 0, jump for a listed ground obstacle, duck for a listed overhead obstacle, and keep when both hazard lists are empty.
+    criteria:
+      start: "Start the untouched runner."
+      jump: "Jump now."
+      duck: "Duck now."
+      keep: "Keep running."
+
+rules:
+  - { if: { read: score, equals: 0 }, exclude: [jump, duck, keep] }
+  - { if: { read: score, gte: 1 }, exclude: [start] }
+
+  - { if: { noul: ground_obstacle_ahead, gte: 0.6 }, exclude: [duck, keep, start] }
+  - { if: { noul: ground_obstacle_ahead, lte: 0.4 }, exclude: [jump] }
+
+  - { if: { noul: overhead_obstacle_ahead, gte: 0.6 }, exclude: [jump, keep, start] }
+  - { if: { noul: overhead_obstacle_ahead, lte: 0.4 }, exclude: [duck] }
+
+  - { if: { read: canvas_text, in: ["GAME yer 山", "HI tb000 GAME 口 EP R", "GAME DYE ER"] }, exclude: [jump, duck, keep] }
+
+tasks:
+  - id: begin_run
+    instruction: "Start the dino runner."
+    category: survive
+    done: { read: score, gte: 1 }
+    when: { read: score, equals: 0 }
+    limit_ticks: 12
+
+  - id: survive_run
+    instruction: "Keep running and respond only to listed hazards."
+    category: survive
+    done:
+      read: canvas_text
+      not: in
+      values: ["GAME yer 山", "HI tb000 GAME 口 EP R", "GAME DYE ER"]
+    hold_ticks: 40
+    limit_ticks: 100
+
+  - id: reach_score
+    instruction: "Keep the run alive until the score reaches 50."
+    category: score
+    done: { read: score, gte: 50 }
+    when: { read: score, gte: 1 }
+    limit_ticks: 180
+
+  - id: restart_run
+    instruction: "Start a fresh run after a collision."
+    category: survive
+    done: { read: score, gte: 1 }
+    when:
+      read: canvas_text
+      in: ["GAME yer 山", "HI tb000 GAME 口 EP R", "GAME DYE ER"]
+    limit_ticks: 12
+
+tests:
+  - frame: fixtures/probe-1.png
+    expect:
+      ink:
+        - "..........................."
+        - "..........................."
+        - "..........................."
+        - "..........................."
+        - "..........................."
+        - "..........................."
+        - "..........................."
+        - ".#........................."
+        - ".#........................."
+        - "..........................."
+        - "..........................."
+        - "..........................."
+        - "..........................."
+        - "..........................."
+      canvas_text: ""
+
+  - frame: fixtures/probe-2.png
+    expect:
+      ink:
+        - "..........................."
+        - "..........................."
+        - "..........................."
+        - "..........................."
+        - ".............#............."
+        - "....#........#............."
+        - "...#............#.........."
+        - "..........................."
+        - "..........................."
+        - "..........................."
+        - "..........................."
+        - "..........................."
+        - "..........................."
+        - "..........................."
+      canvas_text: "GAME yer 山"
+
+  - frame: fixtures/probe-3.png
+    expect:
+      ink:
+        - "..........................."
+        - "..........................."
+        - "..........................."
+        - "..........................."
+        - "..........................."
+        - "..........................."
+        - "..........................."
+        - "..........................."
+        - "..........................."
+        - "............###............"
+        - "......##....###.........#.."
+        - ".....###................#.."
+        - "....##.#................#.."
+        - "..........................."
+      canvas_text: "HI tb000 GAME 口 EP R"
+
+  - frame: fixtures/probe-4.png
+    expect:
+      ink:
+        - "..........................."
+        - "..........................."
+        - "..........................."
+        - "......#...................."
+        - ".....#....................."
+        - "....##....................."
+        - "..........................."
+        - "..........................."
+        - "..........................."
+        - "..........................."
+        - ".#.....................#..."
+        - "##.....................#..."
+        - ".......................#..."
+        - "..........................."
+      canvas_text: "HI 00044"
+
+  - frame: fixtures/probe-5.png
+    expect:
+      ink:
+        - "..........................."
+        - "..........................."
+        - "..........................."
+        - "..........................."
+        - "..........................."
+        - "..........................."
+        - "............###............"
+        - "............###............"
+        - ".....###....###............"
+        - ".....###..................."
+        - "....##.#..................."
+        - "..........................."
+        - "..........................."
+        - "..........................."
+      canvas_text: "GAME DYE ER"

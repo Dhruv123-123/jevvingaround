@@ -1,0 +1,39 @@
+game: web-dino
+site: chromedino.com
+# Hand-written for the real-web trial (2026-10-01). The game moves ~360 px/s at the start and Jev takes ~350 ms,
+# so a cactus crosses most of the screen while one answer comes back. The rules jump; Jev is asked every third
+# tick (budget_ms) and its last answers stand in between.
+screen: { orientation: portrait, size: [540, 560] }
+zones:
+  near:   { rect_px: [100, 242, 165, 262] }      # just ahead of the dino's nose, cactus height (a jump started further out lands on it)
+  mid:    { rect_px: [165, 242, 400, 262] }
+  far:    { rect_px: [400, 242, 540, 262] }
+  banner: { rect_px: [170, 175, 375, 195] }      # "GAME OVER"
+read:
+  near:   { kind: color, zone: near, stat: accent, min_share: 0.01, max_dist: 80, otherwise: clear, options: { clear: "#f7f7f7", cactus: "#535353" } }
+  mid:    { kind: color, zone: mid,  stat: accent, min_share: 0.01, max_dist: 80, otherwise: clear, options: { clear: "#f7f7f7", cactus: "#535353" } }
+  far:    { kind: color, zone: far,  stat: accent, min_share: 0.01, max_dist: 80, otherwise: clear, options: { clear: "#f7f7f7", cactus: "#535353" } }
+  status: { kind: color, zone: banner, stat: accent, min_share: 0.02, max_dist: 80, otherwise: running, options: { running: "#f7f7f7", over: "#535353" } }
+act:
+  - { id: jump, kind: key, key: Space, description: "jump over the cactus ahead" }
+  - { id: keep, kind: wait, description: "keep running" }
+tick_hz: 12
+budget_ms: 120
+budget_skip_max: 6         # ask Jev every 7th tick: a blocking call costs ~120 px of cactus travel
+stop_when: { read: status, equals: over }
+play: >
+  The Chrome dinosaur runs right; cacti come from the right. `near` is the ground just ahead of the dino, `mid`
+  and `far` further out. Jump when a cactus is `near`; keep running otherwise. A jump started while the cactus is
+  still `mid` lands on it, so wait for `near`.
+questions:
+  - id: cactus_near
+    type: noul
+    instructions: Is `near` cactus?
+    criteria: { true: "near is cactus.", false: "near is clear." }
+rules:
+  - { if: { read: near, equals: cactus }, exclude: [keep] }
+tests:
+  - frame: fixtures/running.png
+    expect: { near: clear, mid: clear, status: running }
+  - frame: fixtures/over.png
+    expect: { near: cactus, status: over }

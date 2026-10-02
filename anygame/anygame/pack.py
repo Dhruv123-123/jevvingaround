@@ -7,7 +7,7 @@ from typing import Any
 import yaml
 from .geometry import Rect, Zone
 
-READ_KINDS = {"bar", "templates", "ocr", "vocab", "blobs", "color", "locate", "runs", "around", "tetris", "json", "json_grid", "predict", "margin"}
+READ_KINDS = {"bar", "templates", "ocr", "vocab", "blobs", "color", "locate", "runs", "around", "tetris", "json", "json_grid", "predict", "margin", "head"}
 QUESTION_TYPES = {"noul", "choice", "score"}
 
 
@@ -179,6 +179,9 @@ def load_pack(path: str | os.PathLike, _allow_no_tests: bool = False) -> Pack:
         elif r.get("kind") == "predict":
             if r.get("of") not in reads or not reads[r["of"]].get("history"):
                 raise PackError(f"{p}: read '{rid}': predict needs 'of' (a locate read with history: 1)")
+        elif r.get("kind") == "head":
+            if r.get("in") not in reads:
+                raise PackError(f"{p}: read '{rid}': head needs 'in' (a grid read) and 'symbol' (the body's symbol)")
         elif r.get("kind") == "json_grid":
             if "cols" not in r or "rows" not in r or not isinstance(r.get("symbols"), dict):
                 raise PackError(f"{p}: read '{rid}': json_grid needs cols, rows and symbols: {{<char>: {{path, index|slice}}}}")
@@ -224,6 +227,12 @@ def load_pack(path: str | os.PathLike, _allow_no_tests: bool = False) -> Pack:
             raise PackError(f"{p}: rule 'unless' needs {{read, equals|in|not|gte|lte}}: the rule does not apply when it holds")
         if not any(k in rl for k in ("exclude", "set", "avoid", "only")):
             raise PackError(f"{p}: rule needs 'exclude: [actions]', 'set: {{param_question: from_question}}', 'avoid: {{param_question: read}}' or 'only: {{param_question: read}}'")
+        for k in ("set", "avoid", "only"):
+            if k in rl and not isinstance(rl[k], dict):
+                raise PackError(f"{p}: rule {k}: must map a parameter question to a read ({k}: {{<action>__cell: <read>}}), got {rl[k]!r}"
+                                + ("; to allow only some actions, exclude the others with exclude: [actions]" if k == "only" else ""))
+        if "exclude" in rl and not isinstance(rl["exclude"], list):
+            raise PackError(f"{p}: rule exclude: must be a list of action ids, got {rl['exclude']!r}")
     tests = raw.get("tests") or []
     if not tests and not _allow_no_tests:
         raise PackError(f"{p}: a pack without tests is refused; add at least one frame under 'tests'")

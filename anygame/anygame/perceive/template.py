@@ -41,9 +41,14 @@ def read(frame, rect, zone, r, assets_dir):
     if zone and zone.grid:
         out = {}
         h, w = frame.shape[:2]
+        inset = float(r.get("inset", 0))          # drop the grid lines at a cell's edge before matching
         for name, cr in zone.cells().items():
-            label, score = _best(crop(frame, cr), assets, thr)
-            out[name.split(".", 1)[1]] = label
+            cell = crop(frame, cr)
+            if inset:
+                m = int(inset * min(cell.shape[:2]))
+                cell = cell[m:cell.shape[0] - m, m:cell.shape[1] - m]
+            label, score = _best(cell, assets, thr)
+            out[name.split(".", 1)[1]] = label if label else r.get("otherwise")   # e.g. "." so `runs` and `locate` see empty cells
             if label:
                 dets.append({"label": label, "conf": score, "rect": cr.px(w, h)})
         return out, dets
