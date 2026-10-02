@@ -62,6 +62,34 @@ function play(b: B, p: string, col: string, other: string, w: number, h: number,
   return libs.size ? { nb, taken, libs: libs.size } : null;
 }
 
+// The chain at p is in atari and its owner moves: extend, or capture an attacking chain in atari; three liberties is
+// safe, two means the attacker reads on. Same as _respond in go.py.
+function respond(b: B, p: string, att: string, dfn: string, w: number, h: number, empty: string, depth: number): boolean {
+  const [st, lb] = group(b, p, w, h, empty);
+  const moves = new Set(lb);
+  for (const s of st) for (const n of nbrs(s, w, h)) if (b.get(n) === att) { const [, alb] = group(b, n, w, h, empty); if (alb.size === 1) alb.forEach(x => moves.add(x)); }
+  for (const m of moves) {
+    const res = play(b, m, dfn, att, w, h, empty);
+    if (!res) continue;
+    const libs = group(res.nb, p, w, h, empty)[1].size;
+    if (libs >= 3 || (libs === 2 && !attack(res.nb, p, att, dfn, w, h, empty, depth - 1))) return true;
+  }
+  return false;
+}
+
+// The attacker moves: can it capture the chain at p however its owner answers? Ataris only (ladders, short chases).
+function attack(b: B, p: string, att: string, dfn: string, w: number, h: number, empty: string, depth = 12): boolean {
+  if (b.get(p) !== dfn) return false;
+  const [, lb] = group(b, p, w, h, empty);
+  if (lb.size === 1) return true;
+  if (lb.size >= 3 || depth <= 0) return false;
+  for (const lib of lb) {
+    const res = play(b, lib, att, dfn, w, h, empty);
+    if (res && !respond(res.nb, p, att, dfn, w, h, empty, depth)) return true;
+  }
+  return false;
+}
+
 function isEye(b: B, p: string, col: string, w: number, h: number, empty: string): boolean {
   if (b.get(p) !== empty || nbrs(p, w, h).some(n => b.get(n) !== col)) return false;
   const [c, r] = xy(p);
@@ -104,7 +132,16 @@ export function goRead(src: any, r: ReadDef): Record<string, any> | null {
     st.forEach(x => seen.add(x));
     if (lb.size === 1) st.forEach(x => (v === us ? ourAtari : theirAtari).add(x));
   }
-  const legal: string[] = [], good: string[] = [], captures: string[] = [], saves: string[] = [], selfAtari: string[] = [], eyes: string[] = [];
+  // chains white can capture by moving first (a ladder or a chase): ours on two liberties that do not get away
+  const danger = new Set<string>(), chased: [string, Set<string>][] = [];
+  seen.clear();
+  for (const p of order) {
+    if (b.get(p) !== us || seen.has(p)) continue;
+    const [st, lb] = group(b, p, w, h, empty);
+    st.forEach(x => seen.add(x));
+    if (lb.size === 2 && attack(b, p, them, us, w, h, empty)) { st.forEach(x => danger.add(x)); chased.push([p, st]); }
+  }
+  const legal: string[] = [], good: string[] = [], captures: string[] = [], saves: string[] = [], selfAtari: string[] = [], eyes: string[] = [], doomed: string[] = [];
   const takenBy: Record<string, number> = {}, worth: Record<string, number> = {};
   const [eu0, et0] = estimate(b, us, them);
   for (const p of order) {
@@ -113,11 +150,13 @@ export function goRead(src: any, r: ReadDef): Record<string, any> | null {
     if (!res) continue;
     legal.push(p);
     if (res.taken) { captures.push(p); takenBy[p] = res.taken; }
-    if (res.libs >= 2 && nbrs(p, w, h).some(n => ourAtari.has(n))) saves.push(p);
+    const dies = res.libs === 2 && attack(res.nb, p, them, us, w, h, empty);
+    if (res.libs >= 2 && !dies && nbrs(p, w, h).some(n => ourAtari.has(n))) saves.push(p);
     const eye = isEye(b, p, us, w, h, empty);
     if (eye) eyes.push(p);
     const sa = res.libs === 1 && !res.taken;
     if (sa) selfAtari.push(p);
+    if (dies && !res.taken && !sa) doomed.push(p);
     if (!eye && !sa) {
       good.push(p);
       const [eu, et] = estimate(res.nb, us, them);
@@ -125,11 +164,16 @@ export function goRead(src: any, r: ReadDef): Record<string, any> | null {
       const atariNbrs = new Set(nbrs(p, w, h).filter(n => ourAtari.has(n)));
       const counted = new Set<string>();
       for (const n of atariNbrs) if (!counted.has(n)) { const [st] = group(b, n, w, h, empty); st.forEach(x => counted.add(x)); v += 2 * st.size; }
-      if (res.libs === 2) v -= group(res.nb, p, w, h, empty)[0].size;
+      const mine = group(res.nb, p, w, h, empty)[0];
+      if (dies) v -= 2 * mine.size + 5;
+      for (const [q, st3] of chased)
+        if ((res.taken || nbrs(p, w, h).some(n => st3.has(n))) && !attack(res.nb, q, them, us, w, h, empty)) v += 2 * st3.size + 4;
+      const hit = new Set<string>();
       for (const n of nbrs(p, w, h)) {
-        if (res.nb.get(n) !== them) continue;
+        if (res.nb.get(n) !== them || hit.has(n)) continue;
         const [st2, lb2] = group(res.nb, n, w, h, empty);
-        if (lb2.size === 1 && res.libs >= 2) v += st2.size;
+        st2.forEach(x => hit.add(x));
+        if (lb2.size === 1 && !dies) v += respond(res.nb, n, us, them, w, h, empty, 12) ? 0.5 * st2.size : 2 * st2.size;
       }
       worth[p] = Math.round(v * 10) / 10;
     }
@@ -140,7 +184,7 @@ export function goRead(src: any, r: ReadDef): Record<string, any> | null {
   return {
     legal, good, captures, saves, self_atari: selfAtari, eyes,
     urgent: [...captures, ...saves.filter(c => !captures.includes(c))],
-    our_atari: byPos(ourAtari), their_atari: byPos(theirAtari),
+    our_atari: byPos(ourAtari), their_atari: byPos(theirAtari), danger: byPos(danger), doomed,
     moves_left: good.length, captured_by_move: takenBy,
     best, worth: Object.fromEntries(best.map(k => [k, worth[k]])),
     estimate: { us: eu0, them: et0 + komi, lead: eu0 - et0 - komi },

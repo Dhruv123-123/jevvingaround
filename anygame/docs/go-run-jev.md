@@ -24,6 +24,8 @@ anygame now plays Go on a 9x9 board: `games/go.html`, `packs/go`, and a `go` com
 | v1 | random | 2 | 6 | $0 |
 | v2: plus top-6 ranked moves | Jev | 6 | 2 | $0.029 |
 | v2 | random | 3 | 5 | $0 |
+| v3: plus ladder reading | Jev | 8 | 0 | $0.036 |
+| v3 | random | 5 | 3 | $0 |
 
 v1 losses: three games ended 0 to 87.5. Jev drew lines through its own area (c5r1..c5r9, then row 1) instead of
 claiming space, and white captured 54 to 62 stones. v2 wins by 2.5 to 74.5 points; its two losses (seeds 5 and 7)
@@ -34,6 +36,12 @@ legal to the stateless compiler, the page refuses it, and the loop kept offering
 refused tap only from questions that existed before it built the grid-cell question, so a tap on an auto-generated
 cell question was never dropped. Fixed in `loop.py` and `ext/src/core/loop.ts` (this would also have hit a full
 Connect Four column); the v2 numbers above are after the fix.
+
+v3 reads ataris to the end (ladders and short chases, up to 12 moves): `danger` lists our chains white can chase
+down if it moves first, a move whose chain white could then chase down is `doomed` and rated far down, a move that
+gets a danger chain away earns its stones, and an atari white cannot escape counts double. Jev won all 8, four of
+them by wiping white off the board (81 to 6.5); white captured at most 3 stones in any game. Perception stayed at
+0 wrong reads on 852 acting ticks; the whole read, ladders included, takes 51 ms median per tick (77 ms p95).
 
 ## Perception
 
@@ -47,8 +55,7 @@ Jev latency: median 336 ms, p95 608 ms per call (394 calls in v2). About 46 deci
 
 ## What would move it next
 
-- Two-move reading: the losses are two-liberty chains that a ladder or a net catches. A `danger` list (our chains
-  white can atari next move with no escape) and a ladder check in the compiler would remove those.
+- Done in v3: ladder reading.
 - A stronger opponent (a few hundred Monte Carlo playouts in the page) to keep the benchmark meaningful once Jev
   wins every game against the heuristic.
 - The first-run lesson matches Tetris: Jev chooses well among a short ranked list and poorly among 60 flat options.

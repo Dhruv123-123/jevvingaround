@@ -92,7 +92,13 @@ test("go read matches the Python compiler", () => {
 test("go worth ranks the same moves as the Python compiler", () => {
   const mid = ["BBW......", "B.W......", ".BBW.....", "..W......", ".....B...", "....WW...", "...B.....", "....B...W", ".WBW....B"];
   const v = goRead(mid, { kind: "go", komi: 6.5 });
-  assert.deepEqual(v.best, ["c6r2", "c7r2", "c7r1", "c5r2", "c8r2", "c5r3"]);
+  assert.deepEqual(v.best, ["c6r2", "c7r2", "c1r3", "c7r1", "c5r2", "c8r2"]);
   assert.equal(v.worth.c6r2, 14);
+  const deep = goRead(["BBW..B...", "B.W..W...", ".BBW..B..", "..W...W..", ".....B...", "....WW..B", "...B...W.", "....B...W", ".WBW....B"], { kind: "go", komi: 6.5 });
+  assert.deepEqual(deep.best, ["c1r3", "c2r8", "c5r1", "c3r5", "c2r6", "c1r7"]);
+  assert.equal(deep.worth.c2r8, 8.5);
+  assert.deepEqual(deep.danger, ["c1r1", "c2r1", "c6r1", "c1r2"]);
+  assert.deepEqual(deep.doomed, ["c4r1", "c9r1", "c2r2", "c4r2", "c9r7", "c8r9"]);
+  assert.deepEqual(goRead([".........", "..WW.....", ".WB......", ...Array(6).fill(".........")], { kind: "go" }).danger, ["c3r3"]);   // a ladder
   assert.deepEqual(v.estimate, { us: 21, them: 34.5, lead: -13.5 });
 });

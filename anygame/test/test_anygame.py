@@ -619,3 +619,12 @@ def test_a_refused_grid_tap_is_not_offered_again():
     first = list(a.questions(vals)["place__cell"]["criteria"])
     a.noops = [f"place→{first[0]}"]
     assert first[0] not in a.questions(vals)["place__cell"]["criteria"]
+
+
+def test_go_read_sees_a_ladder():
+    from anygame.perceive import go
+    v = go.read([".........", "..WW.....", ".WB......"] + ["........."] * 6, {})
+    assert v["danger"] == ["c3r3"]           # white ataris at c3r4 and chases it to the edge
+    mid = ["BBW..B...", "B.W..W...", ".BBW..B..", "..W...W..", ".....B...", "....WW..B", "...B...W.", "....B...W", ".WBW....B"]
+    v = go.read(mid, {"komi": 6.5})
+    assert "c9r7" in v["doomed"] and "c9r7" not in v["best"]

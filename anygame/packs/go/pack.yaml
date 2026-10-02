@@ -1,51 +1,161 @@
 game: go
-screen: { orientation: portrait, size: [540, 570] }
+screen:
+  orientation: portrait
+  size:
+  - 540
+  - 570
 zones:
-  board:  { rect_px: [18, 52, 522, 556], grid: [9, 9] }   # 56px points from (18,52), measured from the page
-  pass:   { rect_px: [14, 8, 110, 36] }
-  status: { rect_px: [376, 8, 526, 36] }
+  board:
+    rect_px:
+    - 18
+    - 52
+    - 522
+    - 556
+    grid:
+    - 9
+    - 9
+  pass:
+    rect_px:
+    - 14
+    - 8
+    - 110
+    - 36
+  status:
+    rect_px:
+    - 376
+    - 8
+    - 526
+    - 36
 read:
-  board:  { kind: color, zone: board, inset: 0.3, max_dist: 70, otherwise: ".", as: matrix,
-            options: { ".": "#dcb35c", "B": "#111827", "W": "#f8fafc" } }
-  status: { kind: color, zone: status, max_dist: 90, otherwise: their_turn,
-            options: { our_turn: "#3b82f6", their_turn: "#6b7280", we_won: "#22c55e", we_lost: "#ef4444" } }
-  go:     { kind: go, in: board, us: B, them: W, empty: ".", komi: 6.5 }
+  board:
+    kind: color
+    zone: board
+    inset: 0.3
+    max_dist: 70
+    otherwise: .
+    as: matrix
+    options:
+      .: '#dcb35c'
+      B: '#111827'
+      W: '#f8fafc'
+  status:
+    kind: color
+    zone: status
+    max_dist: 90
+    otherwise: their_turn
+    options:
+      our_turn: '#3b82f6'
+      their_turn: '#6b7280'
+      we_won: '#22c55e'
+      we_lost: '#ef4444'
+  go:
+    kind: go
+    in: board
+    us: B
+    them: W
+    empty: .
+    komi: 6.5
 act:
-  - { id: place, kind: tap, zone: board, description: "put a black stone on a point" }
-  - { id: pass, kind: tap, zone: pass, description: "pass (only when go.moves_left is 0)" }
+- id: place
+  kind: tap
+  zone: board
+  description: put a black stone on a point
+- id: pass
+  kind: tap
+  zone: pass
+  description: pass (only when go.moves_left is 0)
 tick_hz: 3
-act_when:  { read: status, equals: our_turn }
-stop_when: { read: status, in: [we_won, we_lost] }
-play: >
-  Go on a 9x9 board. We are B (black), the page is W (white); komi 6.5, area scoring (stones plus surrounded
-  empty points), the game ends after two passes in a row. Points are c1r1 (top-left) to c9r9 (bottom-right);
-  `board` shows the rows top to bottom. `go` is computed exactly from the board: `good` lists the moves worth
-  playing (legal, not filling our own eye, not putting our stones in atari); `captures` lists moves that take
-  white stones (`captured_by_move` says how many); `saves` lists moves that rescue a black chain in atari
-  (`our_atari`); `their_atari` lists white stones one move from capture. `best` lists the good moves rated highest
-  one move deep and `worth` their rating (area gained, stones saved or put in atari, minus a chain left on two
-  liberties); `estimate.lead` is black's rough lead after komi, `score.lead` the exact area count once the board
-  is settled. Priorities: capture the most stones; else save our chains in atari; else play the `best` move with
-  the highest `worth`, preferring one that keeps our stones connected. Never pass while `good` lists a move.
+act_when:
+  read: status
+  equals: our_turn
+stop_when:
+  read: status
+  in:
+  - we_won
+  - we_lost
+play: 'Go on a 9x9 board. We are B (black), the page is W (white); komi 6.5, area scoring (stones plus surrounded empty points),
+  the game ends after two passes in a row. Points are c1r1 (top-left) to c9r9 (bottom-right); `board` shows the rows top to
+  bottom. `go` is computed exactly from the board: `good` lists the moves worth playing (legal, not filling our own eye, not
+  putting our stones in atari); `captures` lists moves that take white stones (`captured_by_move` says how many); `saves`
+  lists moves that rescue a black chain in atari (`our_atari`); `their_atari` lists white stones one move from capture. `best`
+  lists the good moves rated highest and `worth` their rating: area gained one move deep, plus ataris read out to the end
+  (ladders, chases): `danger` lists our stones white can chase down if it moves first, `doomed` moves that white could then
+  chase down (rated far down), and an atari white cannot escape counts double; `estimate.lead` is black''s rough lead after
+  komi, `score.lead` the exact area count once the board is settled. Priorities: capture the most stones; else save our chains
+  in atari; else play the `best` move with the highest `worth`, preferring one that keeps our stones connected. Never pass
+  while `good` lists a move.
+
+  '
 rules:
-  # the compiler knows which points are worth playing and which take or save stones: only those are offered
-  - { if: { read: status, equals: our_turn }, only: { place__cell: go.good } }
-  - { if: { read: status, equals: our_turn }, only: { place__cell: go.urgent } }
-  # nothing to take or save: the few moves the compiler rates highest one move deep (an `only` that would leave
-  # nothing offered is skipped, so after a capture or save narrowed the choice this one does nothing)
-  - { if: { read: status, equals: our_turn }, only: { place__cell: go.best } }
-  - { if: { read: go.moves_left, equals: 0 }, exclude: [place] }
-  - { if: { read: go.moves_left, gte: 1 }, exclude: [pass] }
+- if:
+    read: status
+    equals: our_turn
+  only:
+    place__cell: go.good
+- if:
+    read: status
+    equals: our_turn
+  only:
+    place__cell: go.urgent
+- if:
+    read: status
+    equals: our_turn
+  only:
+    place__cell: go.best
+- if:
+    read: go.moves_left
+    equals: 0
+  exclude:
+  - place
+- if:
+    read: go.moves_left
+    gte: 1
+  exclude:
+  - pass
 tests:
-  - frame: fixtures/start.png
-    expect: { status: our_turn, board: [".........", ".........", ".........", ".........", ".........", ".........", ".........", ".........", "........."] }
-  - frame: fixtures/mid.png
-    expect: { status: our_turn, board: ["BBW......", "B.W......", ".BBW.....", "..W......", ".....B...", "....WW...", "...B.....", "....B...W", ".WBW....B"] }
-  - frame: fixtures/capture.png
-    expect: { status: our_turn, board: [".........", ".........", "..W......", "....B....", "...BWB...", ".........", "..W......", ".........", "........."] }
-    expect_action: { is: place }
-    expect_cell: c5r6
-    requires_sensor: true
+- frame: fixtures/start.png
+  expect:
+    status: our_turn
+    board:
+    - '.........'
+    - '.........'
+    - '.........'
+    - '.........'
+    - '.........'
+    - '.........'
+    - '.........'
+    - '.........'
+    - '.........'
+- frame: fixtures/mid.png
+  expect:
+    status: our_turn
+    board:
+    - BBW......
+    - B.W......
+    - .BBW.....
+    - ..W......
+    - '.....B...'
+    - '....WW...'
+    - '...B.....'
+    - '....B...W'
+    - .WBW....B
+- frame: fixtures/capture.png
+  expect:
+    status: our_turn
+    board:
+    - '.........'
+    - '.........'
+    - ..W......
+    - '....B....'
+    - '...BWB...'
+    - '.........'
+    - ..W......
+    - '.........'
+    - '.........'
+  expect_action:
+    is: place
+  expect_cell: c5r6
+  requires_sensor: true
 fingerprints:
   main:start: noB7cIF4YIF41IB994B/54B+4n9+7IB+439+74B++4B/soVVpYhNpYhNpYhNyYFj6oCL2ICa2ICa2oGa2oCZ2oCZ2oCZ2oCZ2oCZ2oCZ2oCZ2YCZ2YGZ2YGZ2YGZ63+L34CWuIWvuYSwtoWvtYSvuoWwtYSvuIWvuIWvtYSvuoWwtYSvtoWvuYSwuIWv34CW34CWtoWvuYWwtYSvtIWuuoWwtIWut4Wvt4WvtIWuuoWwtIWutYSvuYWwtoWv34CW34CWuYSwvoWxuoSwuYSwv4WxuYSwvIWwvIWwuYSwv4WxuYSwuoSwvoWxuYSw34CW34CWtoWvuYWwtYSvtIWuuoWwtIWut4Wvt4WvtIWuuoWwtIWutYSvuYWwtoWv34CW34CWtoWvuYWwtYSvtIWuuoWwtIWut4Wvt4WvtIWuuoWwtIWutYSvuYWwtoWv34CW34CWuYSwvoWxuoSwuYSwv4WxuYSwvIWwvIWwuYSwv4WxuYSwuoSwvoWxuYSw34CW34CWtoWvuYWwtYSvtIWuuoWwtIWut4Wvt4WvtIWuuoWwtIWutYSvuYWwtoWv34CW34CWuYSwvoWxuoSwuYSwv4WxuYSwvIWwvIWwuYSwv4WxuYSwuoSwvoWxuYSw34CW34CWtoWvuYWwtYSvtIWuuoWwtIWut4Wvt4WvtIWuuoWwtIWutYSvuYWwtoWv34CW34CWtoWvuYWwtYSvtIWuuoWwtIWut4Wvt4WvtIWuuoWwtIWutYSvuYWwtoWv34CW34CWuYSwvoWxuoSwuYSwv4WxuYSwvIWwvIWwuYSwv4WxuYSwuoSwvoWxuYSw34CW34CWtoWvuYWwtYSvtIWuuoWwtIWut4Wvt4WvtIWuuoWwtIWutYSvuYWwtoWv34CW34CWt4WvuYWwtYSutYWvuoWwtYWvuIWvuIWvtYWvuoWwtYWvtYSuuYWwt4Wv34CW6oCM1oGd1oGd1oGd1oGd1oGd1oGd1oGd1oGd1oGd1oGd1oGd1oGd1oGd1oGd6oCM
   main:mid: noB7cIF4YIF41IB98oB/54B+5oB+6oB+5X9+539++4B/soVVpYhNpYhNpYhNyYFj4n+IpICGu4CPuoCO7H+J3oCV2oCZ2oCZ2oCZ2oCZ2oCZ2YCZ2YGZ2YGZ2YGZ63+LvoCJNH+BZYGTY4GS7X+GyYKitYSvuIWvuIWvtYSvuoWwtYSvtoWvuYSwuIWv34CWwYCKPoCFtYSutYWu6ICJyIKktIWut4Wvt4WvtIWuuoWwtIWutYSvuYWwtoWv34CW04CRe4KbroSrqYSqtYCRwIOpxYKlvIWwvIWwuYSwv4WxuYSwuoSwvoWxuYSw34CW34CWtoWvXYGQVICNIoB6noCR9YCBt4Wut4WvtIWuuoWwtIWutYSvuYWwtoWv34CW34CWtoWvuIWvs4Wu3ICPxYOntIStt4Wvt4WvtIWuuoWwtIWutYSvuYWwtoWv34CW34CWuYSwvoWxuoSw2oCUxoOpuYSwvIWwvIWwroSsv4SxuYSwuoSwvoWxuYSw34CW34CWtoWvuYWwtYSvtIWuuoWwtIWut4WvtYSvHIF4joOhtIWutYSvuYWwtoWv34CW34CWuYSwvoWxuoSwuYSwv4WxuYSwzYGhzoGhxICQw4OruYSwuoSwvoWxuYSw34CW34CWtoWvuYWwtYSvtIWuuoWwtIWu1YCZ1YCY5H+NxYOmtIWutYSvuYWwtoWv34CW34CWtoWvuYWwtYSvtIWukoOjJ4B8tYSvt4WvtIWuuoWwtIWutYSvuYWwtoWv34CW34CWuYSwvoWxuoSwuYSwuYWvkoOjnoOnnoOnuYSwv4WxuYSwuoSwvoWxzYGe4YCT34CWtoWvuYWwtYSvtIWuuoWwtIWuZYGTZoGUtIWuuoWwtIWutYSvuoSu7n+G6oCK34CWt4Wv14GX2ICVQoCHpIGY6X+KuIWuuIWvtYWvuoWwtYWvtYSutYSuP4GFwYCK6oCM1oGd44CQ5ICPmoCHzICT7ICI1oGd1oGd1oGd1oGd1oGd1oGd1YGcmICG3oCI

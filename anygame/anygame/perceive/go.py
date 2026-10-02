@@ -6,12 +6,15 @@ model only chooses among moves whose effects are already written down. It is sta
 here, the page refuses it, and the loop stops offering a tap that changed nothing.
 
 Read config:  { kind: go, in: <board matrix read>, us: B, them: W, empty: ".", komi: 6.5 }
-Value:        { legal: [cells], good: [cells], captures: [cells], saves: [cells], self_atari: [cells],
+Value:        { legal: [cells], good: [cells], captures: [cells], saves: [cells], self_atari: [cells], doomed: [cells],
+                danger: [cells],
                 eyes: [cells], urgent: [cells], our_atari: [cells], their_atari: [cells], moves_left: n,
                 stones: {us, them}, captured_by_move: {cell: n}, score: {us, them, lead},
                 best: [top_k good cells by worth], worth: {cell: n}, estimate: {us, them, lead} }
-`worth` looks one move deep: the swing in a rough area estimate (each empty point goes to the nearer colour), plus
-the stones a move saves or puts in atari, minus a chain left on two liberties. `score` is exact area scoring and
+`worth` looks one move deep for area: the swing in a rough area estimate (each empty point goes to the nearer colour),
+plus the stones a move saves; and reads ataris deeper (ladders and short chases, `_attack`): a move whose chain
+white can then chase down is `doomed` and heavily penalised, a move that gets a `danger` chain away earns its
+stones, an atari white cannot escape earns twice the stones and one it can escape a little. `score` is exact area scoring and
 only means something once the board is settled; `estimate` is the mid-game guess.
 Cells are c<col>r<row> as in every grid read; r1 is the top row."""
 from __future__ import annotations
@@ -76,6 +79,45 @@ def play(b: dict[Pt, str], p: Pt, col: str, other: str, w: int, h: int, empty: s
     if not libs:
         return None
     return nb, taken, len(libs)
+
+
+def _respond(b: dict[Pt, str], p: Pt, att: str, dfn: str, w: int, h: int, empty: str, depth: int) -> bool:
+    """The chain at p is in atari and its owner moves: can it get away? It extends at its liberty or captures an
+    attacking chain that is itself in atari; three liberties is safe, two means the attacker reads on."""
+    st, lb = group(b, p, w, h, empty)
+    moves = set(lb)
+    for s_ in st:
+        for n in _nbrs(s_, w, h):
+            if b.get(n) == att:
+                _, alb = group(b, n, w, h, empty)
+                if len(alb) == 1:
+                    moves |= alb
+    for m in moves:
+        res = play(b, m, dfn, att, w, h, empty)
+        if res is None:
+            continue
+        nb = res[0]
+        libs = len(group(nb, p, w, h, empty)[1])
+        if libs >= 3 or (libs == 2 and not _attack(nb, p, att, dfn, w, h, empty, depth - 1)):
+            return True
+    return False
+
+
+def _attack(b: dict[Pt, str], p: Pt, att: str, dfn: str, w: int, h: int, empty: str, depth: int = 12) -> bool:
+    """The attacker moves: can it capture the chain at p however its owner answers? Reads ataris only (ladders and
+    short chases), `depth` moves deep; a chain with three liberties counts as safe."""
+    if b.get(p) != dfn:
+        return False
+    _, lb = group(b, p, w, h, empty)
+    if len(lb) == 1:
+        return True
+    if len(lb) >= 3 or depth <= 0:
+        return False
+    for lib in lb:
+        res = play(b, lib, att, dfn, w, h, empty)
+        if res is not None and not _respond(res[0], p, att, dfn, w, h, empty, depth):
+            return True
+    return False
 
 
 def is_eye(b: dict[Pt, str], p: Pt, col: str, w: int, h: int, empty: str) -> bool:
@@ -151,7 +193,18 @@ def read(src: Any, r: dict[str, Any]) -> dict[str, Any] | None:
             seen |= st
             if len(lb) == 1:
                 (our_atari if b[p] == us else their_atari).update(st)
-    legal, good, captures, saves, self_atari, eyes = [], [], [], [], [], []
+    # chains white can capture by moving first (a ladder or a chase): ours on two liberties that do not get away
+    danger: set[Pt] = set()
+    chased: list[tuple[Pt, set[Pt]]] = []      # (a stone of the chain, the chain), one per chain
+    seen = set()
+    for p in order:
+        if b[p] == us and p not in seen:
+            st, lb = group(b, p, w, h, empty)
+            seen |= st
+            if len(lb) == 2 and _attack(b, p, them, us, w, h, empty):
+                danger |= st
+                chased.append((p, st))
+    legal, good, captures, saves, self_atari, eyes, doomed = [], [], [], [], [], [], []
     taken_by: dict[str, int] = {}
     worth: dict[str, float] = {}
     eu0, et0 = estimate(b, us, them, w, h, empty)
@@ -166,8 +219,10 @@ def read(src: Any, r: dict[str, Any]) -> dict[str, Any] | None:
         if taken:
             captures.append(cell(p))
             taken_by[cell(p)] = taken
-        # a save: one of our chains in atari touches p and the chain through p ends with two or more liberties
-        if libs >= 2 and any(n in our_atari for n in _nbrs(p, w, h)):
+        # two moves deep: the chain through p ends on two liberties and white can still chase it down
+        dies = libs == 2 and _attack(nb, p, them, us, w, h, empty)
+        # a save: one of our chains in atari touches p and the chain through p gets away
+        if libs >= 2 and not dies and any(n in our_atari for n in _nbrs(p, w, h)):
             saves.append(cell(p))
         eye = is_eye(b, p, us, w, h, empty)
         if eye:
@@ -175,6 +230,8 @@ def read(src: Any, r: dict[str, Any]) -> dict[str, Any] | None:
         sa = libs == 1 and not taken
         if sa:
             self_atari.append(cell(p))
+        if dies and not taken and not sa:
+            doomed.append(cell(p))
         if not eye and not sa:
             good.append(cell(p))
             # one move deep: the estimated area swing, plus what the bare count misses (a chain left on two
@@ -186,13 +243,22 @@ def read(src: Any, r: dict[str, Any]) -> dict[str, Any] | None:
                 if n in our_atari and n not in saved:
                     saved |= group(b, n, w, h, empty)[0]
             v += 2 * len(saved)
-            if libs == 2:
-                v -= len(group(nb, p, w, h, empty)[0])
+            mine = group(nb, p, w, h, empty)[0]
+            if dies:
+                v -= 2 * len(mine) + 5        # the stones it leaves to a ladder, and the move itself wasted
+            # a chain white could have chased down that this move gets away
+            # (only a move touching the chain, or one that captures, can change how the chase goes)
+            for q, st3 in chased:
+                if (taken or any(n in st3 for n in _nbrs(p, w, h))) and not _attack(nb, q, them, us, w, h, empty):
+                    v += 2 * len(st3) + 4
+            hit: set[Pt] = set()
             for n in _nbrs(p, w, h):
-                if nb.get(n) == them:
+                if nb.get(n) == them and n not in hit:
                     st2, lb2 = group(nb, n, w, h, empty)
-                    if len(lb2) == 1 and libs >= 2:
-                        v += len(st2)
+                    hit |= st2
+                    if len(lb2) == 1 and not dies:
+                        # an atari that white cannot escape is worth the stones; one it can run from, a little
+                        v += 2 * len(st2) if not _respond(nb, n, us, them, w, h, empty, 12) else 0.5 * len(st2)
             worth[cell(p)] = round(v, 1)
     su, st_ = area_score(b, us, them, w, h, empty)
     top_k = int(r.get("top_k", 6))
@@ -201,6 +267,7 @@ def read(src: Any, r: dict[str, Any]) -> dict[str, Any] | None:
         "legal": legal, "good": good, "captures": captures, "saves": saves, "self_atari": self_atari, "eyes": eyes,
         "urgent": captures + [c for c in saves if c not in captures],
         "our_atari": [cell(p) for p in sorted(our_atari, key=lambda p: (p[1], p[0]))],
+        "danger": [cell(p) for p in sorted(danger, key=lambda p: (p[1], p[0]))], "doomed": doomed,
         "their_atari": [cell(p) for p in sorted(their_atari, key=lambda p: (p[1], p[0]))],
         "moves_left": len(good), "captured_by_move": taken_by,
         "best": best, "worth": {k: worth[k] for k in best},
