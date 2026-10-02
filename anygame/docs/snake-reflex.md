@@ -42,15 +42,28 @@ reflex ate on every seed and 7 of 8 games reached the 400-tick cap. Cost went up
 (about $0.0065 per 400-tick game); the reflex itself makes no call. The reflex acted 20–39 times per game.
 Perception: 0 wrong reads on settled ticks.
 
+## Second fix: food in a corner
+
+The pack's "turn a cell early" rule excluded going straight whenever one free cell was left, even when that cell was
+the food with the wall behind it, so food in a corner was never eaten (in the reflex run, 24 of 24 such decisions
+turned away; seed 8 circled corner food for most of its 331 ticks at length 4). Rules can now carry an `unless:`
+condition, and the snake packs use `unless: { read: head_around.ahead, equals: F }`: the snake eats, and the reflex
+turns on the next frame. Test `test_rule_unless_lets_the_snake_eat_food_in_a_corner`.
+
+| 8 seeds each | dead | length median (max) | score median | Jev cost |
+|---|---|---|---|---|
+| Stand-in at Jev's pace, reflex + corner fix | 0 of 8 | 3 | 0 | – |
+| Jev, reflex only | 1 of 8 | 16 (19) | 130 | $0.051 |
+| Jev, reflex + corner fix | **0 of 8**, all at the 400-tick cap | **19 (22)** | **160** | $0.056 |
+
+Decisions with the food ahead and the wall behind it: 10 of 12 went straight for the food (before: 0 of 24). Perception: 0 wrong reads.
+
 ## What is left
 
-1. **Seed 8 died on a slow call.** One Jev call took 1.1 s, so two game steps passed while the loop waited; the reflex
+1. **A slow Jev call can still kill.** In the reflex-only run, seed 8 died on one. One Jev call took 1.1 s, so two game steps passed while the loop waited; the reflex
    fired 100 ms after the next frame but the snake was already a step from the wall. A per-call timeout under one
    step, or a loop that keeps reading frames while the call is in flight, would cover this.
-2. **Food in a corner is never eaten.** The pack's "turn a cell early" rule excludes going straight when one cell is
-   left, even when that cell is the food in the corner. Seed 8 circled such food for most of its 331 ticks (length 4).
-   A rule change in the pack, not the loop.
-3. Scores are bounded by the 400-tick cap, not by deaths, so a longer cap is the next comparison.
+2. Scores are bounded by the 400-tick cap, not by deaths, so a longer cap is the next comparison.
 
 ## Rerun
 ```bash

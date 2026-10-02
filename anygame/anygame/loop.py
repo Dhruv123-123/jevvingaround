@@ -683,6 +683,9 @@ class Agent:
             else:
                 hit = self._cond(c, values)
                 why = f"{c['read']}={_get(values, c['read'])}"
+            u = rl.get("unless")
+            if hit and u and self._cond(u, values):
+                continue        # the exception: e.g. the cell the rule guards against is the food itself
             if hit:
                 out.append((rl, why))
         return out

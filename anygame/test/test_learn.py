@@ -648,3 +648,28 @@ def test_reflex_acts_on_the_last_answers_when_a_fresh_answer_would_land_too_late
     ag2 = Agent(pack, StateDevice(states), slow2)
     recs2 = [ag2.step() for _ in range(4)]
     assert not recs2[-1].get("skipped") and ag2.skipped_reflex == 0
+
+
+def test_rule_unless_lets_the_snake_eat_food_in_a_corner():
+    # food in the corner: one free cell ahead, then the wall. The turn-early rule would forbid going straight forever;
+    # its `unless` lets the snake eat, and the reflex turns on the next frame
+    from anygame.loop import Agent
+    from anygame.pack import load_pack
+    from test_state import StateDevice
+    class Keep:
+        model = "keep"
+        def ask(self, state, qs):
+            p = {"keep": 0.6, "right": 0.25, "up": 0.1, "down": 0.03, "left": 0.02}
+            return {"answers": {"action": {"type": "choice", "choice": "keep", "probabilities": {c: p.get(c, 0.0) for c in qs["action"]["criteria"]}}}, "latency_ms": 600, "input_tokens": 10, "cost_usd": 0.0}
+    pack = load_pack(os.path.join(ROOT, "packs", "snake-state"))
+    states = [{"snake": [[0, 3 - i], [0, 4 - i], [0, 5 - i]], "food": [0, 0], "score": 0, "over": False} for i in range(3)]
+    ag = Agent(pack, StateDevice(states), Keep())
+    recs = [ag.step() for _ in range(3)]
+    last = recs[-1]
+    assert last["screen"]["head_around"]["ahead"] == "F" and last["screen"]["head_around"]["ahead_free"] == 1
+    assert last["choice"] == "keep" and not any("ahead_free" in r for r in last["rules"])
+    # the same spot with no food there: turn early, as before
+    states2 = [{**s, "food": [5, 5]} for s in states]
+    ag2 = Agent(pack, StateDevice(states2), Keep())
+    recs2 = [ag2.step() for _ in range(3)]
+    assert recs2[-1]["choice"] == "right"

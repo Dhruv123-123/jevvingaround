@@ -219,6 +219,9 @@ def load_pack(path: str | os.PathLike, _allow_no_tests: bool = False) -> Pack:
         ok_read = "read" in cond and any(k in cond for k in ("equals", "in", "not", "gte", "lte"))
         if not (ok_noul or ok_read):
             raise PackError(f"{p}: rule needs if: {{noul, gte|lte}} or if: {{read, equals|in|not|gte|lte}}")
+        u = rl.get("unless")
+        if u is not None and not (isinstance(u, dict) and "read" in u and any(k in u for k in ("equals", "in", "not", "gte", "lte"))):
+            raise PackError(f"{p}: rule 'unless' needs {{read, equals|in|not|gte|lte}}: the rule does not apply when it holds")
         if not any(k in rl for k in ("exclude", "set", "avoid", "only")):
             raise PackError(f"{p}: rule needs 'exclude: [actions]', 'set: {{param_question: from_question}}', 'avoid: {{param_question: read}}' or 'only: {{param_question: read}}'")
     tests = raw.get("tests") or []
