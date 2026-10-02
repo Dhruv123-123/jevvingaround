@@ -182,6 +182,19 @@ def test_rules_set_copies_a_choice_into_the_parameter_question():
     assert any("drop__cell = threat_column" in r for r in rec["rules"])
 
 
+def test_a_wrong_belief_cannot_force_a_column_the_reads_rule_out():
+    # 64-episode run: a decider that believed "must block in c1" tapped a full c1 until the tick cap. Now the threat
+    # column comes from y_wins_at (an `only` rule), and a `set:` cannot force a value the question did not offer.
+    pack = load_pack(os.path.join(ROOT, "packs", "connect4"))
+    frame = cv2.imread(os.path.join(ROOT, "packs", "connect4", "fixtures", "threat.png"))
+    jev = ChoiceJev(noul=0.9, choice={"threat_column": "c1", "win_column": "c7"})
+    ag = Agent(pack, FakeDevice([frame]), jev)
+    rec = ag.step()
+    assert jev.seen[0]["drop__cell"] == ["c4"]
+    assert rec["action"].startswith("tap columns.c4")
+    assert any("skipped: not offered" in r for r in rec["rules"])
+
+
 def test_act_when_waits_for_our_turn():
     pack = load_pack(os.path.join(ROOT, "packs", "connect4"))
     frame = cv2.imread(os.path.join(ROOT, "packs", "connect4", "fixtures", "start.png"))

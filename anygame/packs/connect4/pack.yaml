@@ -48,6 +48,10 @@ questions:
     instructions: Which column to drop in? Cells c1..c7 map to columns left to right. Only columns listed in `legal` are possible. Apply the priorities from the play notes.
     criteria: { c1: null, c2: null, c3: null, c4: null, c5: null, c6: null, c7: null }
 rules:
+  # the compiler already knows where a four is: those columns are the only ones offered, a win before a block
+  # (an `only` that would leave nothing offered is skipped, so a block never hides a win)
+  - { if: { read: status, equals: our_turn }, only: { drop__cell: r_wins_at } }
+  - { if: { read: status, equals: our_turn }, only: { drop__cell: y_wins_at } }
   - { if: { read: status, equals: our_turn }, avoid: { drop__cell: y_wins_if_we_drop_at } }   # those columns are not even offered
   - { if: { noul: must_block, gte: 0.5 }, set: { drop__cell: threat_column } }
   - { if: { noul: can_win_now, gte: 0.5 }, set: { drop__cell: win_column } }      # later rules win: a win beats a block

@@ -575,6 +575,7 @@ class Agent:
            set: {param_question: source_question}              → copy a choice into a parameter question."""
         applied: list[str] = []
         excluded: set[str] = set()
+        offered = None                      # the questions as asked this tick, built on the first set: rule
         for rl, why in self._hits(answers, values):
             for x in rl.get("exclude") or []:
                 v = _get(values, x[1:]) if isinstance(x, str) and x.startswith("$") else x
@@ -584,10 +585,13 @@ class Agent:
             for target, source in (rl.get("set") or {}).items():
                 src = answers.get(source)
                 if src and src.get("type") == "choice" and src.get("choice") not in (None, "none") and target in answers:
-                    if f"{target.split('__', 1)[0]}→{src['choice']}" in self.noops:
-                        # the same System 0 guard the question already had: a value that changed nothing (a full column)
-                        # is not forced again by a rule, or a wrong belief taps it until the tick cap
-                        applied.append(f"{why} → {target} = {source} ({src['choice']}) skipped: it changed nothing")
+                    if offered is None:
+                        offered = self.questions(values)
+                    allowed = (offered.get(target) or {}).get("criteria")
+                    if allowed is not None and src["choice"] not in allowed:
+                        # a value the question did not offer (it changed nothing last time, or an avoid/only rule
+                        # dropped it) is not forced back in by a belief: a wrong one tapped a full column to the cap
+                        applied.append(f"{why} → {target} = {source} ({src['choice']}) skipped: not offered")
                         continue
                     if answers[target].get("choice") != src["choice"]:
                         answers[target] = {**answers[target], "choice": src["choice"]}

@@ -264,6 +264,7 @@ export class Agent {
   applyRules(answers: Record<string, Answer>, values: Values): string[] {
     const applied: string[] = [];
     const excluded = new Set<string>();
+    let offered: Record<string, any> | undefined;      // the questions as asked this tick, built on the first set: rule
     for (const [rl, why] of this.hits(answers, values)) {
       for (const x of rl.exclude ?? []) {
         const v = typeof x === "string" && x.startsWith("$") ? get(values, x.slice(1)) : x;
@@ -272,6 +273,10 @@ export class Agent {
       for (const [target, source] of Object.entries<string>(rl.set ?? {})) {
         const src = answers[source];
         if (src && src.type === "choice" && src.choice && src.choice !== "none" && answers[target] && answers[target].choice !== src.choice) {
+          // a value the question did not offer (changed nothing last time, or dropped by avoid/only) is not forced back in
+          offered ??= this.questions(values);
+          const allowed = offered[target]?.criteria;
+          if (allowed && !(src.choice in allowed)) { applied.push(`${why} → ${target} = ${source} (${src.choice}) skipped: not offered`); continue; }
           answers[target] = { ...answers[target], choice: src.choice };
           applied.push(`${why} → ${target} = ${source} (${src.choice})`);
         }
