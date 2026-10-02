@@ -19,6 +19,8 @@ with sync_playwright() as p:
     panel = ctx.new_page()
     panel.goto(f"chrome-extension://{ext_id}/panel.html?tab={tab_id}")
     panel.wait_for_function("document.getElementById('log').textContent.includes('ready')", timeout=15000)
+    # the pool lookup runs after 'ready' and may select a pack itself: let it finish before choosing ours
+    panel.wait_for_function("() => !document.getElementById('poolinfo').textContent.includes('checking')", timeout=15000)
     panel.select_option("#pack", "snake"); panel.select_option("#sensor", "random")
     game.bring_to_front()
     panel.click("#play")
