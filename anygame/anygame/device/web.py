@@ -36,6 +36,7 @@ class WebDevice(Device):
         return self._size
 
     def frame(self):
+        self._release_due()
         png = self._page.screenshot(type="png")
         arr = np.frombuffer(png, dtype=np.uint8)
         return cv2.imdecode(arr, cv2.IMREAD_COLOR)
@@ -51,14 +52,26 @@ class WebDevice(Device):
         m.move(x1, y1, steps=steps)
         m.up()
 
-    def key(self, name, hold_ms=0):
-        if hold_ms and hold_ms > 0:
+    def key(self, name, hold_ms=0, block=True):
+        self._release_due(force=True)
+        if hold_ms and hold_ms > 0 and not block:
+            # a held key that does not stop the loop: down now, up on the first device call after hold_ms (the next
+            # frame, usually), so a jump held 120 ms in a fast game does not cost a frame
+            self._page.keyboard.down(name)
+            self._pending_up = (name, time.perf_counter() + hold_ms / 1000)
+        elif hold_ms and hold_ms > 0:
             # a held key: down, hold, up (what a run, a charge or a camera turn needs)
             self._page.keyboard.down(name)
             time.sleep(hold_ms / 1000)
             self._page.keyboard.up(name)
         else:
             self._page.keyboard.press(name)
+
+    def _release_due(self, force=False):
+        p = getattr(self, "_pending_up", None)
+        if p and (force or time.perf_counter() >= p[1]):
+            self._pending_up = None
+            self._page.keyboard.up(p[0])
 
     def mouse_move(self, dx, dy):
         """Relative motion from the last pointer position (the page sees mousemove events with the movement)."""

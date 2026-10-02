@@ -336,7 +336,7 @@ def audit_questions(pack: Pack, decisions: list[Decision]) -> dict[str, dict[str
                     got.add((a.get("action") or {}).get("choice"))
                 if len(got) > 1:
                     flips += 1
-            consumed = any(qid == (r.get("if") or {}).get("noul") for r in pack.rules)
+            consumed = any(qid == c.get("noul") for r in pack.rules for c in _conds(r))
             out[qid] = {"decisions": n, "changes_action": flips, "voi": (flips / n) if n else 0.0, "consumed_by_a_rule": consumed,
                         "verdict": "no rule reads it: it cannot change the action" if not consumed else ("never changes the action" if n and not flips else "earns its place")}
     finally:
@@ -442,10 +442,17 @@ def cell_rule(candidate: Pack, incumbent: Pack) -> str:
     for r in candidate.rules:
         if json.dumps(r, sort_keys=True) in old:
             continue
-        read = (r.get("if") or {}).get("read")
-        if isinstance(read, str) and (candidate.reads.get(read) or {}).get("kind") == "locate" and ("equals" in r["if"] or "in" in r["if"]):
-            return read
+        for c in _conds(r):
+            read = c.get("read")
+            if isinstance(read, str) and (candidate.reads.get(read) or {}).get("kind") == "locate" and ("equals" in c or "in" in c):
+                return read
     return ""
+
+
+def _conds(rule: dict[str, Any]) -> list[dict[str, Any]]:
+    """A rule's `if` as a list of conditions (it may be one condition or a list that must all hold)."""
+    c = rule.get("if") or {}
+    return [x for x in c if isinstance(x, dict)] if isinstance(c, list) else [c] if isinstance(c, dict) else []
 
 
 def verify_revision(candidate: Pack, incumbent: Pack, inc: Incident, threshold: float = 0.7, max_overblock: float = 0.34,

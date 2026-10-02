@@ -7,7 +7,7 @@ from typing import Any
 import yaml
 from .geometry import Rect, Zone
 
-READ_KINDS = {"bar", "templates", "ocr", "vocab", "blobs", "color", "locate", "runs", "around", "tetris", "json", "json_grid", "predict", "margin", "head"}
+READ_KINDS = {"bar", "templates", "ocr", "vocab", "blobs", "color", "locate", "runs", "around", "tetris", "json", "json_grid", "predict", "margin", "head", "gap"}
 QUESTION_TYPES = {"noul", "choice", "score"}
 
 
@@ -56,7 +56,7 @@ class Pack:
         raise PackError(f"{self.path}: unknown action '{id}'")
 
 
-MODE_KEYS = ("zones", "read", "act", "play", "questions", "rules", "act_when", "stop_when", "settle", "tick_hz", "reflex")
+MODE_KEYS = ("zones", "read", "act", "play", "questions", "rules", "act_when", "stop_when", "settle", "tick_hz", "reflex", "ask", "ask_when")
 TASK_CATEGORIES = ("navigate", "collect", "score", "survive", "clear", "build", "avoid", "other")
 
 
@@ -182,6 +182,9 @@ def load_pack(path: str | os.PathLike, _allow_no_tests: bool = False) -> Pack:
         elif r.get("kind") == "head":
             if r.get("in") not in reads:
                 raise PackError(f"{p}: read '{rid}': head needs 'in' (a grid read) and 'symbol' (the body's symbol)")
+        elif r.get("kind") == "gap":
+            if r.get("in") not in reads or "symbol" not in r:
+                raise PackError(f"{p}: read '{rid}': gap needs 'in' (a grid read, scanned left to right) and 'symbol' (what counts as an obstacle)")
         elif r.get("kind") == "json_grid":
             if "cols" not in r or "rows" not in r or not isinstance(r.get("symbols"), dict):
                 raise PackError(f"{p}: read '{rid}': json_grid needs cols, rows and symbols: {{<char>: {{path, index|slice}}}}")
@@ -216,15 +219,21 @@ def load_pack(path: str | os.PathLike, _allow_no_tests: bool = False) -> Pack:
     for c in (raw.get("reflex") if isinstance(raw.get("reflex"), list) else [raw.get("reflex")] if raw.get("reflex") else []):
         if not (isinstance(c, dict) and "read" in c and any(k in c for k in ("equals", "in", "not", "gte", "lte"))):
             raise PackError(f"{p}: reflex needs {{read, equals|in|not|gte|lte}} (or a list of them): when it holds, the rules act on the decider's last answers without asking it")
+    if raw.get("ask") not in (None, "async"):
+        raise PackError(f"{p}: ask: async is the only option (the decider runs beside the loop, which acts on its last answers meanwhile)")
+    for c in (raw.get("ask_when") if isinstance(raw.get("ask_when"), list) else [raw.get("ask_when")] if raw.get("ask_when") else []):
+        if not (isinstance(c, dict) and "read" in c and any(k in c for k in ("equals", "in", "not", "gte", "lte"))):
+            raise PackError(f"{p}: ask_when needs {{read, equals|in|not|gte|lte}} (or a list of them): with ask: async, the decider is asked only when it holds")
     for rl in rules:
-        cond = rl.get("if") or {}
-        ok_noul = "noul" in cond and any(k in cond for k in ("gte", "lte"))
-        ok_read = "read" in cond and any(k in cond for k in ("equals", "in", "not", "gte", "lte"))
-        if not (ok_noul or ok_read):
-            raise PackError(f"{p}: rule needs if: {{noul, gte|lte}} or if: {{read, equals|in|not|gte|lte}}")
+        conds = rl.get("if") if isinstance(rl.get("if"), list) and rl.get("if") else [rl.get("if") or {}]
+        for cond in conds:
+            ok_noul = isinstance(cond, dict) and "noul" in cond and any(k in cond for k in ("gte", "lte"))
+            ok_read = isinstance(cond, dict) and "read" in cond and any(k in cond for k in ("equals", "in", "not", "gte", "lte"))
+            if not (ok_noul or ok_read):
+                raise PackError(f"{p}: rule needs if: {{noul, gte|lte}} or if: {{read, equals|in|not|gte|lte}} (or a list of them, all of which must hold)")
         u = rl.get("unless")
-        if u is not None and not (isinstance(u, dict) and "read" in u and any(k in u for k in ("equals", "in", "not", "gte", "lte"))):
-            raise PackError(f"{p}: rule 'unless' needs {{read, equals|in|not|gte|lte}}: the rule does not apply when it holds")
+        if u is not None and not all(isinstance(x, dict) and "read" in x and any(k in x for k in ("equals", "in", "not", "gte", "lte")) for x in (u if isinstance(u, list) and u else [u])):
+            raise PackError(f"{p}: rule 'unless' needs {{read, equals|in|not|gte|lte}} (or a list of them): the rule does not apply when one holds")
         if not any(k in rl for k in ("exclude", "set", "avoid", "only")):
             raise PackError(f"{p}: rule needs 'exclude: [actions]', 'set: {{param_question: from_question}}', 'avoid: {{param_question: read}}' or 'only: {{param_question: read}}'")
         for k in ("set", "avoid", "only"):
