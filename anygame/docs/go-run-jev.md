@@ -71,8 +71,13 @@ Jev latency: median 336 ms, p95 608 ms per call (394 calls in v2). About 46 deci
 ## What would move it next
 
 - Done in v3: ladder reading. Done: a playout opponent (`ai=mc`).
-- Against the playout opponent the losses are close games, so the next lever is the area estimate in `worth`
-  (it counts nearest-stone distance only) or giving Jev the playout result for its top moves too.
+- Tried and dropped: replacing the nearest-stone area count in `worth` with an influence map (Bouzy dilation and
+  erosion, 5/10, so walls block influence). Against the playout white it made things worse: Jev 2 won, 6 lost
+  (was 5/3), black's mean score 39 (was 51), $0.031; random under the same rules 1/7 (was 2/6) though its mean
+  score rose from 32 to 38. Its early-game counts are small and flat, so the ranking leans on tactics and loses
+  the opening. Not kept.
+- Next, if Go work resumes: give Jev the playout result for its top moves (the same playouts white uses), or
+  blend the two estimates (distance early, influence once the board fills).
 - The first-run lesson matches Tetris: Jev chooses well among a short ranked list and poorly among 60 flat options.
 
 Reproduce: `ANYGAME_LOG_TRUTH=1 anygame bench go --device "web://games/go.html?seed={seed}#state=window.__state()"
