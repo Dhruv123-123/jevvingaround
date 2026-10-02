@@ -23,11 +23,10 @@ act_when:  { read: piece.phase, in: [spawned, falling] }
 stop_when: { read: status, equals: over }
 play: >
   Tetris on a 10x20 board. `piece` is the falling tetromino and `next` the one after it. `landings` are the
-  reachable places this piece can be dropped, each with its computed consequences: lines cleared, holes made
-  (+n is bad), the stack height afterwards, bumpiness, and whether it keeps the well (the deepest column)
-  open for an I piece. Pick the landing that clears lines when the stack is high, otherwise the one that
-  makes no holes and keeps the surface flat and the well open. Prefer a landing that sets up a clear for
-  `next`. `place` is the only useful action; `wait` only when `landings` is empty.
+  reachable places this piece can be dropped, each with its computed consequences (lines cleared, holes made,
+  the stack height afterwards, bumpiness), already ranked best first by a placement
+  score that weighs all of them: `a` is the best by that score. Take `a` unless another landing clears more
+  lines without making more holes than `a`. `place` is the only useful action; `wait` only when `landings` is empty.
 questions:
   - id: stack_dangerous
     type: noul
