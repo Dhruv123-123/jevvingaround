@@ -12,7 +12,7 @@ read:
   preview: { kind: color, zone: preview, inset: 0.25, max_dist: 60, otherwise: "#",
              options: { ".": "#131a2e", I: "#22d3ee", O: "#facc15", T: "#a855f7", S: "#4ade80", Z: "#f87171", J: "#60a5fa", L: "#fb923c" } }
   status:  { kind: color, zone: status, options: { playing: "#3b82f6", over: "#ef4444" }, max_dist: 90, otherwise: playing }
-  piece:   { kind: tetris, in: board, next_in: preview, empty: ".", top_k: 6, moves_per_row: 3,
+  piece:   { kind: tetris, in: board, next_in: preview, empty: ".", top_k: 6, moves_per_row: 3, lookahead: true,
              keys: { rotate: ArrowUp, left: ArrowLeft, right: ArrowRight, drop: Space } }
 act:
   - { id: place, kind: macro, options: piece, key_ms: 40, description: "rotate, move and hard-drop the piece onto one of the computed landings" }

@@ -379,6 +379,7 @@ def test_author_tune_loop_plays_digests_and_keeps_a_passing_pack(monkeypatch, tm
 def test_chat_routes_azure_and_openai_compatible(monkeypatch):
     from anygame.chat import Chat
     monkeypatch.setenv("ANYGAME_LLM_KEY", "k")
+    monkeypatch.delenv("ANYGAME_LLM_API", raising=False)   # a configured provider would override the URL-based guess
     az = Chat(model="gpt-4o", base_url="https://myres.openai.azure.com")
     assert az.api == "azure" and az.url().startswith("https://myres.openai.azure.com/openai/deployments/gpt-4o/chat/completions?api-version=") and az.headers()["api-key"] == "k"
     v1 = Chat(model="gpt-4o", base_url="https://myres.openai.azure.com/openai/v1", api="azure")
@@ -426,6 +427,19 @@ def test_tetris_tracker_ranks_landings_and_builds_macros():
     fall = ["." * 10 for _ in range(20)]
     fall[2] = "...IIII..."
     assert t.read(fall, None)["phase"] == "falling"
+
+
+def test_tetris_lookahead_ranks_by_two_pieces():
+    from anygame.perceive.tetris import TetrisTracker, lookahead, features
+    # a one-wide well and the next piece unknown (mean over all seven): the O never plugs the well
+    board = ["." * 10 for _ in range(20)]
+    board[0], board[1] = ".OO.......", ".OO......."
+    for r in range(16, 20):
+        board[r] = "#########."
+    v = TetrisTracker({"in": "board", "lookahead": True}).read(board, None)
+    assert v["shape"] == "O" and len(v["landings"]) == 6 and "holes +0" in v["landings"]["a"] and "col10" not in v["landings"]["a"]
+    full = {(c, r) for c in range(10) for r in range(20)}
+    assert lookahead(features(full, 10, 20), full, 0, "I", 10, 20) is None
 
 
 def test_tetris_pack_reads_piece_next_and_landings_from_fixture():
