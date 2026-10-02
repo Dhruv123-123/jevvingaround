@@ -43,6 +43,21 @@ gets a danger chain away earns its stones, and an atari white cannot escape coun
 them by wiping white off the board (81 to 6.5); white captured at most 3 stones in any game. Perception stayed at
 0 wrong reads on 852 acting ticks; the whole read, ladders included, takes 51 ms median per tick (77 ms p95).
 
+## A stronger white (`?ai=mc`)
+
+The page now takes `ai=mc`: the old heuristic still plays a capture or a save outright; otherwise its top 12
+candidates each get quick random playouts to the end of the game, round robin for `think` ms (default 500, about
+300 playouts a move), and white plays the best win rate. No dependencies; a game takes 36 to 73 s.
+
+| Decider (pack v3) | vs old white | vs playout white |
+|---|---|---|
+| Jev | 8 won, 0 lost | 5 won, 3 lost ($0.031) |
+| random, same rules | 5 won, 3 lost | 2 won, 6 lost |
+
+Perception stayed at 0 wrong reads on 805 acting ticks. Jev's three losses were by 3.5 to 11.5 points (white
+captured 4 to 16 stones), against wins by up to 74.5. The old heuristic stays the default so the earlier numbers
+remain reproducible.
+
 ## Perception
 
 0 wrong reads on the 1,674 ticks where the agent acted, across 32 games. The board read differs from the page's
@@ -55,9 +70,9 @@ Jev latency: median 336 ms, p95 608 ms per call (394 calls in v2). About 46 deci
 
 ## What would move it next
 
-- Done in v3: ladder reading.
-- A stronger opponent (a few hundred Monte Carlo playouts in the page) to keep the benchmark meaningful once Jev
-  wins every game against the heuristic.
+- Done in v3: ladder reading. Done: a playout opponent (`ai=mc`).
+- Against the playout opponent the losses are close games, so the next lever is the area estimate in `worth`
+  (it counts nearest-stone distance only) or giving Jev the playout result for its top moves too.
 - The first-run lesson matches Tetris: Jev chooses well among a short ranked list and poorly among 60 flat options.
 
 Reproduce: `ANYGAME_LOG_TRUTH=1 anygame bench go --device "web://games/go.html?seed={seed}#state=window.__state()"

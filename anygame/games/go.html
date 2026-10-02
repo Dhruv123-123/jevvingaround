@@ -38,10 +38,27 @@ const commit=(r,i,p)=>{grid=r.h;caps[p]+=r.taken;seen.add(grid.join(""));last=i;
 const step=()=>{if(passes>=2||moves>=MAX)end();turn=over?turn:3-turn;render();if(!over&&turn===2)setTimeout(ai,Number(q.get("delay")||300))};
 // white: capture the biggest chain it can, else save its own chain in atari, else a random move that neither fills
 // its own eye nor puts itself in atari, mildly preferring points next to stones; pass when nothing is left
+// white, ai=heuristic (default): capture the biggest chain it can, else save its own chain in atari, else a random
+// move that neither fills its own eye nor puts itself in atari, mildly preferring points next to stones; pass when
+// nothing is left. ai=mc: the same heuristic picks a capture or a save outright; otherwise its top candidates each
+// get quick random playouts to the end, round robin for `think` ms (default 500), and the best win rate is played.
+const AI=q.get("ai")||"heuristic",THINK=Number(q.get("think")||500);
+const playout=(g,p)=>{g=g.slice();let pass=0,n=0;const empties=[];
+ while(pass<2&&n<150){empties.length=0;for(let i=0;i<N*N;i++)if(!g[i])empties.push(i);let moved=false;
+  for(let k=empties.length;k>0;k--){const j=(rnd()*k)|0,i=empties[j];empties[j]=empties[k-1];if(eye(g,i,p))continue;
+   const h=g.slice();h[i]=p;for(const m of nb(i))if(h[m]===3-p&&!chain(h,m)[1].size)for(const s of chain(h,m)[0])h[s]=0;
+   if(!chain(h,i)[1].size)continue;g=h;moved=true;break}
+  pass=moved?0:pass+1;n++;p=3-p}
+ const s=[0,0,0];g.forEach(v=>{if(v)s[v]++});for(let i=0;i<N*N;i++)if(!g[i]){const o=nb(i).map(m=>g[m]).filter(Boolean);if(o.length&&o.every(v=>v===o[0]))s[o[0]]++}
+ return s[2]+KOMI>s[1]};
 const ai=()=>{if(over||turn!==2)return;const cands=[];for(let i=0;i<N*N;i++){const r=tryPlay(grid,i,2);if(r)cands.push([i,r])}
- let best=null,bs=-1e9;for(const[i,r]of cands){if(eye(grid,i,2))continue;const inAtari=nb(i).some(n=>grid[n]===2&&chain(grid,n)[1].size===1);
-  let s=r.taken*100+(inAtari&&r.libs>=2?60:0)+(r.libs===1&&!r.taken?-1000:0)+(nb(i).some(n=>grid[n])?3:0)+rnd()*8;if(s>bs){bs=s;best=[i,r]}}
- if(!best||bs<-500){passes++;moves++;last=-1}else commit(best[1],best[0],2);step()};
+ const scored=[];for(const[i,r]of cands){if(eye(grid,i,2))continue;const inAtari=nb(i).some(n=>grid[n]===2&&chain(grid,n)[1].size===1);
+  scored.push([r.taken*100+(inAtari&&r.libs>=2?60:0)+(r.libs===1&&!r.taken?-1000:0)+(nb(i).some(n=>grid[n])?3:0)+rnd()*8,i,r])}
+ scored.sort((a,b)=>b[0]-a[0]);let best=scored.length&&scored[0][0]>-500?scored[0]:null;
+ if(best&&AI==="mc"&&best[0]<60){const top=scored.filter(c=>c[0]>-500).slice(0,12),wins=top.map(()=>0),runs=top.map(()=>0);const t0=performance.now();
+  for(let k=0;performance.now()-t0<THINK;k++){const c=k%top.length;runs[c]++;if(playout(top[c][2].h,1))wins[c]++}
+  let bi=0;for(let c=1;c<top.length;c++)if(wins[c]/runs[c]>wins[bi]/runs[bi])bi=c;best=top[bi];window.__mc={runs:runs.reduce((a,b)=>a+b,0),rate:wins[bi]/runs[bi]}}
+ if(!best){passes++;moves++;last=-1}else commit(best[2],best[1],2);step()};
 window.__play=(i)=>{if(over||turn!==1)return false;const r=tryPlay(grid,i,1);if(!r)return false;commit(r,i,1);step();return true};
 window.__pass=()=>{if(over||turn!==1)return false;passes++;moves++;last=-1;step();return true};
 // for grading a pack's reads: black's legal points (superko included) and the stones in atari, from the page's own rules
