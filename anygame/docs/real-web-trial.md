@@ -81,7 +81,7 @@ whole trial cost $0.033 in Jev calls.
 ## Authored with Azure (2026-10-01, later the same day)
 
 The same three sites, with packs written by `anygame author` on Azure (`gpt-5.6-luna`) and played by Jev. About 22
-authoring calls in all, because the key is rate-limited. The packs are in `packs/web-*-authored/`, each with its
+authoring calls in all, because the key is rate-limited. The packs are in `docs/real-web-trial-packs/` (not bundled: they are trial results, and the snake and dino ones read cells that straddle glyph edges, so the Python and extension runtimes disagree on them), each with its
 probe frames and `fixtures/probe.json` (what led to each frame, and whether the game was in motion).
 
 | game | authoring | sees gameplay | Jev play |
