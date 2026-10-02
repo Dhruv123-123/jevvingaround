@@ -53,7 +53,7 @@ act:        # the typed actions (tap a cell, swipe, key, macro, wait)
 play:       # the paragraph: what the game is and how to play it
 questions:  # what Jev is asked every tick (noul beliefs, choices, scores)
 rules:      # beliefs and reads become policy: exclude, set, avoid, only
-act_when / stop_when / settle / tick_hz / sensor_timeout_s / budget_ms
+act_when / stop_when / settle / tick_hz / sensor_timeout_s / budget_ms / reflex
 tasks:      # practice goals with a verifier over the reads (done, when, hold_ticks, limit_ticks, category)
 tests:      # fixtures with the exact values the reads must produce
 modes:      # sub-packs for other screens (a shop, a map), each with a `when`

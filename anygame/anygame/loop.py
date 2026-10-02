@@ -93,6 +93,7 @@ class Agent:
         self.sensor_ewma_ms = 0.0        # what the decider has been taking lately: the per-tick budget is judged against it
         self.budget_skips = 0            # consecutive ticks the decider was skipped for the budget
         self.skipped_budget = 0          # over the run
+        self.skipped_reflex = 0          # ticks the pack's reflex condition acted on the last answers without the decider
         self._load_fingerprints()
         # slow reads (OCR, detectors) run in a forked worker process: a thread starves next to onnxruntime and
         # the browser, a process does not, and the loop only ever waits on the first value
@@ -509,7 +510,18 @@ class Agent:
         qs = self.questions(values)
         budget = float(self.pack.raw.get("budget_ms") or 0)
         expected = t_perc + self.sensor_ewma_ms
-        if (budget and self.last_answers and self.pack.rules and expected > budget
+        reflex = self.pack.raw.get("reflex")
+        if reflex and self.last_answers and self.pack.rules and self._task_ok(reflex, values):
+            # a reflex: the fresh frame already needs a move before the decider could answer (Snake, a turn into a
+            # wall that needs a second turn on the very next step). The rules act on the decider's last answers, its
+            # ranking of the moves, at perception speed; the decider is asked again on the next frame
+            import copy
+            self.skipped_reflex += 1
+            res = {"answers": copy.deepcopy(self.last_answers), "latency_ms": 0, "input_tokens": 0, "cost_usd": 0.0}
+            rec["sensor"] = "reflex: " + ", ".join(f"{c['read']}={_get(values, c['read'])}" for c in (reflex if isinstance(reflex, list) else [reflex])) + " → rules on last answers"
+            rec["skipped"] = "reflex"
+            e = None
+        elif (budget and self.last_answers and self.pack.rules and expected > budget
                 and self.budget_skips < int(self.pack.raw.get("budget_skip_max", 2))):
             # the tick cannot afford the decider: the rules act on its last answers (the post-posed shield), at most
             # budget_skip_max ticks in a row so a slow decider is never starved out of the loop

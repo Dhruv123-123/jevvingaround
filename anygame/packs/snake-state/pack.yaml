@@ -22,6 +22,7 @@ act:
 tick_hz: 6
 sensor_timeout_s: 0.8
 settle: screen_change
+reflex: { read: head_around.ahead_free, lte: 1 }   # a fresh answer would land after the next step: the rules act on the last answers now
 stop_when: { read: status, equals: dead }
 play: >
   Snake on a 12x12 grid, cells c1..c12 (columns, left to right) by r1..r12 (rows, top to bottom). In `cells`,

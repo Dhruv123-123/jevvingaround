@@ -21,6 +21,7 @@ act:
 tick_hz: 6
 sensor_timeout_s: 0.8    # slower than this and the rules replay the last answers instead of waiting on the network
 settle: screen_change      # one decision per game step: a queued turn must show on screen before we look again
+reflex: { read: head_around.ahead_free, lte: 1 }   # one free cell ahead: an answer from Jev (500-900 ms) lands after the next step, and the loop sees no frame while it waits. Turn now on Jev's last ranking with the rules picking the safe move; Jev is asked again once there is room
 stop_when: { read: status, equals: dead }
 play: >
   Snake on a 12x12 grid, cells c1..c12 (columns, left to right) by r1..r12 (rows, top to bottom). In `cells`,
