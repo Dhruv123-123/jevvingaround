@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { PNG } from "pngjs";
-import { BUNDLED_PACKS, packFromText, evalPack, Agent, StillDevice, RandomSensor, runsOf, aroundOf, TetrisTracker, accentColor, matches } from "../dist/core.js";
+import { BUNDLED_PACKS, packFromText, evalPack, Agent, StillDevice, RandomSensor, runsOf, aroundOf, TetrisTracker, accentColor, isHollow, matches } from "../dist/core.js";
 
 const PACKS = join(process.cwd(), "..", "packs");
 
@@ -44,6 +44,9 @@ test("runs, around and accent behave like the Python reads", () => {
   assert.deepEqual(accentColor({ width: w, height: h, data }, 0.03, 40, 0.25), [31, 41, 55]);
   for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { const d = Math.hypot(x - 83, y - 83); if (d > 40 && d < 62) { const i = (y * w + x) * 4; data[i] = 96; data[i + 1] = 165; data[i + 2] = 250; } }
   assert.deepEqual(accentColor({ width: w, height: h, data }, 0.03, 40, 0.25), [96, 165, 250]);
+  assert.equal(isHollow({ width: w, height: h, data }, 0.03, 40, 0.1), true);          // a ring: its middle is background
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { if (Math.hypot(x - 83, y - 83) <= 40) { const i = (y * w + x) * 4; data[i] = 96; data[i + 1] = 165; data[i + 2] = 250; } }
+  assert.equal(isHollow({ width: w, height: h, data }, 0.03, 40, 0.1), false);         // filled in: a disc
 });
 
 test("tetris tracker ranks landings and builds macros", () => {

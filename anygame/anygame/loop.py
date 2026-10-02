@@ -58,7 +58,8 @@ def stable_hash(v: Any) -> str:
 
 
 class Agent:
-    def __init__(self, pack: Pack, device: Device, jev: Jev | None, hud=None, log_path: str | None = None, max_ticks: int | None = None, record_dir: str | None = None):
+    def __init__(self, pack: Pack, device: Device, jev: Jev | None, hud=None, log_path: str | None = None, max_ticks: int | None = None, record_dir: str | None = None,
+                 background: bool = True):
         self.pack, self.device, self.jev, self.hud = pack, device, jev, hud
         self.max_ticks = max_ticks
         self.record_dir = Path(record_dir) if record_dir else None
@@ -97,7 +98,8 @@ class Agent:
         # the browser, a process does not, and the loop only ever waits on the first value
         import multiprocessing
         from concurrent.futures import ProcessPoolExecutor
-        self.pool = ProcessPoolExecutor(max_workers=1, mp_context=multiprocessing.get_context("fork")) if any(int(r.get("every", 1)) > 1 for r in self.pack.reads.values()) else None
+        # background=False (eval, the author's check): every read runs on every frame, so a test never sees a slow read's null
+        self.pool = ProcessPoolExecutor(max_workers=1, mp_context=multiprocessing.get_context("fork")) if background and any(int(r.get("every", 1)) > 1 for r in self.pack.reads.values()) else None
         self.pending: dict[str, Any] = {}
         if self.pool is not None:
             # warm the worker (fork + OCR model load, ~2 s) before the first tick, so a real-time game does not run
@@ -339,15 +341,21 @@ class Agent:
                 self.on_pack_change(dump_pack(self.base.raw), f"mode {name} invalid: {str(e)[:120]}")
             return False
 
-    def observe(self, frame, pack=None, want_conf: bool = False, state: Any = None) -> tuple[dict[str, Any], list, dict[str, float]]:
+    def observe(self, frame, pack=None, want_conf: bool = False, state: Any = None, wait: bool = False) -> tuple[dict[str, Any], list, dict[str, float]]:
         """Frame → the state the model sees: the pack's reads, presented, plus history (<id>_prev/_moving/_reverse)
-        and the derived reads computed here because they need per-run state (around, tetris)."""
+        and the derived reads computed here because they need per-run state (around, tetris). `wait`: a still frame,
+        so slow reads are waited for instead of left at `otherwise`."""
         pack = pack or self.pack
         conf: dict[str, float] = {}
-        values, dets, timings = read_all(pack, frame, tick=self.tick, previous=self.last_values, pool=self.pool, pending=self.pending, conf=conf, state=state)
+        values, dets, timings = read_all(pack, frame, tick=self.tick, previous=self.last_values, pool=self.pool, pending=self.pending, conf=conf, state=state, wait=wait)
         self.last_conf = conf
         raw_values = values
         values = self._present(values, pack)
+        for rid, r in pack.reads.items():
+            if r.get("kind") == "head":
+                # the moving end of a body drawn in one colour: the cell that newly took the symbol and has one
+                # neighbour of it (a page that draws head and body alike, like most real snakes)
+                values[rid] = self._head(rid, raw_values.get(r["in"]), str(r.get("symbol", "s")))
         for rid, r in pack.reads.items():
             if not r.get("history"):
                 continue
@@ -356,7 +364,7 @@ class Agent:
                 self.prev_distinct[rid] = self.last_values[rid]
             if rid in self.prev_distinct:
                 values[f"{rid}_prev"] = self.prev_distinct[rid]
-                if r.get("kind") == "locate" and isinstance(cur, str) and isinstance(self.prev_distinct[rid], str):
+                if r.get("kind") in ("locate", "head") and isinstance(cur, str) and isinstance(self.prev_distinct[rid], str):
                     values[f"{rid}_moving"] = _direction(self.prev_distinct[rid], cur)
                     values[f"{rid}_reverse"] = {"up": "down", "down": "up", "left": "right", "right": "left"}.get(values[f"{rid}_moving"], "none")
         for rid, r in pack.reads.items():
@@ -375,6 +383,28 @@ class Agent:
                     self.trackers[rid] = TetrisTracker(r)
                 values[rid] = self.trackers[rid].read(raw_values.get(r["in"]), raw_values.get(r["next_in"]) if r.get("next_in") else None)
         return values, dets, timings
+
+    def _head(self, rid: str, grid: Any, sym: str) -> str | None:
+        import re as _re
+        if not isinstance(grid, dict):
+            return None
+        cells = {(int(m.group(1)), int(m.group(2))) for k, v in grid.items() if str(v) == sym and (m := _re.match(r"c(\d+)r(\d+)$", k))}
+        prev_cells, prev_head = self.trackers.get(rid, (None, None))
+        head = prev_head
+        if prev_cells is not None:
+            new = cells - prev_cells
+            ends = [c for c in new if sum((c[0] + dc, c[1] + dr) in cells for dc, dr in ((1, 0), (-1, 0), (0, 1), (0, -1))) <= 1]
+            if len(ends) == 1:
+                head = ends[0]
+            elif len(new) == 1:
+                head = next(iter(new))
+            elif len(ends) > 1 and prev_head is not None:
+                # it moved its whole length since the last look: the head is the end farther from where it was
+                head = max(ends, key=lambda c: abs(c[0] - prev_head[0]) + abs(c[1] - prev_head[1]))
+        if head is not None and head not in cells:
+            head = None
+        self.trackers[rid] = (cells, head)
+        return f"c{head[0]}r{head[1]}" if head else None
 
     # ---- one tick --------------------------------------------------------------------------------
     def step(self) -> dict[str, Any]:
@@ -587,10 +617,16 @@ class Agent:
         act = answers.get("action")
         if excluded and act and act.get("choice") in excluded:
             probs = {k: v for k, v in (act.get("probabilities") or {}).items() if k not in excluded}
+            allowed = [a.id for a in self.pack.actions if a.id not in excluded]
             if probs:
                 best = max(probs, key=probs.get)
                 answers["action"] = {**act, "choice": best}
                 applied.append(f"→ {best}")
+            elif len(allowed) == 1:
+                # the decider's answer (often a stale one, under budget_ms) never offered the one action the rules
+                # leave: take it, the rules have decided
+                answers["action"] = {**act, "choice": allowed[0]}
+                applied.append(f"→ {allowed[0]} (the only action the rules allow)")
             else:
                 # the rules are infeasible here: every action is excluded. The choice stands, and the record says so,
                 # because a trap that closed ticks ago is an incident for the reads that should have seen it coming
