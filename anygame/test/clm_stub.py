@@ -2,7 +2,8 @@
 choice and score questions, probabilities over the criteria, usage and the X-CLM-Latency-Ms header. It ranks by a
 fixed heuristic (the first criterion that appears in the state text, else the first), so tests can prove the client,
 the sensor wiring and the loop without a GPU. Not a model. `python test/clm_stub.py [port]`."""
-import json, sys, time
+import json
+import os, sys, time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 
@@ -46,9 +47,13 @@ class H(BaseHTTPRequestHandler):
         req = json.loads(self.rfile.read(n) or b"{}")
         t0 = time.perf_counter()
         ans = answer(req.get("state"), req.get("questions") or {})
+        time.sleep(DELAY_S)                                # CLM_STUB_DELAY_MS: answer at a hosted model's pace
         ms = (time.perf_counter() - t0) * 1000 + 16.0     # what a real CLM-8B reports on a 4090, roughly
         body = json.dumps({"model": req.get("model", "clm-latest"), "answers": ans, "usage": {"input_tokens": len(json.dumps(req.get("state"), default=str)) // 4, "billing_units": 1}}).encode()
         self.send_response(200); self.send_header("content-type", "application/json"); self.send_header("X-CLM-Latency-Ms", f"{ms:.1f}"); self.end_headers(); self.wfile.write(body)
+
+
+DELAY_S = float(os.environ.get("CLM_STUB_DELAY_MS", "0")) / 1000
 
 
 if __name__ == "__main__":
