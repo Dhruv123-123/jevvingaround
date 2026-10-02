@@ -147,13 +147,6 @@ export class Agent {
     const bare = new Set(this.noops.filter((n) => !n.includes("→")));
     const left = Object.fromEntries(Object.entries(crit).filter(([k]) => !bare.has(k)));
     if (Object.keys(left).length >= 1 && Object.keys(left).length < Object.keys(crit).length) qs.action = { ...qs.action, criteria: left };
-    for (const n of this.noops) {
-      if (!n.includes("→")) continue;
-      const [aid, val] = n.split("→");
-      for (const pq of [`${aid}__cell`, `${aid}__target`, `${aid}__slot`, `${aid}__option`]) {
-        if (qs[pq]) { const c = Object.fromEntries(Object.entries(qs[pq].criteria).filter(([k]) => k !== val)); if (Object.keys(c).length) qs[pq] = { ...qs[pq], criteria: c }; }
-      }
-    }
     for (const a of this.pack.actions) {
       if (a.kind === "play") {
         const hand = a.params.slot ? values[a.params.slot] : null;
@@ -175,6 +168,14 @@ export class Agent {
       if (a.kind === "tap" && a.params.zone && this.pack.zones[a.params.zone]?.grid && !qs[`${a.id}__cell`]) {
         const cells = Object.keys(this.pack.zones[a.params.zone].cells()).slice(0, 255);
         qs[`${a.id}__cell`] = { type: "choice", instructions: `If the action is ${a.id}, which cell of ${a.params.zone}?`, criteria: Object.fromEntries(cells.map((k) => [k.split(".", 2)[1], null])) };
+      }
+    }
+    // after the parameter questions exist, so a refused tap on a grid cell (a Go ko, a full column) is not asked again
+    for (const n of this.noops) {
+      if (!n.includes("→")) continue;
+      const [aid, val] = n.split("→");
+      for (const pq of [`${aid}__cell`, `${aid}__target`, `${aid}__slot`, `${aid}__option`]) {
+        if (qs[pq]) { const c = Object.fromEntries(Object.entries(qs[pq].criteria).filter(([k]) => k !== val)); if (Object.keys(c).length) qs[pq] = { ...qs[pq], criteria: c }; }
       }
     }
     const listOf = (read: string) => { const c = get(values, read) ?? []; return (Array.isArray(c) ? c : [c]).map(String); };

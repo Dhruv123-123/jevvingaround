@@ -589,3 +589,33 @@ def test_demonstration_digest_and_author_from_demo(monkeypatch, tmp_path):
     out = tmp_path / "out"
     ok, _ = A.author("web://unused", "x", out, rounds=1, log=lambda m: None, demo=d, size=(200, 200))
     assert (out / "fixtures" / "probe-1.png").exists() and "DEMONSTRATION (explorer)" in seen[0] and "Use the demonstration" in seen[0]
+
+
+def test_go_read_counts_captures_saves_and_eyes():
+    from anygame.perceive import go
+    mid = ["BBW......", "B.W......", ".BBW.....", "..W......", ".....B...", "....WW...", "...B.....", "....B...W", ".WBW....B"]
+    v = go.read(mid, {"us": "B", "them": "W", "komi": 6.5})
+    assert v["saves"] == ["c3r8", "c8r9"] and v["our_atari"] == ["c3r9", "c9r9"]
+    assert v["self_atari"] == ["c1r9"] and "c1r9" not in v["good"]
+    cap = [".........", ".........", "..W......", "....B....", "...BWB...", ".........", "..W......", ".........", "........."]
+    v = go.read(cap, {})
+    assert v["captures"] == ["c5r6"] and v["captured_by_move"] == {"c5r6": 1} and v["urgent"] == ["c5r6"]
+    # c1r1 walled in by black is an eye: legal, never offered as good; suicide for white is not black's business
+    eye = [".B.......", "B........"] + ["........."] * 7
+    v = go.read(eye, {})
+    assert v["eyes"] == ["c1r1"] and "c1r1" in v["legal"] and "c1r1" not in v["good"]
+    assert v["score"]["us"] == 81 and v["score"]["lead"] == 81    # area scoring: every empty region touches black only
+
+
+def test_a_refused_grid_tap_is_not_offered_again():
+    # a Go ko recapture is legal to the stateless compiler; the page refuses it, and the loop must stop offering it
+    from anygame.loop import Agent
+    from anygame.pack import load_pack
+    from anygame.perceive import go
+    board = [".BW......", "BW.W.....", ".BW......"] + ["........."] * 6
+    vals = {"board": board, "status": "our_turn", "go": go.read(board, {})}
+    a = object.__new__(Agent)
+    a.pack, a.noops = load_pack(os.path.join(os.path.dirname(__file__), "..", "packs", "go")), []
+    first = list(a.questions(vals)["place__cell"]["criteria"])
+    a.noops = [f"place→{first[0]}"]
+    assert first[0] not in a.questions(vals)["place__cell"]["criteria"]

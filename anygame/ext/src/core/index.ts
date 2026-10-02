@@ -2,6 +2,7 @@ export * from "./geometry.js";
 export * from "./color.js";
 export * from "./pack.js";
 export * from "./reads.js";
+export * from "./go.js";
 export * from "./tetris.js";
 export * from "./loop.js";
 export * from "./sensors.js";
