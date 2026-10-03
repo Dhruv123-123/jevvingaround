@@ -524,8 +524,10 @@ export class Agent {
       const d = this.fallback.recall(fp);
       if (d) { rec.action = await this.actFallback(d.now); rec.fallback = `memo transient: ${JSON.stringify(d.now)}`; rec.reason = "known transient screen"; return done(rec); }
     }
-    const stop = this.pack.raw.stop_when;
-    if (stop && this.cond(stop, values)) { rec.action = "stop"; rec.reason = `${stop.read} is ${get(values, stop.read)}`; return done(rec); }
+    // stop_when: one end condition or a list of them; the first that holds ends the run and names how
+    const stops = this.pack.raw.stop_when;
+    const stop = (Array.isArray(stops) ? stops : stops ? [stops] : []).find((c: any) => c && this.cond(c, values));
+    if (stop) { rec.action = "stop"; rec.reason = `${stop.read} is ${get(values, stop.read)}`; return done(rec); }
     const gate = this.pack.raw.act_when;
     if (gate && !this.cond(gate, values)) { rec.action = "wait"; rec.reason = `${gate.read} is ${get(values, gate.read)}`; return done(rec); }
     const last = this.history[this.history.length - 1];

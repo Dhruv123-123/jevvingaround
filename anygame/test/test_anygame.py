@@ -196,6 +196,17 @@ def test_a_wrong_belief_cannot_force_a_column_the_reads_rule_out():
     assert any("skipped: not offered" in r for r in rec["rules"])
 
 
+def test_stop_when_list_stops_on_the_first_condition_that_holds_and_names_it():
+    # a pack can say how a game ended (won / lost / tied), which the learn loop reads as the episode's outcome
+    pack = load_pack(os.path.join(ROOT, "packs", "2048"))
+    frame = cv2.imread(os.path.join(ROOT, "packs", "2048", "fixtures", "board-a.png"))
+    pack.raw["stop_when"] = [{"read": "over", "equals": "over"}, {"read": "over", "in": ["playing"]}]
+    rec = Agent(pack, FakeDevice([frame]), FakeJev()).step()
+    assert rec["action"] == "stop" and rec["reason"] == "over is playing"
+    pack.raw["stop_when"] = [{"read": "over", "equals": "over"}]
+    assert Agent(pack, FakeDevice([frame]), FakeJev()).step()["action"] != "stop"
+
+
 def test_act_when_waits_for_our_turn():
     pack = load_pack(os.path.join(ROOT, "packs", "connect4"))
     frame = cv2.imread(os.path.join(ROOT, "packs", "connect4", "fixtures", "start.png"))

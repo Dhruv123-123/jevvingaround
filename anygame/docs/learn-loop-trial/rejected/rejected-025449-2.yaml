@@ -1,0 +1,317 @@
+game: tic-tac-toe
+screen:
+  orientation: portrait
+  size:
+  - 540
+  - 560
+zones:
+  board:
+    rect_px:
+    - 120
+    - 75
+    - 420
+    - 375
+    grid:
+    - 3
+    - 3
+    rect:
+    - 0.2222222222222222
+    - 0.13392857142857142
+    - 0.7777777777777778
+    - 0.6696428571428571
+  mode:
+    rect_px:
+    - 415
+    - 438
+    - 450
+    - 460
+    rect:
+    - 0.7685185185185185
+    - 0.7821428571428571
+    - 0.8333333333333334
+    - 0.8214285714285714
+  status:
+    rect_px:
+    - 140
+    - 410
+    - 455
+    - 435
+    rect:
+    - 0.25925925925925924
+    - 0.7321428571428571
+    - 0.8425925925925926
+    - 0.7767857142857143
+  result:
+    rect_px:
+    - 245
+    - 410
+    - 290
+    - 435
+    rect:
+    - 0.4537037037037037
+    - 0.7321428571428571
+    - 0.5370370370370371
+    - 0.7767857142857143
+  won:
+    rect_px:
+    - 175
+    - 440
+    - 198
+    - 466
+    rect:
+    - 0.32407407407407407
+    - 0.7857142857142857
+    - 0.36666666666666664
+    - 0.8321428571428572
+  tied:
+    rect_px:
+    - 256
+    - 440
+    - 279
+    - 466
+    rect:
+    - 0.4740740740740741
+    - 0.7857142857142857
+    - 0.5166666666666667
+    - 0.8321428571428572
+  lost:
+    rect_px:
+    - 337
+    - 440
+    - 360
+    - 466
+    rect:
+    - 0.6240740740740741
+    - 0.7857142857142857
+    - 0.6666666666666666
+    - 0.8321428571428572
+read:
+  cells:
+    kind: color
+    zone: board
+    inset: 0.25
+    max_dist: 60
+    otherwise: .
+    as: matrix
+    options:
+      .: '#000000'
+      X: '#fefefe'
+      O: '#fefefe'
+    stat: accent
+    hollow: O
+  mode:
+    kind: ocr
+    zone: mode
+    every: 1
+  screen_state:
+    kind: ocr
+    zone: status
+    every: 1
+  result:
+    kind: color
+    zone: result
+    options:
+      playing: '#000000'
+      over: '#fefefe'
+    max_dist: 80
+    otherwise: playing
+  won:
+    kind: color
+    zone: won
+    stat: accent
+    hollow: '0'
+    options:
+      '1': '#fefefe'
+      '0': '#fefefe'
+    max_dist: 80
+    otherwise: '0'
+  tied:
+    kind: color
+    zone: tied
+    stat: accent
+    hollow: '0'
+    options:
+      '1': '#fefefe'
+      '0': '#fefefe'
+    max_dist: 80
+    otherwise: '0'
+  lost:
+    kind: color
+    zone: lost
+    stat: accent
+    hollow: '0'
+    options:
+      '1': '#fefefe'
+      '0': '#fefefe'
+    max_dist: 80
+    otherwise: '0'
+  legal:
+    kind: locate
+    in: cells
+    symbol: .
+    many: true
+  x_wins_at:
+    kind: runs
+    in: cells
+    symbol: X
+    length: 3
+    gravity: down
+  o_wins_at:
+    kind: runs
+    in: cells
+    symbol: O
+    length: 3
+    gravity: down
+act:
+- id: place
+  kind: tap
+  zone: board
+  description: place X in a legal empty board cell
+- id: keep
+  kind: wait
+  description: wait for the computer response or board animation
+tick_hz: 4
+settle: screen_change
+act_when:
+  read: mode
+  equals: 1P
+stop_when:
+- read: won
+  equals: '1'
+- read: lost
+  equals: '1'
+- read: tied
+  equals: '1'
+play: 'When `legal` is non-empty, place X only in a cell listed by `legal`. If `o_wins_at` is non-empty,
+  block by choosing a cell in `o_wins_at`, even when `x_wins_at` is also non-empty. Otherwise choose
+  `x_wins_at` when available, then the centre, then a corner, then any remaining legal cell. Never tap
+  outside `legal`. When `legal` is empty, use `keep` and wait for the board to change. Stop when `result`
+  is over.
+
+  '
+questions:
+- id: can_win
+  type: noul
+  instructions: Is `x_wins_at` non-empty?
+  criteria:
+    true: A legal empty cell immediately completes a line for X.
+    false: X has no immediate winning placement.
+- id: must_block
+  type: noul
+  instructions: Is `o_wins_at` non-empty?
+  criteria:
+    true: O has an immediate winning placement that must be blocked.
+    false: O has no immediate winning threat.
+- id: place__cell
+  type: choice
+  instructions: 'Choose one cell from `legal`. If `o_wins_at` is non-empty, choose a cell in `o_wins_at`.
+    Otherwise choose `x_wins_at` when available, then c2r2, then a corner, then any remaining legal cell.'
+  criteria:
+    c1r1: top-left corner
+    c2r1: top-middle
+    c3r1: top-right corner
+    c1r2: middle-left
+    c2r2: centre
+    c3r2: middle-right
+    c1r3: bottom-left corner
+    c2r3: bottom-middle
+    c3r3: bottom-right corner
+rules:
+- if:
+    read: mode
+    equals: 1P
+  only:
+    place__cell: legal
+- if:
+    read: legal
+    equals: []
+  exclude:
+  - place
+- if:
+    noul: must_block
+    gte: 0.5
+  set:
+    place__cell: o_wins_at
+- if:
+    noul: can_win
+    gte: 0.5
+  set:
+    place__cell: x_wins_at
+- if:
+    read: o_wins_at
+    not: []
+  only:
+    place__cell: o_wins_at
+tasks:
+- id: make_a_line
+  instruction: Place X to complete a row, column, or diagonal.
+  category: score
+  done:
+    read: x_wins_at
+    not: []
+  when:
+    read: mode
+    equals: 1P
+  hold_ticks: 1
+  limit_ticks: 80
+- id: prevent_loss
+  instruction: When O threatens an immediate line, place X in the blocking cell.
+  category: avoid
+  done:
+    read: o_wins_at
+    equals: []
+  when:
+    read: mode
+    equals: 1P
+  hold_ticks: 1
+  limit_ticks: 80
+tests:
+- frame: fixtures/probe-1.png
+  expect:
+    cells:
+    - '...'
+    - '...'
+    - '...'
+    mode: 1P
+    result: playing
+- frame: fixtures/probe-2.png
+  expect:
+    cells:
+    - '...'
+    - '...'
+    - OX.
+    mode: 2P
+    result: playing
+- frame: fixtures/probe-3.png
+  expect:
+    cells:
+    - .O.
+    - '...'
+    - OXX
+    mode: 2P
+    result: playing
+- frame: fixtures/probe-4.png
+  expect:
+    cells:
+    - X..
+    - .O.
+    - ..O
+    mode: 1P
+    result: playing
+- frame: fixtures/probe-5.png
+  expect:
+    cells:
+    - .OX
+    - .O.
+    - '...'
+    mode: 1P
+    result: playing
+- frame: fixtures/end-tied.png
+  expect:
+    won: '0'
+    tied: '1'
+    lost: '0'
+- frame: fixtures/end-lost.png
+  expect:
+    won: '0'
+    lost: '1'

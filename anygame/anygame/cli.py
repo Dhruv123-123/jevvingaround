@@ -202,7 +202,8 @@ def cmd_battle(a):
     from .perceive import read_all
     for key, ag in zip(("a", "b"), agents):
         vals = ag._present(read_all(ag.pack, final)[0])       # both sides read the final screen through their own pack
-        stop = ag.pack.raw.get("stop_when")
+        from .loop import _stops
+        stop = (_stops(ag.pack.raw) or [None])[0]
         result[key + "_status"] = vals.get(stop["read"]) if stop else None
         result[key + "_cost_usd"] = round(ag.total_cost, 6)
         result[key + "_moves"] = sum(1 for h in ag.history if h["action"] not in ("wait", "stop"))
