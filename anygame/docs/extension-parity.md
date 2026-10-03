@@ -73,4 +73,3 @@ All runs use `ext/test/e2e_parity.py` on the bundled game pages. Logs are in `/m
 - **Background read pool and the `wait` setting.** The Python loop reads in a background pool; the extension reads in the tab, one frame at a time.
 - **Truth logging (`ANYGAME_LOG_TRUTH`)** for grading reads.
 - **Probe and authoring changes in `author.py`** beyond the prompt text.
-- **The `learn` loop, task setter and rater.** The panel has setter and rater controls, but the rewrite loop runs only from the CLI.
