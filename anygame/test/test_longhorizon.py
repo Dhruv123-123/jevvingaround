@@ -227,6 +227,7 @@ def test_a_signature_change_without_a_jump_is_the_same_place():
     assert w.tile_of({"map": 99, "x": 3, "y": 4}) == (11, 3, 4)       # a byte of the signature changed mid-dialogue
     assert w.tile_of({"map": 42, "x": 9, "y": 1}) == (42, 9, 1)       # the position jumped with it: a door
     assert w.tile_of({"map": 99, "x": 9, "y": 2}) == (11, 9, 2)       # an alias stays one for the run
+    assert w.tile_of({"map": 7, "x": 9, "y": 2}, stepping=True) == (7, 9, 2)   # stairs onto the same tile, while walking
     d = w.dump()
     w2 = WorldTracker({"x": "x", "y": "y", "map": "map"})
     w2.load(json.loads(json.dumps(d)))

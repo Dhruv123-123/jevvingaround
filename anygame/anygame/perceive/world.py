@@ -103,7 +103,7 @@ class WorldTracker:
         self._last: Tile | None = None
 
     # ---- memory ---------------------------------------------------------------------------------------
-    def tile_of(self, values: dict[str, Any]) -> Tile | None:
+    def tile_of(self, values: dict[str, Any], stepping: bool = False) -> Tile | None:
         if isinstance(self.r.get("cell"), str):
             c = _get(values, self.r["cell"])
             if isinstance(c, (int, float)) and c > 0:
@@ -115,16 +115,18 @@ class WorldTracker:
             t = (m if m is not None else 0, int(round(float(x) / self.cell)), int(round(float(y) / self.cell)))
         except (TypeError, ValueError):
             return None
-        return self._place(t)
+        return self._place(t, stepping)
 
-    def _place(self, t: Tile) -> Tile:
+    def _place(self, t: Tile, stepping: bool = False) -> Tile:
         """A discovered map signature can change without a transition (a byte in it is also a dialogue or animation
         state). A place changes only when the position jumps with it: a new signature that appears while the player
         stands where they stood, or one step away, is the same place under another name (an alias, for the run)."""
         m = t[0]
         if m in self.alias:
             m = self.alias[m]
-        elif m not in self.places and self._last is not None and self._last[0] != m:
+        elif m not in self.places and self._last is not None and self._last[0] != m and not stepping:
+            # `stepping`: the change came with a step the agent took while walking (no text, no menu between), which
+            # is a door or stairs even when the position does not jump (Pokemon's stairs land on the same tile)
             if abs(t[1] - self._last[1]) + abs(t[2] - self._last[2]) <= 1:
                 self.alias[m] = self._last[0]
                 m = self._last[0]
@@ -425,7 +427,7 @@ class WorldTracker:
                     self.learn(here, step, t2)
                 done.append(f"{step} → stop: left the overworld")
                 break
-            t2 = self.tile_of(v2)
+            t2 = self.tile_of(v2, stepping=True)
             if t2 == here and classify is not None:
                 # it did not move: a wall, or did the step open something (a text, a choice)? Ask by trying
                 kind = classify()
