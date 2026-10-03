@@ -98,9 +98,10 @@ def test_loop_drops_noop_actions_until_screen_changes():
     jev = FakeJev()
     ag = Agent(pack, dev, jev)
     ag.step(); ag.step(); ag.step()
-    # tick 1 offers all four; the chosen 'up' did nothing, so tick 2 offers three, tick 3 two
+    # tick 1 offers all four; the chosen swipe did nothing, so tick 2 offers three, tick 3 two
     assert [len(c) for c in jev.seen] == [4, 3, 2]
-    assert "up" not in jev.seen[1] and "down" not in jev.seen[2]
+    first, second = list(jev.seen[0])[0], list(jev.seen[1])[0]
+    assert first not in jev.seen[1] and second not in jev.seen[2] and first not in jev.seen[2]
     assert dev.log and dev.log[0][0] == "swipe"
 
 
@@ -180,6 +181,19 @@ def test_rules_set_copies_a_choice_into_the_parameter_question():
     rec = ag.step()
     assert rec["choice"] == "drop" and rec["action"].startswith("tap columns.c4")
     assert any("drop__cell = threat_column" in r for r in rec["rules"])
+
+
+def test_a_wrong_belief_cannot_force_a_column_the_reads_rule_out():
+    # 64-episode run: a decider that believed "must block in c1" tapped a full c1 until the tick cap. Now the threat
+    # column comes from y_wins_at (an `only` rule), and a `set:` cannot force a value the question did not offer.
+    pack = load_pack(os.path.join(ROOT, "packs", "connect4"))
+    frame = cv2.imread(os.path.join(ROOT, "packs", "connect4", "fixtures", "threat.png"))
+    jev = ChoiceJev(noul=0.9, choice={"threat_column": "c1", "win_column": "c7"})
+    ag = Agent(pack, FakeDevice([frame]), jev)
+    rec = ag.step()
+    assert jev.seen[0]["drop__cell"] == ["c4"]
+    assert rec["action"].startswith("tap columns.c4")
+    assert any("skipped: not offered" in r for r in rec["rules"])
 
 
 def test_act_when_waits_for_our_turn():
@@ -328,7 +342,7 @@ def test_random_sensor_and_llm_answer_parsing(monkeypatch):
         def json(self):
             return {"choices": [{"message": {"content": 'Sure: {"action": "b", "risk": 0.9}'}}], "usage": {"prompt_tokens": 50, "cost": 0.00001}}
 
-    monkeypatch.setenv("OPENROUTER_API_KEY", "x")
+    _chat_env(monkeypatch)
     llm = LLMSensor("some/model")
     monkeypatch.setattr(llm.chat.s, "post", lambda *a, **k: Resp())
     out = llm.ask({"screen": {}}, qs)
@@ -350,7 +364,7 @@ def test_author_tune_loop_plays_digests_and_keeps_a_passing_pack(monkeypatch, tm
         body += "\ntests:\n  - { frame: fixtures/probe-1.png, expect: { status: our_turn, board: ['...', '...', '...'] } }\n"
         return "here you go\n```yaml\n" + body + "```\n"
 
-    monkeypatch.setenv("OPENROUTER_API_KEY", "x")
+    _chat_env(monkeypatch)
     monkeypatch.setattr(A.Author, "ask", fake_ask)
     out = tmp_path / "ttt"
     ok, path = A.author("web://" + os.path.join(ROOT, "games", "tictactoe.html?seed=2"), "Tic-tac-toe", out,
@@ -363,17 +377,48 @@ def test_author_tune_loop_plays_digests_and_keeps_a_passing_pack(monkeypatch, tm
     assert A._better(None, {"reason": "x"}, None) and A._better({"reason": "status is we_lost", "ticks": 5}, {"reason": "status is draw", "ticks": 9}, None)
 
 
+def _chat_env(monkeypatch):
+    for k in ("ANYGAME_LLM_API", "ANYGAME_AUTHOR_MODEL"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("ANYGAME_LLM_BASE", "https://example.test/v1")
+    monkeypatch.setenv("ANYGAME_LLM_KEY", "x")
+    monkeypatch.setenv("ANYGAME_LLM_MODEL", "stub-model")
+
+
+def test_chat_without_config_stops_and_openrouter_is_jev_only(monkeypatch):
+    import pytest
+    from anygame.chat import Chat
+    for k in ("ANYGAME_LLM_BASE", "ANYGAME_LLM_KEY", "ANYGAME_LLM_MODEL", "ANYGAME_LLM_API", "AZURE_OPENAI_API_KEY", "ANYGAME_AUTHOR_MODEL"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "x")          # Jev's key alone must not turn on a chat model
+    with pytest.raises(SystemExit) as e:
+        Chat()
+    assert "ANYGAME_LLM_BASE" in str(e.value) and "ANYGAME_LLM_MODEL" in str(e.value)
+    with pytest.raises(SystemExit):
+        Chat(base_url="https://openrouter.ai/api/v1")        # no model named: no default model either
+    for m in ("anthropic/claude-sonnet-5", "openai/gpt-5.6-luna"):    # OpenRouter is for Jev only, whatever the model
+        with pytest.raises(SystemExit) as e:
+            Chat(model=m, base_url="https://openrouter.ai/api/v1", api_key="k")
+        assert "Jev only" in str(e.value)
+    from anygame.jev import Jev
+    monkeypatch.delenv("JEV_API_KEY", raising=False); monkeypatch.delenv("JEV_BASE_URL", raising=False)
+    monkeypatch.setenv("JEV_MODEL", "anthropic/claude-sonnet-5")    # nor can JEV_MODEL send another model there
+    with pytest.raises(RuntimeError):
+        Jev()
+
+
 def test_chat_routes_azure_and_openai_compatible(monkeypatch):
     from anygame.chat import Chat
     monkeypatch.setenv("ANYGAME_LLM_KEY", "k")
+    monkeypatch.delenv("ANYGAME_LLM_API", raising=False)   # a configured provider would override the URL-based guess
     az = Chat(model="gpt-4o", base_url="https://myres.openai.azure.com")
     assert az.api == "azure" and az.url().startswith("https://myres.openai.azure.com/openai/deployments/gpt-4o/chat/completions?api-version=") and az.headers()["api-key"] == "k"
     v1 = Chat(model="gpt-4o", base_url="https://myres.openai.azure.com/openai/v1", api="azure")
     assert v1.url() == "https://myres.openai.azure.com/openai/v1/chat/completions"
     fo = Chat(model="Llama-3.3-70B", base_url="https://myres.services.ai.azure.com")
     assert fo.api == "azure-models" and "/models/chat/completions" in fo.url()
-    orr = Chat(model="anthropic/claude-sonnet-5", base_url="https://openrouter.ai/api/v1")
-    assert orr.api == "openai" and orr.headers()["authorization"] == "Bearer k"
+    oai = Chat(model="m", base_url="https://example.com/v1")
+    assert oai.api == "openai" and oai.headers()["authorization"] == "Bearer k"
     fv1 = Chat(model="gpt-5.6-luna", base_url="https://myres.services.ai.azure.com/openai/v1/responses")   # the portal's full URL
     assert fv1.api == "azure" and fv1.url() == "https://myres.services.ai.azure.com/openai/v1/chat/completions" and fv1.headers()["api-key"] == "k"
 
@@ -413,6 +458,19 @@ def test_tetris_tracker_ranks_landings_and_builds_macros():
     fall = ["." * 10 for _ in range(20)]
     fall[2] = "...IIII..."
     assert t.read(fall, None)["phase"] == "falling"
+
+
+def test_tetris_lookahead_ranks_by_two_pieces():
+    from anygame.perceive.tetris import TetrisTracker, lookahead, features
+    # a one-wide well and the next piece unknown (mean over all seven): the O never plugs the well
+    board = ["." * 10 for _ in range(20)]
+    board[0], board[1] = ".OO.......", ".OO......."
+    for r in range(16, 20):
+        board[r] = "#########."
+    v = TetrisTracker({"in": "board", "lookahead": True}).read(board, None)
+    assert v["shape"] == "O" and len(v["landings"]) == 6 and "holes +0" in v["landings"]["a"] and "col10" not in v["landings"]["a"]
+    full = {(c, r) for c in range(10) for r in range(20)}
+    assert lookahead(features(full, 10, 20), full, 0, "I", 10, 20) is None
 
 
 def test_tetris_pack_reads_piece_next_and_landings_from_fixture():
@@ -465,7 +523,7 @@ def test_author_rejects_expectations_bent_to_a_wrong_read(monkeypatch, tmp_path)
     exp = A.expectations(tmp_path)
     assert exp == {"fixtures/probe-2.png": {"board": ["...", ".X.", "..."]}}
     before = {"fixtures/probe-2.png": {"board": ["...", ".X.", "O.."]}}
-    monkeypatch.setenv("OPENROUTER_API_KEY", "x")
+    _chat_env(monkeypatch)
     asked = []
     monkeypatch.setattr(A.Author, "ask", lambda self, parts: (asked.append(parts), '{"1": false}')[1])
     au = A.Author()
@@ -571,8 +629,144 @@ def test_demonstration_digest_and_author_from_demo(monkeypatch, tmp_path):
     def fake_ask(self, parts):
         seen.append(" ".join(p.get("text", "") for p in parts if p.get("type") == "text"))
         return "```yaml\n" + yaml_text + "\ntests:\n  - { frame: fixtures/probe-1.png, expect: {} }\n```"
-    monkeypatch.setenv("OPENROUTER_API_KEY", "x")
+    _chat_env(monkeypatch)
     monkeypatch.setattr(A.Author, "ask", fake_ask)
     out = tmp_path / "out"
     ok, _ = A.author("web://unused", "x", out, rounds=1, log=lambda m: None, demo=d, size=(200, 200))
     assert (out / "fixtures" / "probe-1.png").exists() and "DEMONSTRATION (explorer)" in seen[0] and "Use the demonstration" in seen[0]
+
+
+def test_go_read_counts_captures_saves_and_eyes():
+    from anygame.perceive import go
+    mid = ["BBW......", "B.W......", ".BBW.....", "..W......", ".....B...", "....WW...", "...B.....", "....B...W", ".WBW....B"]
+    v = go.read(mid, {"us": "B", "them": "W", "komi": 6.5})
+    assert v["saves"] == ["c3r8", "c8r9"] and v["our_atari"] == ["c3r9", "c9r9"]
+    assert v["self_atari"] == ["c1r9"] and "c1r9" not in v["good"]
+    cap = [".........", ".........", "..W......", "....B....", "...BWB...", ".........", "..W......", ".........", "........."]
+    v = go.read(cap, {})
+    assert v["captures"] == ["c5r6"] and v["captured_by_move"] == {"c5r6": 1} and v["urgent"] == ["c5r6"]
+    # c1r1 walled in by black is an eye: legal, never offered as good; suicide for white is not black's business
+    eye = [".B.......", "B........"] + ["........."] * 7
+    v = go.read(eye, {})
+    assert v["eyes"] == ["c1r1"] and "c1r1" in v["legal"] and "c1r1" not in v["good"]
+    assert v["score"]["us"] == 81 and v["score"]["lead"] == 81    # area scoring: every empty region touches black only
+
+
+def test_a_refused_grid_tap_is_not_offered_again():
+    # a Go ko recapture is legal to the stateless compiler; the page refuses it, and the loop must stop offering it
+    from anygame.loop import Agent
+    from anygame.pack import load_pack
+    from anygame.perceive import go
+    board = [".BW......", "BW.W.....", ".BW......"] + ["........."] * 6
+    vals = {"board": board, "status": "our_turn", "go": go.read(board, {})}
+    a = object.__new__(Agent)
+    a.pack, a.noops = load_pack(os.path.join(os.path.dirname(__file__), "..", "packs", "go")), []
+    first = list(a.questions(vals)["place__cell"]["criteria"])
+    a.noops = [f"place→{first[0]}"]
+    assert first[0] not in a.questions(vals)["place__cell"]["criteria"]
+
+
+def test_go_read_sees_a_ladder():
+    from anygame.perceive import go
+    v = go.read([".........", "..WW.....", ".WB......"] + ["........."] * 6, {})
+    assert v["danger"] == ["c3r3"]           # white ataris at c3r4 and chases it to the edge
+    mid = ["BBW..B...", "B.W..W...", ".BBW..B..", "..W...W..", ".....B...", "....WW..B", "...B...W.", "....B...W", ".WBW....B"]
+    v = go.read(mid, {"komi": 6.5})
+    assert "c9r7" in v["doomed"] and "c9r7" not in v["best"]
+
+
+def test_slide_compiler_ranks_only_moving_swipes_and_offers_them_as_the_action():
+    from anygame.perceive.slide import rank, move
+    g = (0, 2, 2, 0, 0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0, 0)
+    r = rank(g)
+    assert r["best"] == r["legal"][0] and set(r["legal"]) == {"up", "down", "left", "right"}
+    assert list(r["ranked"])[0] == r["best"] and r["ranked"][r["best"]].startswith("#1 best")
+    full = (4, 8, 2, 4, 2, 4, 8, 32, 4, 2, 32, 8, 8, 16, 64, 256)
+    assert rank(full)["legal"] == [] and rank(full)["best"] == "none"
+    # a swipe that does not move the board is never offered
+    blocked = (2, 4, 2, 4, 4, 2, 4, 2, 2, 4, 2, 4, 0, 0, 0, 0)
+    assert "down" not in rank(blocked)["legal"] or move(blocked, "down")[0] != blocked
+    assert all(move(blocked, d)[0] != blocked for d in rank(blocked)["legal"])
+    # the pack's action question takes its options from the compiled read
+    pack = load_pack(os.path.join(ROOT, "packs", "2048"))
+    frame = cv2.imread(os.path.join(ROOT, "packs", "2048", "fixtures", "board-a.png"))
+    jev = FakeJev()
+    Agent(pack, FakeDevice([frame]), jev).step()
+    assert list(jev.seen[0])[0] == "left" and jev.seen[0]["left"].startswith("#1 best")
+
+
+def test_go_playouts_score_the_candidates_the_same_way_every_time():
+    from anygame.perceive import go
+    # white's big chain in the middle is in atari: taking it wins the random games, the other moves mostly do not
+    board = [".........", "...BBB...", "..BWWWB..", "..BWWWB..", "..BWW.B..", "...BBB...", "........."] + ["........."] * 2
+    v = go.read(board, {"komi": 6.5, "playouts": 32})
+    assert "playouts" not in go.read(board, {"komi": 6.5})          # opt-in
+    po = v["playouts"]
+    assert set(po) == set(v["best"]) | set(v["captures"]) and v["captures"] == ["c6r5"]
+    assert po["c6r5"]["win"] >= 0.9 and all(0 <= x["win"] <= 1 for x in po.values())
+    go._PLAYOUT_CACHE.clear()
+    assert go.read(board, {"komi": 6.5, "playouts": 32})["playouts"] == po    # seeded from the board
+
+
+def test_go_rerank_puts_the_playout_leader_first_past_the_margin():
+    from anygame.perceive import go
+    po = {"a": {"win": 0.50, "margin": 1.0, "n": 160}, "b": {"win": 0.55, "margin": 2.0, "n": 160},
+          "c": {"win": 0.58, "margin": 3.0, "n": 160}, "d": {"win": 0.90, "margin": 9.0, "n": 32}}
+    good = {"a", "b", "c", "d"}
+    extra: dict = {}
+    # c beats the worth top a by 0.08: it goes first; d's 32-game 0.90 is a guess and never leads
+    assert go.rerank(["a", "b", "c", "d"], po, good, 0.06, extra) == ["c", "a", "b", "d"]
+    assert extra["reranked"] == {"from": "a", "to": "c", "gap": 0.08}
+    # below the margin, best stays in worth order and says nothing
+    extra = {}
+    assert go.rerank(["a", "b", "c", "d"], po, good, 0.10, extra) == ["a", "b", "c", "d"] and "reranked" not in extra
+    # a move that is not good (an own eye, a self-atari) never leads; a capture outside best can
+    extra = {}
+    assert go.rerank(["a", "b"], po, {"a", "b", "d"}, 0.04, extra) == ["b", "a"]
+    po["e"] = {"win": 0.70, "margin": 5.0, "n": 160}
+    assert go.rerank(["a", "b"], po, {"a", "b", "e"}, 0.06, {}) == ["e", "a", "b"]
+    # the worth top already leads, or has no playouts: unchanged
+    assert go.rerank(["e", "a"], po, good | {"e"}, 0.06, {}) == ["e", "a"]
+    assert go.rerank(["z", "a"], po, good, 0.06, {}) == ["z", "a"]
+
+
+def test_go_read_reranks_best_only_when_asked(monkeypatch):
+    from anygame.perceive import go
+    board = ["........."] * 9
+    plain = go.read(board, {"komi": 6.5, "playouts": 8})
+    top, low = plain["best"][0], plain["best"][-1]
+    fake = {k: {"win": 0.5, "margin": 0.0, "n": 160} for k in plain["best"]}
+    fake[low] = {"win": 0.7, "margin": 4.0, "n": 160}
+    monkeypatch.setattr(go, "playouts", lambda *a, **k: dict(fake))
+    assert go.read(board, {"komi": 6.5, "playouts": 8})["best"] == plain["best"]           # opt-in
+    v = go.read(board, {"komi": 6.5, "playouts": 8, "rerank": "playouts"})
+    assert v["best"][0] == low and v["reranked"] == {"from": top, "to": low, "gap": 0.2}
+    assert list(v["worth"]) == v["best"] and sorted(v["best"]) == sorted(plain["best"])
+    assert go.read(board, {"komi": 6.5, "playouts": 8, "rerank": "playouts", "rerank_margin": 0.25})["best"] == plain["best"]
+
+
+def test_go_pack_turns_the_rerank_on():
+    import yaml
+    r = yaml.safe_load(open(os.path.join(ROOT, "packs", "go", "pack.yaml")))["read"]["go"]
+    assert r["rerank"] == "playouts" and r["rerank_margin"] == 0.06 and r["playouts_top_n"] == 160
+
+
+def test_go_playouts_spend_more_games_on_the_leaders():
+    from anygame.perceive import go
+    v = go.read(["........."] * 9, {"komi": 6.5, "playouts": 8, "playouts_top": 2, "playouts_top_n": 24})
+    ns = sorted(x["n"] for x in v["playouts"].values())
+    assert ns[-2:] == [24, 24] and set(ns[:-2]) == {8}
+
+
+def test_clm_stub_takes_the_top_of_a_ranked_read_when_told(monkeypatch):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("clm_stub", os.path.join(ROOT, "test", "clm_stub.py"))
+    stub = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(stub)
+    state = {"screen": {"go": {"best": ["c5r5", "c3r3", "c7r7"]}}}
+    q = {"place__cell": {"type": "choice", "criteria": {"c3r3": None, "c5r5": None, "c7r7": None}}}
+    assert stub.answer(state, q)["place__cell"]["choice"] == "c3r3"          # board order: top-left first
+    monkeypatch.setattr(stub, "RANK", "screen.go.best")
+    assert stub.answer(state, q)["place__cell"]["choice"] == "c5r5"          # the compiler's top pick
+    q2 = {"place__cell": {"type": "choice", "criteria": {"c3r3": None, "c7r7": None}}}
+    assert stub.answer(state, q2)["place__cell"]["choice"] == "c3r3"         # the top was not offered: next ranked

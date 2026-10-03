@@ -2,6 +2,7 @@
 from __future__ import annotations
 import hashlib
 import json
+import os
 import time
 from pathlib import Path
 from typing import Any
@@ -12,6 +13,7 @@ from .pack import Action, Pack
 from .perceive import read_all, around_of, margin_of, margin_num
 from .fingerprint import Index as FpIndex, fingerprint, to_b64
 from .pack import dump_pack, load_pack_text
+from .plausible import violations
 
 
 def copy_answers(answers: dict[str, Any]) -> dict[str, Any]:
@@ -58,7 +60,8 @@ def stable_hash(v: Any) -> str:
 
 
 class Agent:
-    def __init__(self, pack: Pack, device: Device, jev: Jev | None, hud=None, log_path: str | None = None, max_ticks: int | None = None, record_dir: str | None = None):
+    def __init__(self, pack: Pack, device: Device, jev: Jev | None, hud=None, log_path: str | None = None, max_ticks: int | None = None, record_dir: str | None = None,
+                 background: bool = True):
         self.pack, self.device, self.jev, self.hud = pack, device, jev, hud
         self.max_ticks = max_ticks
         self.record_dir = Path(record_dir) if record_dir else None
@@ -70,6 +73,10 @@ class Agent:
         self.settling = 0
         self.last_answers: dict[str, Any] | None = None
         self.trackers: dict[str, Any] = {}
+        self.pressed_at: dict[str, float] = {}      # action id → when its key last went down (for again_ms)
+        self.locked: tuple[str, float] | None = None   # (action id, until): no other key before then (lock_ms)
+        if pack.raw.get("frames") == "stream" and hasattr(device, "stream"):
+            device.stream()             # frames from the browser's screencast: ~10 ms a frame instead of a 40 ms screenshot
         # the hybrid: which screen is this, does the pack understand it, and who decides when it does not
         self.base = pack
         self.mode = "main"
@@ -92,12 +99,17 @@ class Agent:
         self.sensor_ewma_ms = 0.0        # what the decider has been taking lately: the per-tick budget is judged against it
         self.budget_skips = 0            # consecutive ticks the decider was skipped for the budget
         self.skipped_budget = 0          # over the run
+        self.skipped_reflex = 0          # ticks the pack's reflex condition acted on the last answers without the decider
+        self.inflight = None             # ask: async — the decider call running beside the loop, if any
+        self.asked_async = 0             # calls started that way, over the run
+        self.ask_pool = None
         self._load_fingerprints()
         # slow reads (OCR, detectors) run in a forked worker process: a thread starves next to onnxruntime and
         # the browser, a process does not, and the loop only ever waits on the first value
         import multiprocessing
         from concurrent.futures import ProcessPoolExecutor
-        self.pool = ProcessPoolExecutor(max_workers=1, mp_context=multiprocessing.get_context("fork")) if any(int(r.get("every", 1)) > 1 for r in self.pack.reads.values()) else None
+        # background=False (eval, the author's check): every read runs on every frame, so a test never sees a slow read's null
+        self.pool = ProcessPoolExecutor(max_workers=1, mp_context=multiprocessing.get_context("fork")) if background and any(int(r.get("every", 1)) > 1 for r in self.pack.reads.values()) else None
         self.pending: dict[str, Any] = {}
         if self.pool is not None:
             # warm the worker (fork + OCR model load, ~2 s) before the first tick, so a real-time game does not run
@@ -115,12 +127,21 @@ class Agent:
         self.last_values: dict[str, Any] | None = None
         self.noops: list[str] = []           # executed actions ("drop→c4", "up") that changed nothing since the last change
         self.prev_distinct: dict[str, Any] = {}   # last value of each history read that differed from the current one
+        self.accepted: dict[str, Any] | None = None   # the last reading that passed the pack's plausibility checks
+        self.implausible_ticks = 0           # consecutive ticks whose reads broke a check even after re-reading
+        self.implausible_total = 0
+        self.rereads = 0                     # fresh frames taken because a reading broke a check
 
     # ---- questions -------------------------------------------------------------------------------
     def questions(self, values: dict[str, Any]) -> dict[str, dict]:
         qs: dict[str, dict] = {}
         for q in self.pack.questions:
             qs[q["id"]] = {"type": q["type"], "instructions": q["instructions"], "criteria": q["criteria"]}
+            # `criteria_from: <read>`: a compiled read that ranks and annotates the options replaces the fixed ones
+            # (2048's swipes, best first, each with its consequences; a swipe that would not move is not offered)
+            ranked = _get(values, q["criteria_from"]) if q.get("criteria_from") else None
+            if isinstance(ranked, dict) and ranked:
+                qs[q["id"]]["criteria"] = dict(ranked)
         if "action" not in qs:
             qs["action"] = {"type": "choice", "instructions": "Which action now? Follow the play notes in the state.",
                             "criteria": {a.id: (a.params.get("description") or None) for a in self.pack.actions}}
@@ -131,15 +152,6 @@ class Agent:
         left = {k: v for k, v in crit.items() if k not in bare}
         if 1 <= len(left) < len(crit):
             qs["action"] = {**qs["action"], "criteria": left}
-        for n in self.noops:
-            if "→" not in n:
-                continue
-            aid, val = n.split("→", 1)
-            for pq in (f"{aid}__cell", f"{aid}__target", f"{aid}__slot", f"{aid}__option"):
-                if pq in qs:
-                    c = {k: v for k, v in qs[pq]["criteria"].items() if k != val}
-                    if c:
-                        qs[pq] = {**qs[pq], "criteria": c}
         # parameter questions for actions that need a slot and/or a target cell; all asked in the same call.
         # A pack may define its own `<action>__cell` / `__slot` / `__target` question to add instructions.
         for a in self.pack.actions:
@@ -164,6 +176,17 @@ class Agent:
             if a.kind == "tap" and a.params.get("zone") and self.pack.zone(a.params["zone"]).grid and f"{a.id}__cell" not in qs:
                 cells = self.pack.zone(a.params["zone"]).cells()
                 qs[f"{a.id}__cell"] = {"type": "choice", "instructions": f"If the action is {a.id}, which cell of {a.params['zone']}?", "criteria": {k.split('.', 1)[1]: None for k in list(cells)[:255]}}
+        # after the parameter questions exist: a tap on a cell of a grid zone is asked through a question built just
+        # above, and a refused move (a Go ko, a full column) must leave it too, or the model picks it again every tick
+        for n in self.noops:
+            if "→" not in n:
+                continue
+            aid, val = n.split("→", 1)
+            for pq in (f"{aid}__cell", f"{aid}__target", f"{aid}__slot", f"{aid}__option"):
+                if pq in qs:
+                    c = {k: v for k, v in qs[pq]["criteria"].items() if k != val}
+                    if c:
+                        qs[pq] = {**qs[pq], "criteria": c}
         for rl in self.pack.rules:
             for pq, read in (rl.get("only") or {}).items():
                 cells = _get(values, read) or []
@@ -198,7 +221,33 @@ class Agent:
         if a.kind == "wait":
             return "wait"
         if a.kind == "key":
+            now = time.perf_counter()
+            if self.locked and self.locked[0] != a.id and now < self.locked[1]:
+                # another key went down a moment ago and the screen may not show it yet: a dino one frame after its
+                # jump key still reads as on the ground, and a duck pressed then is a fast drop out of the jump
+                return f"wait: {self.locked[0]} locks keys for {round((self.locked[1] - now) * 1000)} ms"
+            again = p.get("again_ms")
+            if again:
+                # not pressed again this soon: at a high frame rate the screen may not show the last press yet (a
+                # dino still on the ground one frame after its jump key), and a second press would cut the first short
+                last = self.pressed_at.get(a.id)
+                if last is not None and now - last < float(again) / 1000:
+                    return f"wait: {a.id} pressed {round((now - last) * 1000)} ms ago"
+                self.pressed_at[a.id] = now
+            if p.get("lock_ms"):
+                self.locked = (a.id, now + float(p["lock_ms"]) / 1000)
             hold = int(p.get("hold_ms", 0) or 0)
+            if hold and p.get("release") == "later":
+                # held without stopping the loop: let go on the first frame after hold_ms (a device that cannot
+                # do that holds it in place)
+                try:
+                    if p.get("repeat") == "hold":      # pressed again while held: keep holding
+                        self.device.key(p["key"], hold, block=False, extend=True)
+                    else:
+                        self.device.key(p["key"], hold, block=False)
+                    return f"key {p['key']} down, up after {hold} ms"
+                except TypeError:
+                    pass
             if hold:
                 self.device.key(p["key"], hold)
                 return f"key {p['key']} held {hold} ms"
@@ -339,15 +388,22 @@ class Agent:
                 self.on_pack_change(dump_pack(self.base.raw), f"mode {name} invalid: {str(e)[:120]}")
             return False
 
-    def observe(self, frame, pack=None, want_conf: bool = False, state: Any = None) -> tuple[dict[str, Any], list, dict[str, float]]:
+    def observe(self, frame, pack=None, want_conf: bool = False, state: Any = None, wait: bool = False) -> tuple[dict[str, Any], list, dict[str, float]]:
         """Frame → the state the model sees: the pack's reads, presented, plus history (<id>_prev/_moving/_reverse)
-        and the derived reads computed here because they need per-run state (around, tetris)."""
+        and the derived reads computed here because they need per-run state (around, tetris). `wait`: a still frame,
+        so slow reads are waited for instead of left at `otherwise`."""
         pack = pack or self.pack
+        t_frame = time.perf_counter()
         conf: dict[str, float] = {}
-        values, dets, timings = read_all(pack, frame, tick=self.tick, previous=self.last_values, pool=self.pool, pending=self.pending, conf=conf, state=state)
+        values, dets, timings = read_all(pack, frame, tick=self.tick, previous=self.last_values, pool=self.pool, pending=self.pending, conf=conf, state=state, wait=wait)
         self.last_conf = conf
         raw_values = values
         values = self._present(values, pack)
+        for rid, r in pack.reads.items():
+            if r.get("kind") == "head":
+                # the moving end of a body drawn in one colour: the cell that newly took the symbol and has one
+                # neighbour of it (a page that draws head and body alike, like most real snakes)
+                values[rid] = self._head(rid, raw_values.get(r["in"]), str(r.get("symbol", "s")))
         for rid, r in pack.reads.items():
             if not r.get("history"):
                 continue
@@ -356,7 +412,7 @@ class Agent:
                 self.prev_distinct[rid] = self.last_values[rid]
             if rid in self.prev_distinct:
                 values[f"{rid}_prev"] = self.prev_distinct[rid]
-                if r.get("kind") == "locate" and isinstance(cur, str) and isinstance(self.prev_distinct[rid], str):
+                if r.get("kind") in ("locate", "head") and isinstance(cur, str) and isinstance(self.prev_distinct[rid], str):
                     values[f"{rid}_moving"] = _direction(self.prev_distinct[rid], cur)
                     values[f"{rid}_reverse"] = {"up": "down", "down": "up", "left": "right", "right": "left"}.get(values[f"{rid}_moving"], "none")
         for rid, r in pack.reads.items():
@@ -369,12 +425,43 @@ class Agent:
             elif r.get("kind") == "margin":
                 # the barrier after each move with the decision latency compensated (a discrete control barrier function)
                 values[rid] = margin_of(values.get(r["of"]), raw_values.get(r["in"]), r) if "in" in r else margin_num(values.get(r["of"]), r)
+            elif r.get("kind") == "gap":
+                # distance to the next obstacle in a runner, its closing speed and time to contact
+                if rid not in self.trackers:
+                    from .perceive import GapTracker
+                    self.trackers[rid] = GapTracker(r)
+                values[rid] = self.trackers[rid].read(raw_values.get(r["in"]), t_frame)
             elif r.get("kind") == "tetris":
                 if rid not in self.trackers:
                     from .perceive.tetris import TetrisTracker
                     self.trackers[rid] = TetrisTracker(r)
                 values[rid] = self.trackers[rid].read(raw_values.get(r["in"]), raw_values.get(r["next_in"]) if r.get("next_in") else None)
+            elif r.get("kind") == "slide":
+                from .perceive.slide import slide_of
+                values[rid] = slide_of(raw_values.get(r["in"]), r)
         return values, dets, timings
+
+    def _head(self, rid: str, grid: Any, sym: str) -> str | None:
+        import re as _re
+        if not isinstance(grid, dict):
+            return None
+        cells = {(int(m.group(1)), int(m.group(2))) for k, v in grid.items() if str(v) == sym and (m := _re.match(r"c(\d+)r(\d+)$", k))}
+        prev_cells, prev_head = self.trackers.get(rid, (None, None))
+        head = prev_head
+        if prev_cells is not None:
+            new = cells - prev_cells
+            ends = [c for c in new if sum((c[0] + dc, c[1] + dr) in cells for dc, dr in ((1, 0), (-1, 0), (0, 1), (0, -1))) <= 1]
+            if len(ends) == 1:
+                head = ends[0]
+            elif len(new) == 1:
+                head = next(iter(new))
+            elif len(ends) > 1 and prev_head is not None:
+                # it moved its whole length since the last look: the head is the end farther from where it was
+                head = max(ends, key=lambda c: abs(c[0] - prev_head[0]) + abs(c[1] - prev_head[1]))
+        if head is not None and head not in cells:
+            head = None
+        self.trackers[rid] = (cells, head)
+        return f"c{head[0]}r{head[1]}" if head else None
 
     # ---- one tick --------------------------------------------------------------------------------
     def step(self) -> dict[str, Any]:
@@ -417,6 +504,8 @@ class Agent:
         self.last_values = values
         rec: dict[str, Any] = {"tick": self.tick, "t": round(t0, 3), "hash": h, "perception_ms": round(t_perc), "timings_ms": timings, "screen": values,
                                "mode": self.mode, "support": round(support, 2), "known": known}
+        if self.last_state is not None and os.environ.get("ANYGAME_LOG_TRUTH"):
+            rec["truth"] = self.last_state   # the page's own state beside the pixel reads, to check perception offline
         if self.mode == "main" and self.base.tasks:
             self._tasks_tick(values, rec)
             if self.task is not None:
@@ -469,6 +558,43 @@ class Agent:
                 self.last_hash = h
                 self._emit(rec, frame, dets, None)
                 return rec
+        spec = self.pack.raw.get("plausible")
+        if spec:
+            # a reading that cannot follow the last accepted one is a wrong read, not a move: look again, and if it
+            # still does not add up, do nothing on it; if it persists, end the episode with the broken check as the reason
+            bad = violations(spec, values, self.accepted, self.pack.reads)
+            tries = 0
+            while bad and tries < int(self.pack.raw.get("plausible_retries", 2)) and getattr(self.device, "rereadable", True):
+                tries += 1
+                frame = self.device.frame()
+                dstate = self.device.state() if hasattr(self.device, "state") else None
+                self.last_state = dstate
+                values, dets, timings = self.observe(frame, self.pack, state=dstate)
+                bad = violations(spec, values, self.accepted, self.pack.reads)
+            if tries:
+                self.rereads += tries
+                rec["reread"] = tries
+                h = stable_hash({k: v for k, v in values.items() if not k.endswith("_prev")})
+                changed = h != self.last_hash
+                rec["screen"], rec["hash"], state["screen"] = values, h, values
+                state["last_action_changed_screen"] = changed if self.history else None
+                self.last_values = values
+            if bad:
+                self.implausible_ticks += 1
+                self.implausible_total += 1
+                rec["implausible"] = bad
+                limit = int(self.pack.raw.get("plausible_ticks", 6))
+                if self.implausible_ticks >= limit:
+                    rec["action"] = "stop"
+                    rec["reason"] = f"stalled: implausible read for {self.implausible_ticks} ticks: {bad[0]}"
+                else:
+                    rec["action"] = "wait"
+                    rec["reason"] = f"implausible read: {bad[0]}"
+                self.last_hash = h
+                self._emit(rec, frame, dets, None)
+                return rec
+            self.implausible_ticks = 0
+            self.accepted = values
         stop = self.pack.raw.get("stop_when")
         if stop and self._cond(stop, values):
             rec["action"] = "stop"
@@ -506,7 +632,51 @@ class Agent:
         qs = self.questions(values)
         budget = float(self.pack.raw.get("budget_ms") or 0)
         expected = t_perc + self.sensor_ewma_ms
-        if (budget and self.last_answers and self.pack.rules and expected > budget
+        reflex = self.pack.raw.get("reflex")
+        ask_async = self.pack.raw.get("ask") == "async" and self.pack.rules
+        fresh = None
+        if ask_async and self.inflight is not None and self.inflight.done():
+            # the decider's answer to an earlier frame has come back: it becomes the policy from this frame on
+            try:
+                fresh = self.inflight.result()
+                lat = float(fresh.get("latency_ms") or 0)
+                self.sensor_ewma_ms = lat if not self.sensor_ewma_ms else 0.7 * self.sensor_ewma_ms + 0.3 * lat
+            except Exception as ex:  # noqa: BLE001
+                self.errors += 1
+                rec["sensor_error"] = str(ex)[:120]
+            self.inflight = None
+        if ask_async and self.last_answers and self.inflight is None and fresh is None:
+            ask_when = self.pack.raw.get("ask_when")
+            if not ask_when or self._task_ok(ask_when, values):
+                # ask without waiting: the loop keeps reading frames and acting on the last answers while the call
+                # runs (a fast game moves on during a 400 ms call, and a blocked loop sees none of it)
+                if self.ask_pool is None:
+                    from concurrent.futures import ThreadPoolExecutor
+                    self.ask_pool = ThreadPoolExecutor(max_workers=1)
+                self.inflight = self.ask_pool.submit(self.jev.ask, state, qs)
+                self.asked_async += 1
+                rec["asked"] = "async"
+        if fresh is not None:
+            res = fresh
+            e = None
+        elif reflex and self.last_answers and self.pack.rules and self._task_ok(reflex, values):
+            # a reflex: the fresh frame already needs a move before the decider could answer (Snake, a turn into a
+            # wall that needs a second turn on the very next step). The rules act on the decider's last answers, its
+            # ranking of the moves, at perception speed; the decider is asked again on the next frame
+            import copy
+            self.skipped_reflex += 1
+            res = {"answers": copy.deepcopy(self.last_answers), "latency_ms": 0, "input_tokens": 0, "cost_usd": 0.0}
+            rec["sensor"] = "reflex: " + ", ".join(f"{c['read']}={_get(values, c['read'])}" for c in (reflex if isinstance(reflex, list) else [reflex])) + " → rules on last answers"
+            rec["skipped"] = "reflex"
+            e = None
+        elif ask_async and self.last_answers:
+            # no fresh answer this frame: the rules act on the last ones (a call may be running beside the loop)
+            import copy
+            res = {"answers": copy.deepcopy(self.last_answers), "latency_ms": 0, "input_tokens": 0, "cost_usd": 0.0}
+            rec["sensor"] = "async: rules on last answers" + (" (call in flight)" if self.inflight is not None else "")
+            rec["skipped"] = "async"
+            e = None
+        elif (budget and self.last_answers and self.pack.rules and expected > budget
                 and self.budget_skips < int(self.pack.raw.get("budget_skip_max", 2))):
             # the tick cannot afford the decider: the rules act on its last answers (the post-posed shield), at most
             # budget_skip_max ticks in a row so a slow decider is never starved out of the loop
@@ -572,6 +742,7 @@ class Agent:
            set: {param_question: source_question}              → copy a choice into a parameter question."""
         applied: list[str] = []
         excluded: set[str] = set()
+        offered = None                      # the questions as asked this tick, built on the first set: rule
         for rl, why in self._hits(answers, values):
             for x in rl.get("exclude") or []:
                 v = _get(values, x[1:]) if isinstance(x, str) and x.startswith("$") else x
@@ -581,16 +752,30 @@ class Agent:
             for target, source in (rl.get("set") or {}).items():
                 src = answers.get(source)
                 if src and src.get("type") == "choice" and src.get("choice") not in (None, "none") and target in answers:
+                    if offered is None:
+                        offered = self.questions(values)
+                    allowed = (offered.get(target) or {}).get("criteria")
+                    if allowed is not None and src["choice"] not in allowed:
+                        # a value the question did not offer (it changed nothing last time, or an avoid/only rule
+                        # dropped it) is not forced back in by a belief: a wrong one tapped a full column to the cap
+                        applied.append(f"{why} → {target} = {source} ({src['choice']}) skipped: not offered")
+                        continue
                     if answers[target].get("choice") != src["choice"]:
                         answers[target] = {**answers[target], "choice": src["choice"]}
                         applied.append(f"{why} → {target} = {source} ({src['choice']})")
         act = answers.get("action")
         if excluded and act and act.get("choice") in excluded:
             probs = {k: v for k, v in (act.get("probabilities") or {}).items() if k not in excluded}
+            allowed = [a.id for a in self.pack.actions if a.id not in excluded]
             if probs:
                 best = max(probs, key=probs.get)
                 answers["action"] = {**act, "choice": best}
                 applied.append(f"→ {best}")
+            elif len(allowed) == 1:
+                # the decider's answer (often a stale one, under budget_ms) never offered the one action the rules
+                # leave: take it, the rules have decided
+                answers["action"] = {**act, "choice": allowed[0]}
+                applied.append(f"→ {allowed[0]} (the only action the rules allow)")
             else:
                 # the rules are infeasible here: every action is excluded. The choice stands, and the record says so,
                 # because a trap that closed ticks ago is an incident for the reads that should have seen it coming
@@ -648,17 +833,25 @@ class Agent:
         """The rules whose condition holds on these answers and values, with why."""
         out = []
         for rl in self.pack.rules:
-            c = rl["if"]
-            if "noul" in c:
-                a = answers.get(c["noul"])
-                if not a or a.get("type") != "noul":
-                    continue
-                p = a["noul"]
-                hit = (p >= c["gte"]) if "gte" in c else (p <= c["lte"])
-                why = f"{c['noul']}={p:.2f}"
-            else:
-                hit = self._cond(c, values)
-                why = f"{c['read']}={_get(values, c['read'])}"
+            hit, whys = True, []
+            for c in (rl["if"] if isinstance(rl["if"], list) else [rl["if"]]):     # a list: all must hold
+                if "noul" in c:
+                    a = answers.get(c["noul"])
+                    if not a or a.get("type") != "noul":
+                        hit = False
+                        break
+                    p = a["noul"]
+                    hit = (p >= c["gte"]) if "gte" in c else (p <= c["lte"])
+                    whys.append(f"{c['noul']}={p:.2f}")
+                else:
+                    hit = self._cond(c, values)
+                    whys.append(f"{c['read']}={_get(values, c['read'])}")
+                if not hit:
+                    break
+            why = ", ".join(whys)
+            u = rl.get("unless")
+            if hit and u and any(self._cond(x, values) for x in (u if isinstance(u, list) else [u])):
+                continue        # the exception: e.g. the cell the rule guards against is the food itself
             if hit:
                 out.append((rl, why))
         return out
@@ -682,6 +875,10 @@ class Agent:
             return v in c["in"]
         if "not" in c:
             return v != c["not"]
+        if "contains" in c:
+            # a list read holds the item, or a comma-joined read (a gap read's rows: "chest,low") names it
+            items = v if isinstance(v, (list, tuple)) else str(v or "").split(",")
+            return c["contains"] in items
         try:
             if "gte" in c:
                 return float(v) >= float(c["gte"])

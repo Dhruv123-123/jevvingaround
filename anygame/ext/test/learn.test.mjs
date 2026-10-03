@@ -290,3 +290,38 @@ test("held keys, relative mouse and chunks reach the device; the digest finds re
   ev.push({ t, type: "key", key: "ArrowUp" });
   const runs = keyRuns(ev); assert.deepEqual(runs[0], [["ArrowLeft", "ArrowLeft", "Space"], 3]); assert.deepEqual(keyRuns([]), []);
 });
+
+test("task bounds: tasks that can never be done are refused, the setter's limits are clamped; the rater samples, clamps and calibrates", async () => {
+  const { checkTasks, proposeTasks, SETTER_LIMIT_MIN, SETTER_LIMIT_MAX, sampleFrames, actionsSummary, rateEpisode, calibrateRater } = await import("../dist/core.js");
+  const reads = { score: { kind: "json", path: "score" }, status: { kind: "color", rect: [0, 0, 1, 1], options: { playing: "#000000", over: "#ffffff" }, otherwise: "menu" }, board: { kind: "color", zone: "b", options: { x: "#000000" }, otherwise: "." } };
+  const one = (kw) => checkTasks([{ id: "t", instruction: "?", done: { read: "score", gte: 5 }, ...kw }], reads)[0];
+  assert.equal(one({ limit_ticks: 2 }).limit_ticks, 2); assert.equal(one({ limit_ticks: 60, hold_ticks: 60 }).hold_ticks, 60);
+  for (const bad of [{ limit_ticks: 0 }, { limit_ticks: -5 }, { limit_ticks: 2.5 }, { limit_ticks: "60" }, { limit_ticks: true }, { limit_ticks: 1e6 }, { hold_ticks: 0 }, { limit_ticks: 50, hold_ticks: 51 }]) assert.throws(() => one(bad), undefined, JSON.stringify(bad));
+  for (const d of [{ read: "score", gte: "ten" }, { read: "score", in: [] }, { read: "status", equals: "won" }, { read: "status", in: ["won", "lost"] }, { read: "status", gte: 1 }, [{ read: "score", gte: 10 }, { read: "score", lte: 5 }]])
+    assert.throws(() => checkTasks([{ id: "t", instruction: "?", done: d }], reads), /can never be done/, JSON.stringify(d));
+  assert.throws(() => checkTasks([{ id: "t", instruction: "?", done: { read: "score", gte: 1 }, when: { read: "status", equals: "paused" } }], reads), /can never be done/);
+  for (const d of [{ read: "status", equals: "over" }, { read: "status", equals: "menu" }, { read: "status", in: ["over", "won"] }, { read: "board", equals: "anything" }, { read: "score.total", gte: 1 }, [{ read: "score", gte: 5 }, { read: "score", lte: 5 }]])
+    checkTasks([{ id: "t", instruction: "?", done: d }], reads);
+  const snake = packFromText(BUNDLED_PACKS.snake, "snake");
+  checkTasks([{ id: "t", instruction: "?", done: { read: "status", equals: "won" } }], snake.reads, "pack", undefined, snake.zones);
+  assert.throws(() => checkTasks([{ id: "t", instruction: "?", done: { read: "status", equals: "paused" } }], snake.reads, "pack", undefined, snake.zones), /never reads "paused"/);
+  // the setter: 5 and 9000 ticks are clamped into its range, 0 ticks and a hold past the limit are refused
+  const chat = { model: "fake", async complete(messages) { assert.ok(messages[0].content.includes(`${SETTER_LIMIT_MIN} to ${SETTER_LIMIT_MAX}`)); return { text: '[{"id": "quick", "instruction": "score 1", "done": {"read": "score", "gte": 1}, "limit_ticks": 5}, {"id": "forever", "instruction": "score 9", "done": {"read": "score", "gte": 9}, "limit_ticks": 9000}, {"id": "zero", "instruction": "score 2", "done": {"read": "score", "gte": 2}, "limit_ticks": 0}, {"id": "held", "instruction": "score 3", "done": {"read": "score", "gte": 3}, "hold_ticks": 500, "limit_ticks": 300}]', usage: {}, ms: 0 }; } };
+  const log = [];
+  const got = await proposeTasks(chat, packFromText(BUNDLED_PACKS["snake-state"], "snake-state"), { width: W, height: H, data: new Uint8ClampedArray(W * H * 4) }, { score: 0, head: "c3r7", status: "playing" }, [], 5, (m) => log.push(m));
+  assert.deepEqual(got.map((t) => [t.id, t.limit_ticks]), [["quick", SETTER_LIMIT_MIN], ["forever", SETTER_LIMIT_MAX]]);
+  assert.ok(log.some((m) => m.includes("quick") && m.includes("clamped")) && log.some((m) => m.includes("zero") && m.includes("rejected")) && log.some((m) => m.includes("held") && m.includes("rejected")));
+  // the rater, as rater.py: first and last frames kept, scores clamped to 0..100, failures give nulls, calibration over strict pairs
+  const tiny = { width: 4, height: 4, data: new Uint8ClampedArray(64) };
+  const frames = Array.from({ length: 100 }, (_, i) => [i + 1, tiny]);
+  const picked = sampleFrames(frames, 10); assert.equal(picked.length, 10); assert.equal(picked[0][0], 1); assert.equal(picked.at(-1)[0], 100);
+  const recs = [0, 1, 2, 3, 4].map((t) => ({ tick: t, choice: "right", action: "swipe right" })).concat([{ tick: 6, choice: "up", action: "swipe up" }]);
+  assert.match(actionsSummary(recs), /6 actions/); assert.match(actionsSummary(recs), /swipe right×5/);
+  const rc = { model: "fake", cost: 0, async complete(messages) { assert.equal(messages[1].content.filter((p) => p.type === "image_url").length, 3); this.cost += 0.001; return { text: '{"completion": 72.4, "directedness": 140, "note": "ate two, then turned into the wall"}', usage: {}, ms: 0 }; } };
+  const r = await rateEpisode(rc, frames.slice(0, 3), recs, "snake", "first_food", "status is dead");
+  assert.equal(r.completion, 72); assert.equal(r.directedness, 100); assert.match(r.note, /^ate two/); assert.equal(r.cost_usd, 0.001);
+  assert.equal((await rateEpisode({ model: "x", async complete() { throw new Error("down"); } }, frames.slice(0, 2), recs)).completion, null);
+  const eps = [{ won: false, lost: true, ticks: 50, score: null, tasks_done: 0, rating: { completion: 10 } }, { won: false, lost: true, ticks: 300, score: null, tasks_done: 0, rating: { completion: 60 } },
+               { won: false, lost: false, ticks: 400, score: null, tasks_done: 0, rating: { completion: 40 } }, { won: false, lost: false, ticks: 400, score: 999, tasks_done: 0 }];
+  assert.deepEqual(calibrateRater(eps), { rated: 3, pairs: 3, agreement: 0.667 });
+});

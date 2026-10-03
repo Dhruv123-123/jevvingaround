@@ -7,7 +7,7 @@ from typing import Any
 import yaml
 from .geometry import Rect, Zone
 
-READ_KINDS = {"bar", "templates", "ocr", "vocab", "blobs", "color", "locate", "runs", "around", "tetris", "json", "json_grid", "predict", "margin"}
+READ_KINDS = {"bar", "templates", "ocr", "vocab", "blobs", "color", "locate", "runs", "around", "tetris", "json", "json_grid", "predict", "margin", "go", "slide", "head", "gap"}
 QUESTION_TYPES = {"noul", "choice", "score"}
 
 
@@ -56,18 +56,79 @@ class Pack:
         raise PackError(f"{self.path}: unknown action '{id}'")
 
 
-MODE_KEYS = ("zones", "read", "act", "play", "questions", "rules", "act_when", "stop_when", "settle", "tick_hz")
+MODE_KEYS = ("zones", "read", "act", "play", "questions", "rules", "act_when", "stop_when", "settle", "tick_hz", "reflex", "plausible", "ask", "ask_when")
 TASK_CATEGORIES = ("navigate", "collect", "score", "survive", "clear", "build", "avoid", "other")
 
 
 def _cond_ok(c: Any) -> bool:
-    return isinstance(c, dict) and "read" in c and any(k in c for k in ("equals", "in", "not", "gte", "lte"))
+    return isinstance(c, dict) and "read" in c and any(k in c for k in ("equals", "in", "not", "gte", "lte", "contains"))
 
 
-def check_tasks(tasks: Any, reads: dict[str, Any], where: str = "pack") -> list[dict[str, Any]]:
+# Bounds on a task's tick budget. Any pack: limit_ticks and hold_ticks are whole numbers of at least 1, and the
+# condition must hold for no longer than the attempt lasts. Proposed by the setter (a model guessing at the game):
+# limit_ticks is clamped to [SETTER_LIMIT_MIN, SETTER_LIMIT_MAX]. At about 3 decisions a second the floor is a few
+# seconds of play, less than any task worth practising needs (the setter once proposed 5); the ceiling is a long
+# game, past which a task is "play the game" and one attempt eats the episode.
+TASK_LIMIT_MAX = 20000
+SETTER_LIMIT_MIN, SETTER_LIMIT_MAX = 20, 2000
+
+
+def _whole(v: Any) -> int | None:
+    """v as a whole number, or None (bools, fractions, text and non-finite values are not tick counts)."""
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return None
+    return int(v) if v == v and abs(v) != float("inf") and float(v).is_integer() else None
+
+
+def _labels(r: dict[str, Any], zones: dict[str, Zone] | None) -> set[Any] | None:
+    """The values a read can take when they are a closed set: a colour read on one rect (or a zone without a grid)
+    with named options gives one of the names or its `otherwise`. None when the read's values are open (numbers,
+    cells, grids, parsed text) or its zone is not known here."""
+    if r.get("kind") != "color" or not isinstance(r.get("options"), dict) or r.get("parse") or r.get("as"):
+        return None
+    if "zone" in r and (zones is None or r["zone"] not in zones or zones[r["zone"]].grid):
+        return None
+    return set(r["options"]) | {r.get("otherwise", "unknown")}
+
+
+def _impossible(conds: list[dict[str, Any]], reads: dict[str, Any], zones: dict[str, Zone] | None = None) -> str:
+    """Why these conditions (all must hold) can never hold together, or '': a threshold that is not a number, an
+    empty `in`, a label a closed read never gives, a threshold on a read that gives labels, or gte above lte."""
+    lo: dict[str, float] = {}
+    hi: dict[str, float] = {}
+    for c in conds:
+        rid = str(c["read"])
+        labels = _labels(reads.get(rid) or {}, zones) if rid in reads else None
+        for op in ("gte", "lte"):
+            if op in c:
+                if isinstance(c[op], bool) or not isinstance(c[op], (int, float)):
+                    return f"{rid} {op} {c[op]!r}: a threshold must be a number"
+                if labels is not None:
+                    return f"{rid} gives one of {sorted(map(str, labels))}, never a number to compare with {op}"
+                if op == "gte":
+                    lo[rid] = max(lo.get(rid, float("-inf")), c[op])
+                else:
+                    hi[rid] = min(hi.get(rid, float("inf")), c[op])
+        if "in" in c and (not isinstance(c["in"], list) or not c["in"]):
+            return f"{rid} in {c['in']!r}: `in` takes a non-empty list"
+        if labels is not None:
+            want = [c["equals"]] if "equals" in c else (c["in"] if "in" in c else [])
+            bad = [v for v in want if not any(v == lab for lab in labels)]
+            if bad and len(bad) == len(want):
+                return f"{rid} never reads {bad[0]!r}: it gives one of {sorted(map(str, labels))}"
+    for rid in lo:
+        if rid in hi and lo[rid] > hi[rid]:
+            return f"{rid} cannot be at least {lo[rid]:g} and at most {hi[rid]:g}"
+    return ""
+
+
+def check_tasks(tasks: Any, reads: dict[str, Any], where: str = "pack", clamp: tuple[int, int] | None = None,
+                zones: dict[str, Zone] | None = None) -> list[dict[str, Any]]:
     """Tasks are goals the runtime can verify from the reads: `done` (one condition or a list that must all hold)
     marks completion once it has held `hold_ticks` ticks; `when` says when the task is available; `limit_ticks`
-    bounds the attempt. Returns the tasks with their defaults filled, or raises PackError."""
+    bounds the attempt. Returns the tasks with their defaults filled, or raises PackError. A task that can never
+    complete (a limit under 1, a hold longer than the limit, a done no read can make true) is refused; `clamp`
+    (lo, hi) pulls limit_ticks into that range first, as the setter does for its proposals."""
     out = []
     seen: set[str] = set()
     for t in tasks or []:
@@ -78,13 +139,27 @@ def check_tasks(tasks: Any, reads: dict[str, Any], where: str = "pack") -> list[
             raise PackError(f"{where}: task '{tid}' is listed twice")
         seen.add(tid)
         conds = t["done"] if isinstance(t["done"], list) else [t["done"]]
+        if not conds:
+            raise PackError(f"{where}: task '{tid}': done is an empty list")
         for c in conds + ([t["when"]] if t.get("when") else []):
             if not _cond_ok(c):
                 raise PackError(f"{where}: task '{tid}': a condition is {{read: <id or id.path>, equals|in|not|gte|lte: v}}")
             if str(c["read"]).split(".")[0] not in reads:
                 raise PackError(f"{where}: task '{tid}': unknown read '{c['read']}'")
+        why = _impossible(conds, reads, zones) or (_impossible([t["when"]], reads, zones) if t.get("when") else "")
+        if why:
+            raise PackError(f"{where}: task '{tid}' can never be done: {why}")
+        limit, hold = _whole(t.get("limit_ticks", 150)), _whole(t.get("hold_ticks", 1))
+        if limit is None or hold is None:
+            raise PackError(f"{where}: task '{tid}': limit_ticks and hold_ticks are whole numbers of ticks")
+        if clamp and limit >= 1:
+            limit = max(clamp[0], min(clamp[1], limit))
+        if not 1 <= limit <= TASK_LIMIT_MAX:
+            raise PackError(f"{where}: task '{tid}': limit_ticks {limit} is outside 1..{TASK_LIMIT_MAX}")
+        if not 1 <= hold <= limit:
+            raise PackError(f"{where}: task '{tid}': hold_ticks {hold} must be between 1 and limit_ticks ({limit}), or the task can never be done")
         cat = str(t.get("category") or "other")
-        out.append({**t, "id": tid, "done": conds, "hold_ticks": int(t.get("hold_ticks", 1)), "limit_ticks": int(t.get("limit_ticks", 150)),
+        out.append({**t, "id": tid, "done": conds, "hold_ticks": hold, "limit_ticks": limit,
                     "category": cat if cat in TASK_CATEGORIES else "other"})
     return out
 
@@ -167,9 +242,15 @@ def load_pack(path: str | os.PathLike, _allow_no_tests: bool = False) -> Pack:
         elif r.get("kind") == "runs":
             if r.get("in") not in reads or "symbol" not in r:
                 raise PackError(f"{p}: read '{rid}': runs needs 'in' (a grid read id), 'symbol' and optionally length/empty/gravity")
+        elif r.get("kind") == "go":
+            if r.get("in") not in reads:
+                raise PackError(f"{p}: read '{rid}': go needs 'in' (the board grid read), optionally us/them/empty/komi")
         elif r.get("kind") == "tetris":
             if r.get("in") not in reads:
                 raise PackError(f"{p}: read '{rid}': tetris needs 'in' (the board grid read), optionally next_in (the preview grid read)")
+        elif r.get("kind") == "slide":
+            if r.get("in") not in reads:
+                raise PackError(f"{p}: read '{rid}': slide needs 'in' (the 4x4 number grid read), optionally depth and corner")
         elif r.get("kind") == "around":
             if r.get("of") not in reads or r.get("in") not in reads:
                 raise PackError(f"{p}: read '{rid}': around needs 'of' (a locate read id) and 'in' (a grid read id)")
@@ -179,6 +260,12 @@ def load_pack(path: str | os.PathLike, _allow_no_tests: bool = False) -> Pack:
         elif r.get("kind") == "predict":
             if r.get("of") not in reads or not reads[r["of"]].get("history"):
                 raise PackError(f"{p}: read '{rid}': predict needs 'of' (a locate read with history: 1)")
+        elif r.get("kind") == "head":
+            if r.get("in") not in reads:
+                raise PackError(f"{p}: read '{rid}': head needs 'in' (a grid read) and 'symbol' (the body's symbol)")
+        elif r.get("kind") == "gap":
+            if r.get("in") not in reads or "symbol" not in r:
+                raise PackError(f"{p}: read '{rid}': gap needs 'in' (a grid read, scanned left to right) and 'symbol' (what counts as an obstacle)")
         elif r.get("kind") == "json_grid":
             if "cols" not in r or "rows" not in r or not isinstance(r.get("symbols"), dict):
                 raise PackError(f"{p}: read '{rid}': json_grid needs cols, rows and symbols: {{<char>: {{path, index|slice}}}}")
@@ -210,14 +297,38 @@ def load_pack(path: str | os.PathLike, _allow_no_tests: bool = False) -> Pack:
     if raw.get("settle") not in (None, "screen_change"):
         raise PackError(f"{p}: settle must be 'screen_change' (wait for the screen to change after an action before deciding again)")
     rules = raw.get("rules") or []
+    for c in (raw.get("reflex") if isinstance(raw.get("reflex"), list) else [raw.get("reflex")] if raw.get("reflex") else []):
+        if not (isinstance(c, dict) and "read" in c and any(k in c for k in ("equals", "in", "not", "gte", "lte", "contains"))):
+            raise PackError(f"{p}: reflex needs {{read, equals|in|not|gte|lte}} (or a list of them): when it holds, the rules act on the decider's last answers without asking it")
+    if raw.get("frames") not in (None, "shot", "stream"):
+        raise PackError(f"{p}: frames must be 'shot' (a screenshot per frame, the default) or 'stream' (the browser's screencast: faster frames, Chromium only)")
+    if raw.get("ask") not in (None, "async"):
+        raise PackError(f"{p}: ask: async is the only option (the decider runs beside the loop, which acts on its last answers meanwhile)")
+    for c in (raw.get("ask_when") if isinstance(raw.get("ask_when"), list) else [raw.get("ask_when")] if raw.get("ask_when") else []):
+        if not (isinstance(c, dict) and "read" in c and any(k in c for k in ("equals", "in", "not", "gte", "lte", "contains"))):
+            raise PackError(f"{p}: ask_when needs {{read, equals|in|not|gte|lte}} (or a list of them): with ask: async, the decider is asked only when it holds")
     for rl in rules:
-        cond = rl.get("if") or {}
-        ok_noul = "noul" in cond and any(k in cond for k in ("gte", "lte"))
-        ok_read = "read" in cond and any(k in cond for k in ("equals", "in", "not", "gte", "lte"))
-        if not (ok_noul or ok_read):
-            raise PackError(f"{p}: rule needs if: {{noul, gte|lte}} or if: {{read, equals|in|not|gte|lte}}")
+        conds = rl.get("if") if isinstance(rl.get("if"), list) and rl.get("if") else [rl.get("if") or {}]
+        for cond in conds:
+            ok_noul = isinstance(cond, dict) and "noul" in cond and any(k in cond for k in ("gte", "lte"))
+            ok_read = isinstance(cond, dict) and "read" in cond and any(k in cond for k in ("equals", "in", "not", "gte", "lte", "contains"))
+            if not (ok_noul or ok_read):
+                raise PackError(f"{p}: rule needs if: {{noul, gte|lte}} or if: {{read, equals|in|not|gte|lte}} (or a list of them, all of which must hold)")
+        u = rl.get("unless")
+        if u is not None and not all(isinstance(x, dict) and "read" in x and any(k in x for k in ("equals", "in", "not", "gte", "lte", "contains")) for x in (u if isinstance(u, list) and u else [u])):
+            raise PackError(f"{p}: rule 'unless' needs {{read, equals|in|not|gte|lte}} (or a list of them): the rule does not apply when one holds")
         if not any(k in rl for k in ("exclude", "set", "avoid", "only")):
             raise PackError(f"{p}: rule needs 'exclude: [actions]', 'set: {{param_question: from_question}}', 'avoid: {{param_question: read}}' or 'only: {{param_question: read}}'")
+        for k in ("set", "avoid", "only"):
+            if k in rl and not isinstance(rl[k], dict):
+                raise PackError(f"{p}: rule {k}: must map a parameter question to a read ({k}: {{<action>__cell: <read>}}), got {rl[k]!r}"
+                                + ("; to allow only some actions, exclude the others with exclude: [actions]" if k == "only" else ""))
+        if "exclude" in rl and not isinstance(rl["exclude"], list):
+            raise PackError(f"{p}: rule exclude: must be a list of action ids, got {rl['exclude']!r}")
+    from .plausible import check_spec
+    bad = check_spec(raw.get("plausible"), reads)
+    if bad:
+        raise PackError(f"{p}: {bad}")
     tests = raw.get("tests") or []
     if not tests and not _allow_no_tests:
         raise PackError(f"{p}: a pack without tests is refused; add at least one frame under 'tests'")
@@ -237,7 +348,7 @@ def load_pack(path: str | os.PathLike, _allow_no_tests: bool = False) -> Pack:
         mp.raw["when"] = m["when"]
         mp.raw["own_reads"] = list((m.get("read") or {}).keys())
         modes[mn] = mp
-    tasks = check_tasks(raw.get("tasks"), reads, str(p))
+    tasks = check_tasks(raw.get("tasks"), reads, str(p), zones=zones)
     fingerprints = dict(raw.get("fingerprints") or {})
     for mn, m in (raw.get("modes") or {}).items():
         if isinstance(m.get("when"), dict) and m["when"].get("fingerprint"):

@@ -4,6 +4,7 @@ import { dumpPack, loadPack, type ActionDef, type Pack, type TaskDef } from "./p
 export interface TaskEvent { id: string; category: string; outcome: "done" | "failed"; ticks: number; tick: number; limit_ticks: number }
 import { aroundOf, marginOf, marginNum, readAll, type Values } from "./reads.js";
 import { TetrisTracker } from "./tetris.js";
+import { slideOf } from "./slide.js";
 import { FingerprintIndex, fingerprint, fpToBase64, type Fingerprint } from "./fingerprint.js";
 import { palette } from "./color.js";
 import type { FallbackDecision, VLMFallback } from "./fallback.js";
@@ -108,7 +109,7 @@ export class Agent {
   swapPack(pack: Pack) {
     this.base = pack;
     this.pack = this.mode !== "main" && pack.modes[this.mode] ? pack.modes[this.mode] : pack;
-    this.trackers = {};
+    this.trackers = {}; this.heads = {};
     this.lastAnswers = null;
     this.loadFingerprints();
   }
@@ -137,7 +138,12 @@ export class Agent {
   // ---- questions ----------------------------------------------------------------------------
   questions(values: Values): Record<string, any> {
     const qs: Record<string, any> = {};
-    for (const q of this.pack.questions) qs[q.id] = { type: q.type, instructions: q.instructions, criteria: q.criteria };
+    for (const q of this.pack.questions as any[]) {
+      qs[q.id] = { type: q.type, instructions: q.instructions, criteria: q.criteria };
+      // `criteria_from: <read>`: a compiled read that ranks and annotates the options replaces the fixed ones
+      const ranked = q.criteria_from ? get(values, q.criteria_from) : null;
+      if (ranked && typeof ranked === "object" && !Array.isArray(ranked) && Object.keys(ranked).length) qs[q.id].criteria = { ...ranked };
+    }
     if (!qs.action) {
       const criteria: Record<string, string | null> = {};
       for (const a of this.pack.actions) criteria[a.id] = a.params.description ?? null;
@@ -147,13 +153,6 @@ export class Agent {
     const bare = new Set(this.noops.filter((n) => !n.includes("→")));
     const left = Object.fromEntries(Object.entries(crit).filter(([k]) => !bare.has(k)));
     if (Object.keys(left).length >= 1 && Object.keys(left).length < Object.keys(crit).length) qs.action = { ...qs.action, criteria: left };
-    for (const n of this.noops) {
-      if (!n.includes("→")) continue;
-      const [aid, val] = n.split("→");
-      for (const pq of [`${aid}__cell`, `${aid}__target`, `${aid}__slot`, `${aid}__option`]) {
-        if (qs[pq]) { const c = Object.fromEntries(Object.entries(qs[pq].criteria).filter(([k]) => k !== val)); if (Object.keys(c).length) qs[pq] = { ...qs[pq], criteria: c }; }
-      }
-    }
     for (const a of this.pack.actions) {
       if (a.kind === "play") {
         const hand = a.params.slot ? values[a.params.slot] : null;
@@ -177,6 +176,14 @@ export class Agent {
         qs[`${a.id}__cell`] = { type: "choice", instructions: `If the action is ${a.id}, which cell of ${a.params.zone}?`, criteria: Object.fromEntries(cells.map((k) => [k.split(".", 2)[1], null])) };
       }
     }
+    // after the parameter questions exist, so a refused tap on a grid cell (a Go ko, a full column) is not asked again
+    for (const n of this.noops) {
+      if (!n.includes("→")) continue;
+      const [aid, val] = n.split("→");
+      for (const pq of [`${aid}__cell`, `${aid}__target`, `${aid}__slot`, `${aid}__option`]) {
+        if (qs[pq]) { const c = Object.fromEntries(Object.entries(qs[pq].criteria).filter(([k]) => k !== val)); if (Object.keys(c).length) qs[pq] = { ...qs[pq], criteria: c }; }
+      }
+    }
     const listOf = (read: string) => { const c = get(values, read) ?? []; return (Array.isArray(c) ? c : [c]).map(String); };
     for (const rl of this.pack.rules) {
       for (const [pq, read] of Object.entries<string>(rl.only ?? {})) {
@@ -197,6 +204,8 @@ export class Agent {
     if ("equals" in c) return v === c.equals;
     if ("in" in c) return (c.in as any[]).includes(v);
     if ("not" in c) return v !== c.not;
+    // a list read holds the item, or a comma-joined read (a gap read's rows: "chest,low") names it
+    if ("contains" in c) return (Array.isArray(v) ? v : String(v ?? "").split(",")).includes(c.contains);
     const n = Number(v);
     if (Number.isNaN(n)) return false;
     if ("gte" in c) return n >= Number(c.gte);
@@ -237,16 +246,21 @@ export class Agent {
   hits(answers: Record<string, Answer>, values: Values): [any, string][] {
     const out: [any, string][] = [];
     for (const rl of this.pack.rules) {
-      const c = rl.if;
-      let hit: boolean, why: string;
-      if ("noul" in c) {
-        const a = answers[c.noul];
-        if (!a || a.type !== "noul") continue;
-        const p = a.noul ?? 0;
-        hit = "gte" in c ? p >= c.gte : p <= c.lte;
-        why = `${c.noul}=${p.toFixed(2)}`;
-      } else { hit = this.cond(c, values); why = `${c.read}=${get(values, c.read)}`; }
-      if (hit) out.push([rl, why]);
+      let hit = true;
+      const whys: string[] = [];
+      for (const c of Array.isArray(rl.if) ? rl.if : [rl.if]) {     // a list: all must hold
+        if ("noul" in c) {
+          const a = answers[c.noul];
+          if (!a || a.type !== "noul") { hit = false; break; }
+          const p = a.noul ?? 0;
+          hit = "gte" in c ? p >= c.gte : p <= c.lte;
+          whys.push(`${c.noul}=${p.toFixed(2)}`);
+        } else { hit = this.cond(c, values); whys.push(`${c.read}=${get(values, c.read)}`); }
+        if (!hit) break;
+      }
+      const u = rl.unless;
+      if (hit && u && (Array.isArray(u) ? u : [u]).some((x: any) => this.cond(x, values))) continue;   // the exception
+      if (hit) out.push([rl, whys.join(", ")]);
     }
     return out;
   }
@@ -264,6 +278,7 @@ export class Agent {
   applyRules(answers: Record<string, Answer>, values: Values): string[] {
     const applied: string[] = [];
     const excluded = new Set<string>();
+    let offered: Record<string, any> | undefined;      // the questions as asked this tick, built on the first set: rule
     for (const [rl, why] of this.hits(answers, values)) {
       for (const x of rl.exclude ?? []) {
         const v = typeof x === "string" && x.startsWith("$") ? get(values, x.slice(1)) : x;
@@ -272,6 +287,10 @@ export class Agent {
       for (const [target, source] of Object.entries<string>(rl.set ?? {})) {
         const src = answers[source];
         if (src && src.type === "choice" && src.choice && src.choice !== "none" && answers[target] && answers[target].choice !== src.choice) {
+          // a value the question did not offer (changed nothing last time, or dropped by avoid/only) is not forced back in
+          offered ??= this.questions(values);
+          const allowed = offered[target]?.criteria;
+          if (allowed && !(src.choice in allowed)) { applied.push(`${why} → ${target} = ${source} (${src.choice}) skipped: not offered`); continue; }
           answers[target] = { ...answers[target], choice: src.choice };
           applied.push(`${why} → ${target} = ${source} (${src.choice})`);
         }
@@ -301,17 +320,40 @@ export class Agent {
     return out;
   }
 
+  heads: Record<string, { cells: Set<string>; head: [number, number] | null }> = {};
+  headOf(rid: string, grid: any, sym: string): string | null {
+    if (!grid || typeof grid !== "object" || Array.isArray(grid)) return null;
+    const cells = new Set<string>();
+    for (const [k, v] of Object.entries(grid)) { const m = /^c(\d+)r(\d+)$/.exec(k); if (m && String(v) === sym) cells.add(`${m[1]},${m[2]}`); }
+    const prev = this.heads[rid];
+    let head = prev?.head ?? null;
+    if (prev) {
+      const fresh = [...cells].filter((c) => !prev.cells.has(c)).map((c) => c.split(",").map(Number) as [number, number]);
+      const ends = fresh.filter(([c, r]) => [[1, 0], [-1, 0], [0, 1], [0, -1]].filter(([dc, dr]) => cells.has(`${c + dc},${r + dr}`)).length <= 1);
+      if (ends.length === 1) head = ends[0];
+      else if (fresh.length === 1) head = fresh[0];
+      else if (ends.length > 1 && prev.head) { const ph = prev.head; head = ends.reduce((a, b) => (Math.abs(b[0] - ph[0]) + Math.abs(b[1] - ph[1]) > Math.abs(a[0] - ph[0]) + Math.abs(a[1] - ph[1]) ? b : a)); }
+    }
+    if (head && !cells.has(`${head[0]},${head[1]}`)) head = null;
+    this.heads[rid] = { cells, head };
+    return head ? `c${head[0]}r${head[1]}` : null;
+  }
+
   lastState: any = undefined;
   observe(frame: Frame, pack: Pack = this.pack, state: any = this.lastState): { values: Values; timings: Record<string, number>; conf: Record<string, number> } {
     const { values: raw, timings, conf } = readAll(pack, frame, undefined, state);
     const values = this.present(raw, pack);
+    for (const [rid, r] of Object.entries(pack.reads)) {
+      // the moving end of a body drawn in one colour: the cell that newly took the symbol (as perceive's _head)
+      if (r.kind === "head") values[rid] = this.headOf(rid, raw[r.in], String(r.symbol ?? "s"));
+    }
     for (const [rid, r] of Object.entries(pack.reads)) {
       if (!r.history) continue;
       const cur = values[rid];
       if (this.lastValues && rid in this.lastValues && stableHash(this.lastValues[rid]) !== stableHash(cur)) this.prevDistinct[rid] = this.lastValues[rid];
       if (rid in this.prevDistinct) {
         values[`${rid}_prev`] = this.prevDistinct[rid];
-        if (r.kind === "locate" && typeof cur === "string" && typeof this.prevDistinct[rid] === "string") {
+        if ((r.kind === "locate" || r.kind === "head") && typeof cur === "string" && typeof this.prevDistinct[rid] === "string") {
           values[`${rid}_moving`] = direction(this.prevDistinct[rid], cur);
           values[`${rid}_reverse`] = REVERSE[values[`${rid}_moving`]] ?? "none";
         }
@@ -324,7 +366,7 @@ export class Agent {
       else if (r.kind === "tetris") {
         if (!this.trackers[rid]) this.trackers[rid] = new TetrisTracker(r);
         values[rid] = this.trackers[rid].read(raw[r.in], r.next_in ? raw[r.next_in] : null);
-      }
+      } else if (r.kind === "slide") values[rid] = slideOf(raw[r.in], r);
     }
     return { values, timings, conf };
   }
@@ -441,7 +483,7 @@ export class Agent {
     // classify on the base pack's reads, then observe with the active mode's pack
     let obs = this.observe(frame, this.base);
     const cls = this.classify(obs.values, fp);
-    if (cls.mode !== this.mode) { this.mode = cls.mode; this.trackers = {}; this.lastAnswers = null; this.noops = []; }
+    if (cls.mode !== this.mode) { this.mode = cls.mode; this.trackers = {}; this.heads = {}; this.lastAnswers = null; this.noops = []; }
     this.pack = this.mode === "main" ? this.base : this.base.modes[this.mode];
     if (this.mode !== "main") obs = this.observe(frame, this.pack);
     const { values, timings } = obs;

@@ -6,7 +6,7 @@ candidates, simulate each one exactly, present the top few as a typed choice. `r
 one-line version; this is the full one.
 
 Read config:  { kind: tetris, in: <grid read>, next_in: <preview grid read>, empty: ".", top_k: 6,
-                moves_per_row: 3, keys: { rotate: ArrowUp, left: ArrowLeft, right: ArrowRight, drop: Space } }
+                moves_per_row: 3, lookahead: false, keys: { rotate: ArrowUp, left: ArrowLeft, right: ArrowRight, drop: Space } }
 Value:        { phase: spawned|falling|none, shape, rot, col, row, next, stack: {…}, landings: {a: "…", …},
                 reachable_only: bool, last_placement: ok|missed|null }
 """
@@ -135,6 +135,29 @@ def score(base: dict[str, Any], after: dict[str, Any], lines: int) -> float:
             - 1.5 * max(0, after["holes"] - base["holes"]))
 
 
+def placements(stack: set[tuple[int, int]], shape: str, w: int, h: int):
+    """Every (rot, x, cells) where this piece can come to rest, dropped straight down."""
+    for r2 in UNIQUE_ROTS[shape]:
+        offs = SHAPES[shape][r2]
+        for x2 in range(-min(dx for dx, _ in offs), w - max(dx for dx, _ in offs)):
+            landed = drop(stack, shape, r2, x2, w, h)
+            if landed:
+                yield r2, x2, landed[0]
+
+
+def lookahead(base: dict[str, Any], stack: set[tuple[int, int]], lines: int, nxt: str | None, w: int, h: int) -> float | None:
+    """The score after the best placement of the next piece too (the preview's piece, or the mean over all seven when
+    it is unknown); None when no next placement fits."""
+    def best(shape: str) -> float | None:
+        vals = [score(base, features(s2, w, h), lines + l2)
+                for _, _, cells in placements(stack, shape, w, h) for s2, l2 in [settle(stack, cells, w, h)]]
+        return max(vals) if vals else None
+    if nxt in SHAPES:
+        return best(nxt)
+    vals = [v for v in (best(s) for s in SHAPES) if v is not None]
+    return sum(vals) / len(vals) if vals else None
+
+
 class TetrisTracker:
     """Per-run state: which cells are the settled stack, which piece we have seen, what we predicted."""
 
@@ -143,6 +166,7 @@ class TetrisTracker:
         self.keys = {"rotate": "ArrowUp", "left": "ArrowLeft", "right": "ArrowRight", "drop": "Space", **(cfg.get("keys") or {})}
         self.top_k = int(cfg.get("top_k", 6))
         self.moves_per_row = float(cfg.get("moves_per_row", 3))
+        self.lookahead = bool(cfg.get("lookahead", False))   # rank by the best two-piece outcome (this piece, then `next`)
         self.last_piece: tuple[str, int, int] | None = None   # (shape, x, y) seen last tick
         self.piece_seq = 0
         self.macros: dict[str, list[str]] = {}
@@ -231,6 +255,11 @@ class TetrisTracker:
                               "height": after["max_height"], "bump": after["bumpiness"], "well_kept": well_kept, "reachable": reachable,
                               "score": score(feats, after, lines), "rots": rots, "dx": x2 - x})
         reach = [c for c in cands if c["reachable"]] or cands
+        if self.lookahead:
+            for c in reach:
+                two = lookahead(feats, settle(stack, c["cells"], w, h)[0], c["lines"], nxt, w, h)
+                # no room for the next piece is worse than anything that has room
+                c["score"] = two if two is not None else c["score"] - 1e6
         reach.sort(key=lambda c: -c["score"])
         self.macros = {}
         for i, c in enumerate(reach[: self.top_k]):

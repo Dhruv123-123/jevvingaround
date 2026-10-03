@@ -3,7 +3,7 @@
 // `done` condition evaluated by the compiler every tick, and the practice is banked as success spans the learning
 // loop must keep allowed. Port of anygame/tasks.py.
 import type { Chat } from "./chat.js";
-import { checkTasks, TASK_CATEGORIES, type Pack, type TaskDef } from "./pack.js";
+import { checkTasks, SETTER_LIMIT_MAX, SETTER_LIMIT_MIN, TASK_CATEGORIES, type Pack, type TaskDef } from "./pack.js";
 import type { Values } from "./reads.js";
 import type { Frame } from "./geometry.js";
 import { frameToDataUrl } from "./author.js";
@@ -23,7 +23,7 @@ runs, margin) and thresholds instead. Answer with ONE JSON array of task objects
 [{"id": "<snake_case>", "instruction": "<one line the player follows>",
   "done": {"read": "<read id or id.path>", "equals"|"in"|"not"|"gte"|"lte": <value>}  (or a list of such conditions, all must hold),
   "when": {... optional: when the task is available ...},
-  "hold_ticks": 1, "limit_ticks": <ticks>, "category": "<one of ${TASK_CATEGORIES.join("|")}>"}]
+  "hold_ticks": 1, "limit_ticks": <ticks, ${SETTER_LIMIT_MIN} to ${SETTER_LIMIT_MAX}>, "category": "<one of ${TASK_CATEGORIES.join("|")}>"}]
 No prose outside the array.`;
 
 export interface TaskStat { attempts: number; done: number; rate: number | null; median_ticks: number | null; category: string }
@@ -81,7 +81,8 @@ export async function proposeTasks(chat: Chat, pack: Pack, frame: Frame, values:
     t.id = String(t.id ?? "").toLowerCase().replace(/[^a-z0-9_]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 40);
     if (!t.id || have.has(t.id)) continue;
     let ok: TaskDef;
-    try { ok = checkTasks([t], pack.reads, "setter")[0]; } catch (e) { log(`tasks: rejected ${t.id}: ${String((e as Error).message ?? e).slice(0, 100)}`); continue; }
+    try { ok = checkTasks([t], pack.reads, "setter", [SETTER_LIMIT_MIN, SETTER_LIMIT_MAX], pack.zones)[0]; } catch (e) { log(`tasks: rejected ${t.id}: ${String((e as Error).message ?? e).slice(0, 140)}`); continue; }
+    if (ok.limit_ticks !== (t.limit_ticks ?? 150)) log(`tasks: ${ok.id}: limit_ticks ${t.limit_ticks} clamped to ${ok.limit_ticks} (the setter's range is ${SETTER_LIMIT_MIN}..${SETTER_LIMIT_MAX})`);
     if (ok.done.every((c) => still.cond(c, values))) { log(`tasks: rejected ${ok.id}: already done on this frame`); continue; }
     const narrow = cellTask(ok, pack.reads);
     if (narrow) { log(`tasks: rejected ${ok.id}: tests the exact cell of ${narrow}; it would hold only on this frame`); continue; }

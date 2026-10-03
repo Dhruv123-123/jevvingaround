@@ -89,6 +89,26 @@ export function accentColor(f: Frame, minShare = 0.03, tol = 40, insetFrac = 0):
   return medianColor(f, inner);
 }
 
+/** A glyph is drawn but its middle is background: an O, a ring, an outlined piece (as perceive.color.is_hollow). */
+export function isHollow(f: Frame, minShare = 0.03, tol = 40, insetFrac = 0): boolean {
+  const { width: w, height: h, data: d } = f;
+  const b = Math.max(1, Math.floor(0.08 * Math.min(w, h)));
+  const border = new Uint8Array(w * h);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) if (y < b || y >= h - b || x < b || x >= w - b) border[y * w + x] = 1;
+  const bg = medianColor(f, border);
+  const labBg = rgbToLab(bg[0], bg[1], bg[2]);
+  const m = Math.floor(insetFrac * Math.min(w, h));
+  const iw = w - 2 * m, ih = h - 2 * m;
+  if (iw <= 0 || ih <= 0) return false;
+  const on = (x: number, y: number) => { const i = (y * w + x) * 4; return labDist(rgbToLab(d[i], d[i + 1], d[i + 2]), labBg) > Math.floor((tol * 3) / 2); };
+  let diff = 0;
+  for (let y = m; y < h - m; y++) for (let x = m; x < w - m; x++) if (on(x, y)) diff++;
+  if (diff / (iw * ih) < minShare) return false;
+  let c = 0, n = 0;
+  for (let y = m + Math.floor(ih * 0.35); y < m + Math.floor(ih * 0.65); y++) for (let x = m + Math.floor(iw * 0.35); x < m + Math.floor(iw * 0.65); x++) { n++; if (on(x, y)) c++; }
+  return n > 0 && c / n < 0.15;
+}
+
 export function nearestNamed(rgb: RGB, options: Record<string, string>): [string, number] {
   const src = rgbToLab(rgb[0], rgb[1], rgb[2]);
   let best = "", bd = 1e9;

@@ -53,6 +53,7 @@ def cmd_play(a):
     if hud:
         print(f"HUD on http://localhost:{a.hud}", file=sys.stderr)
     agent = Agent(pack, device, jev, hud, log_path=a.log, max_ticks=a.max_ticks, record_dir=a.record)
+    _start_fresh(device)
     if a.fallback:
         from .fallback import VLMFallback
         agent.fallback = VLMFallback()
@@ -106,7 +107,7 @@ def cmd_eval(a):
         frame = cv2.imread(str(pack.path.parent / t["frame"])) if t.get("frame") else np.zeros((pack.size[1], pack.size[0], 3), np.uint8)
         state = json.loads((pack.path.parent / t["state"]).read_text()) if t.get("state") else None
         t0 = time.perf_counter()
-        values, _, timings = Agent(pack, device=_Dummy(pack.size), jev=None).observe(frame, state=state)
+        values, _, timings = Agent(pack, device=_Dummy(pack.size), jev=None, background=False).observe(frame, state=state)
         ms = (time.perf_counter() - t0) * 1000
         misses = {k: (v, values.get(k)) for k, v in t["expect"].items() if not _match(v, values.get(k))}
         ok = not misses
@@ -139,6 +140,14 @@ def cmd_eval(a):
     sys.exit(1 if failed else 0)
 
 
+def _start_fresh(device):
+    """Building the Agent (OCR models, the sensor) takes seconds, and a real-time game opened before it runs unwatched
+    meanwhile: Snake was dead at tick 1 when four benches started together. A device that can restart its game cheaply
+    does it here, as `learn` already does before each episode, so the episode starts when the agent can see it."""
+    if hasattr(device, "reload"):
+        device.reload()
+
+
 def cmd_play_inline(pack_dir, device_url: str, ticks: int, log_path: str | None = None, sensor: str = "jev", record_dir: str | None = None) -> dict:
     """Play a pack for N ticks and return the summary (used by `author --play-ticks` and `bench`)."""
     from .device import open_device
@@ -149,6 +158,7 @@ def cmd_play_inline(pack_dir, device_url: str, ticks: int, log_path: str | None 
     device = open_device(device_url, pack.size)
     jev = open_sensor(sensor, timeout=float(pack.raw.get("sensor_timeout_s", os.environ.get("ANYGAME_JEV_TIMEOUT", "4"))))
     agent = Agent(pack, device, jev, None, log_path=log_path, max_ticks=ticks, record_dir=record_dir)
+    _start_fresh(device)
     try:
         last = agent.run()
     finally:
@@ -293,6 +303,7 @@ def cmd_go(a):
     if hud:
         print(f"playing {pack.name} from {known}  HUD on http://localhost:{a.hud}", file=sys.stderr)
     agent = Agent(pack, device, open_sensor(a.sensor), hud, max_ticks=a.max_ticks)
+    _start_fresh(device)
     try:
         last = agent.run()
     finally:
@@ -317,7 +328,7 @@ def cmd_author(a):
     size = tuple(int(v) for v in a.size.split("x"))
     ok, out = author(a.device, a.game, Path(a.out), play=a.play, rounds=a.rounds, model=a.model, frames_n=a.frames, size=size,
                      play_ticks=a.play_ticks, tune=a.tune, sensor=a.sensor, score_read=a.score_read, log=lambda m: print(m, file=sys.stderr),
-                     demo=Path(a.demo) if a.demo else None)
+                     demo=Path(a.demo) if a.demo else None, resume=a.resume)
     print(json.dumps({"pack": str(out / "pack.yaml"), "passes_eval": ok}))
     sys.exit(0 if ok else 1)
 
@@ -492,7 +503,7 @@ def cmd_learn(a):
             if str(last.get("reason", "")).startswith("stalled") and fallback is not None:
                 # the pack could not tell that the game ended: one look by the vision model labels the episode
                 verdict = fallback.outcome(device.frame(), a.goal or pack.play[:300])
-                last["reason"] = f"stalled: {verdict['outcome']} ({verdict['note']})"
+                last["reason"] = f"stalled: {verdict['outcome']} ({verdict['note']})" + (f"; implausible read: {last['implausible'][0]}" if last.get("implausible") else "")
                 recs[-1]["reason"] = last["reason"]
                 log(f"episode {n}: the screen stalled; the vision model says {verdict['outcome']}: {verdict['note']}")
             if not decisions and str(last.get("reason", "")).startswith("stalled") and "playing" in str(last.get("reason", "")):
@@ -617,6 +628,7 @@ def cmd_suite(a):
             device = open_device(a.device.replace("{seed}", seed.strip()), pack.size)
             jev = open_sensor(a.sensor, timeout=float(pack.raw.get("sensor_timeout_s", os.environ.get("ANYGAME_JEV_TIMEOUT", "4"))))
             agent = Agent(pack, device, jev, None, max_ticks=a.max_ticks)
+            _start_fresh(device)
             agent.stall_ticks = 40
             recs, events = [], []
             agent.on_record = lambda rec, frame: recs.append(rec)
@@ -841,6 +853,7 @@ def main(argv=None):
     au.add_argument("--tune", type=int, default=0, help="rounds of play → digest → revised paragraph/questions/rules (needs --play-ticks)")
     au.add_argument("--sensor", default="jev", help="sensor used for the play rounds: jev | random | llm:<model>")
     au.add_argument("--score-read", default=None, help="read id that measures progress, for keeping the best pack")
+    au.add_argument("--resume", action="store_true", help="start from the pack and probe frames already in --out (revise it instead of probing and writing anew)")
     au.add_argument("--demo", default=None, help="a demonstration directory (from `anygame explore` or the extension) to author from instead of probing"); au.set_defaults(fn=cmd_author)
     ex = sub.add_parser("explore", help="let the vision model play for a while and write a demonstration for the author")
     ex.add_argument("--device", required=True); ex.add_argument("--out", required=True); ex.add_argument("--seconds", type=int, default=90)

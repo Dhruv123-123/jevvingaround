@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { PNG } from "pngjs";
-import { BUNDLED_PACKS, packFromText, evalPack, Agent, StillDevice, RandomSensor, runsOf, aroundOf, TetrisTracker, accentColor, matches } from "../dist/core.js";
+import { BUNDLED_PACKS, packFromText, evalPack, Agent, StillDevice, RandomSensor, runsOf, aroundOf, goRead, TetrisTracker, accentColor, isHollow, matches } from "../dist/core.js";
 
 const PACKS = join(process.cwd(), "..", "packs");
 
@@ -44,6 +44,9 @@ test("runs, around and accent behave like the Python reads", () => {
   assert.deepEqual(accentColor({ width: w, height: h, data }, 0.03, 40, 0.25), [31, 41, 55]);
   for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { const d = Math.hypot(x - 83, y - 83); if (d > 40 && d < 62) { const i = (y * w + x) * 4; data[i] = 96; data[i + 1] = 165; data[i + 2] = 250; } }
   assert.deepEqual(accentColor({ width: w, height: h, data }, 0.03, 40, 0.25), [96, 165, 250]);
+  assert.equal(isHollow({ width: w, height: h, data }, 0.03, 40, 0.1), true);          // a ring: its middle is background
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { if (Math.hypot(x - 83, y - 83) <= 40) { const i = (y * w + x) * 4; data[i] = 96; data[i + 1] = 165; data[i + 2] = 250; } }
+  assert.equal(isHollow({ width: w, height: h, data }, 0.03, 40, 0.1), false);         // filled in: a disc
 });
 
 test("tetris tracker ranks landings and builds macros", () => {
@@ -73,4 +76,61 @@ test("the loop plays tic-tac-toe frames with the random sensor and only offers l
   const rec = await ag.step();
   assert.equal(rec.choice, "mark");
   assert.ok(matches({ a: 1 }, { a: 1, b: 2 }) && !matches([1, 2], [1]));
+});
+
+test("go read matches the Python compiler", () => {
+  const mid = ["BBW......", "B.W......", ".BBW.....", "..W......", ".....B...", "....WW...", "...B.....", "....B...W", ".WBW....B"];
+  let v = goRead(mid, { kind: "go", us: "B", them: "W", komi: 6.5 });
+  assert.deepEqual(v.saves, ["c3r8", "c8r9"]);
+  assert.deepEqual(v.our_atari, ["c3r9", "c9r9"]);
+  assert.deepEqual(v.self_atari, ["c1r9"]);
+  v = goRead([".........", ".........", "..W......", "....B....", "...BWB...", ".........", "..W......", ".........", "........."], { kind: "go" });
+  assert.deepEqual(v.captures, ["c5r6"]);
+  assert.deepEqual(v.urgent, ["c5r6"]);
+  v = goRead([".B.......", "B........", ...Array(7).fill(".........")], { kind: "go" });
+  assert.deepEqual(v.eyes, ["c1r1"]);
+  assert.equal(v.score.us, 81);
+});
+
+test("go worth ranks the same moves as the Python compiler", () => {
+  const mid = ["BBW......", "B.W......", ".BBW.....", "..W......", ".....B...", "....WW...", "...B.....", "....B...W", ".WBW....B"];
+  const v = goRead(mid, { kind: "go", komi: 6.5 });
+  assert.deepEqual(v.best, ["c6r2", "c7r2", "c1r3", "c7r1", "c5r2", "c8r2"]);
+  assert.equal(v.worth.c6r2, 14);
+  const deep = goRead(["BBW..B...", "B.W..W...", ".BBW..B..", "..W...W..", ".....B...", "....WW..B", "...B...W.", "....B...W", ".WBW....B"], { kind: "go", komi: 6.5 });
+  assert.deepEqual(deep.best, ["c1r3", "c2r8", "c5r1", "c3r5", "c2r6", "c1r7"]);
+  assert.equal(deep.worth.c2r8, 8.5);
+  assert.deepEqual(deep.danger, ["c1r1", "c2r1", "c6r1", "c1r2"]);
+  assert.deepEqual(deep.doomed, ["c4r1", "c9r1", "c2r2", "c4r2", "c9r7", "c8r9"]);
+  assert.deepEqual(goRead([".........", "..WW.....", ".WB......", ...Array(6).fill(".........")], { kind: "go" }).danger, ["c3r3"]);   // a ladder
+  assert.deepEqual(v.estimate, { us: 21, them: 34.5, lead: -13.5 });
+});
+
+test("2048 slide compiler ranks swipes like the Python one", async () => {
+  const { slideOf } = await import("../dist/core.js");
+  // expected values computed by anygame/perceive/slide.py on the same boards
+  const a = slideOf([2, 0, 0, 0, 0, 4, 0, 0, 0, 0, 8, 2, 16, 32, 64, 128], {});
+  assert.deepEqual(a.legal, ["left", "right", "down", "up"]);
+  assert.equal(a.ranked.up, "#4: merges +0, 8 empty after, largest tile NOT in the corner");
+  const full = slideOf({ c1r1: 4, c2r1: 8, c3r1: 2, c4r1: 4, c1r2: 2, c2r2: 4, c3r2: 8, c4r2: 32, c1r3: 4, c2r3: 2, c3r3: 32, c4r3: 8, c1r4: 8, c2r4: 16, c3r4: 64, c4r4: 256 }, {});
+  assert.deepEqual(full.legal, []);
+  assert.equal(full.best, "none");
+  const b = slideOf([0, 2, 2, 0, 0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0, 0], { depth: 2 });
+  assert.deepEqual(b.legal, ["right", "down", "up", "left"]);
+  assert.equal(b.ranked.right, "#1 best: merges +4, 14 empty after, largest tile NOT in the corner");
+});
+
+test("rules take a list of conditions, an unless, and contains, like the Python loop", () => {
+  const pack = packFromText(BUNDLED_PACKS["web-dino"], "web-dino");
+  const ag = new Agent(pack, new StillDevice([]), new RandomSensor());
+  const byExcl = (vals) => ag.hits({}, vals).map(([rl]) => (rl.exclude ?? []).join("+")).sort();
+  // a low obstacle cannot be ducked; a head-only bird is never jumped into
+  assert.ok(byExcl({ next: { rows: "chest,low" } }).includes("duck"));
+  assert.ok(!byExcl({ next: { rows: "chest" } }).includes("duck"));
+  assert.ok(byExcl({ next: { rows: "head" } }).includes("jump"));
+  // the list rule needs all three, and its unless cancels it
+  const air = { dino: "air", next: { age_ms: 50, ttc_ms: 200 }, under: "clear" };
+  assert.ok(byExcl(air).includes("keep"));
+  assert.ok(!byExcl({ ...air, next: { age_ms: 500, ttc_ms: 200 } }).includes("keep"));
+  assert.ok(!byExcl({ ...air, under: "ink" }).includes("keep"));
 });
