@@ -85,6 +85,16 @@ class Agent:
         self.remembered: dict[str, list[str]] = {}    # `remember:` reads → their last distinct values (what was said)
         self.last_fp = None
         self.auto_ticks = 0                            # ticks a routine screen was handled by an auto rule, no decider
+        # run memory (dialogue with where it was said, places), goals written from it, and the per-decision audit of
+        # the decider against the top-ranked pick (anygame/memory.py, goals.py, audit.py): set up by the caller
+        self.memory = None
+        self.goalbook = None
+        self.auditor = None
+        if pack.raw.get("goals_from") == "dialogue":
+            from .memory import RunMemory
+            from .goals import GoalBook
+            self.memory = RunMemory()
+            self.goalbook = GoalBook(self.memory, None, pack.raw.get("goals_cfg"))
         if pack.raw.get("frames") == "stream" and hasattr(device, "stream"):
             device.stream()             # frames from the browser's screencast: ~10 ms a frame instead of a 40 ms screenshot
         # the hybrid: which screen is this, does the pack understand it, and who decides when it does not
@@ -446,7 +456,27 @@ class Agent:
                 if w and any(c.get("read") in probes for c in (w if isinstance(w, list) else [w])):
                     v, _, _ = read_all(pack, frame, only={rid}, tick=self.tick, state=state, given=values)
                     values[rid] = v.get(rid)
+        if self.memory is not None and pack is self.base:
+            w = next((t for t in self.worlds.values() if hasattr(t, "tile_of")), None)
+            t = w.tile_of(values) if w is not None else None
+            placed = {**values, "map": t[0]} if t else values      # the place as the world memory names it
+            self.memory.observe(self.tick, getattr(self.device, "frames", None), placed,
+                                values.get(self.base.raw.get("dialogue_read", "text")), (t[1], t[2]) if t else None)
+            if self.goalbook is not None:
+                self.quest = self.goalbook.update(self.tick, placed, w)
         for rid, r in pack.reads.items():
+            if r.get("kind") == "menu":
+                if rid not in self.worlds:
+                    from .perceive.menu import MenuTracker
+                    self.worlds[rid] = MenuTracker(r)
+                self.trackers[rid] = self.worlds[rid]
+                if r.get("when") and not self._task_ok(r["when"], values):
+                    self.worlds[rid].see(self.device.screen(), values.get("text"))   # where a choice may lead back to
+                    values[rid] = None
+                    continue
+                pos = [str(x) for x in (r.get("pos") or [])]
+                look_pos = (lambda: tuple(_get(self.device.state() or {}, p_) for p_ in pos)) if pos else None
+                values[rid] = self.worlds[rid].read(self.device, self.device.screen(), look_pos)
             if r.get("kind") == "world":
                 if rid not in self.worlds:
                     from .perceive.world import WorldTracker
@@ -799,6 +829,9 @@ class Agent:
             action = self.pack.action(choice)
         except Exception:
             action = Action("wait", "wait")
+        if self.auditor is not None and "sensor" not in rec:
+            # Jev's pick against the top-ranked one, both played forward from this moment: did the pick matter
+            rec["audit"] = self.auditor.check(self, qs, answers, values)
         done = self.act(action, answers)
         if getattr(self.device, "coach", False):
             done = "suggest: " + done            # coach mode: shown, never performed

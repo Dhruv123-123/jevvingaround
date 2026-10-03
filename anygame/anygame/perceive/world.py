@@ -98,6 +98,9 @@ class WorldTracker:
         self.stale = 0                                  # reads since a new tile was stood on or a new thing inspected
         self.known = 0
         self.buttons_tried: set[str] = set()            # buttons tried during this stale stretch
+        self.alias: dict[Any, Any] = {}                 # map signature → the place it names (see _place)
+        self.places: set[Any] = set()
+        self._last: Tile | None = None
 
     # ---- memory ---------------------------------------------------------------------------------------
     def tile_of(self, values: dict[str, Any]) -> Tile | None:
@@ -109,9 +112,26 @@ class WorldTracker:
         if x is None or y is None:
             return None
         try:
-            return (m if m is not None else 0, int(round(float(x) / self.cell)), int(round(float(y) / self.cell)))
+            t = (m if m is not None else 0, int(round(float(x) / self.cell)), int(round(float(y) / self.cell)))
         except (TypeError, ValueError):
             return None
+        return self._place(t)
+
+    def _place(self, t: Tile) -> Tile:
+        """A discovered map signature can change without a transition (a byte in it is also a dialogue or animation
+        state). A place changes only when the position jumps with it: a new signature that appears while the player
+        stands where they stood, or one step away, is the same place under another name (an alias, for the run)."""
+        m = t[0]
+        if m in self.alias:
+            m = self.alias[m]
+        elif m not in self.places and self._last is not None and self._last[0] != m:
+            if abs(t[1] - self._last[1]) + abs(t[2] - self._last[2]) <= 1:
+                self.alias[m] = self._last[0]
+                m = self._last[0]
+        self.places.add(m)
+        out = (m, t[1], t[2])
+        self._last = out
+        return out
 
     def visit(self, t: Tile) -> None:
         self.visited.setdefault(t[0], set()).add((t[1], t[2]))
@@ -223,6 +243,8 @@ class WorldTracker:
             gm = goal.get("map", here[0])
             tgt = None
             why = goal.get("label") or "the goal"
+            if gm == here[0] and "x" not in goal and goal.get("toward"):
+                goal = {**goal, "_toward": goal["toward"]}      # only a direction: explore that way first
             if gm == here[0] and "x" in goal and "y" in goal:
                 tgt = (here[0], int(goal["x"]), int(goal["y"]))
                 if tgt == here:
@@ -423,7 +445,8 @@ class WorldTracker:
                 "blocked": [[list(k), v] for k, v in self.blocked.items()],
                 "warps": [[list(k), list(w)] for k, w in self.warps.items()],
                 "inspected": [list(k) for k in self.inspected], "steps": self.steps,
-                "walls_at": {json.dumps(m): sorted(v) for m, v in self.walls_at.items()}}
+                "walls_at": {json.dumps(m): sorted(v) for m, v in self.walls_at.items()},
+                "alias": [[k, v] for k, v in self.alias.items()], "places": sorted(self.places, key=str)}
 
     def load(self, d: dict[str, Any]) -> None:
         self.visited = {json.loads(m): {tuple(p) for p in v} for m, v in (d.get("visited") or {}).items()}
@@ -432,3 +455,5 @@ class WorldTracker:
         self.inspected = {tuple(k) for k in d.get("inspected") or []}
         self.steps = int(d.get("steps", 0))
         self.walls_at = {json.loads(m): {tuple(p) for p in v} for m, v in (d.get("walls_at") or {}).items()}
+        self.alias = {k: v for k, v in d.get("alias") or []}
+        self.places = set(d.get("places") or []) | set(self.visited)
