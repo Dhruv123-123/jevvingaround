@@ -243,11 +243,11 @@ loop never notices because score is not the reward.
 ### Which model goes where
 
 Jev always goes to OpenRouter (`OPENROUTER_API_KEY`) or `JEV_BASE_URL`. Every other model call, the authoring
-model and any `llm:` sensor, goes wherever `ANYGAME_LLM_BASE` points:
+model and any `llm:` sensor, goes wherever `ANYGAME_LLM_BASE` points. There is no default: with nothing set,
+authoring, revision and `llm:` sensors stop with a message naming these variables. OpenRouter is for Jev
+only: a chat model pointed at it is refused, whatever the model.
 
 ```bash
-# default: OpenRouter, any model id
-ANYGAME_LLM_MODEL=anthropic/claude-sonnet-5
 # Azure OpenAI / Foundry v1 endpoint: paste the portal's URL as is, the model is your deployment name
 ANYGAME_LLM_BASE=https://<resource>.services.ai.azure.com/openai/v1/responses  ANYGAME_LLM_KEY=<api key>  ANYGAME_LLM_MODEL=<deployment>
 # classic Azure OpenAI deployments endpoint
@@ -438,7 +438,7 @@ anygame author --device "web://games/tictactoe.html" --game "Tic-tac-toe, we are
 ```
 
 The runtime probes the game (start screen, then after taps and arrow keys), hands the frames to a vision
-model (Claude Sonnet through OpenRouter by default, `--model` for any other) with a 50 px pixel grid drawn on
+model (the one `ANYGAME_LLM_*` configures, `--model` for another) with a 50 px pixel grid drawn on
 them, the dominant colours as measured hex codes, the pack format and three real packs, and asks for a
 pack.yaml with tests over those frames. Then it loads the pack, runs every read on every frame, and sends the
 model exactly what its reads saw next to the images, so it corrects colours, rects and expectations. Up to

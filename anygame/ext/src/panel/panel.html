@@ -63,9 +63,9 @@
       <label>OpenRouter key (Jev) <input id="k_openrouter" type="password" placeholder="sk-or-…"></label>
       <label>CLM server <input id="k_clmBase" placeholder="http://127.0.0.1:8700 (clm-serve) or a hosted /v1/systemone"></label>
       <label>CLM key (if the host needs one) <input id="k_clmKey" type="password" placeholder="optional"></label>
-      <label>chat model endpoint <input id="k_llmBase" placeholder="https://<resource>.services.ai.azure.com/openai/v1/responses or https://openrouter.ai/api/v1"></label>
+      <label>chat model endpoint <input id="k_llmBase" placeholder="https://<resource>.services.ai.azure.com/openai/v1/responses"></label>
       <label>chat model key <input id="k_llmKey" type="password"></label>
-      <label>chat model / deployment <input id="k_llmModel" placeholder="gpt-5.6-luna or anthropic/claude-sonnet-5"></label>
+      <label>chat model / deployment <input id="k_llmModel" placeholder="your Azure deployment, e.g. gpt-5.6-luna"></label>
       <button id="savekeys">save</button>
       <span class="dim">Keys stay in this browser's extension storage and go only to the endpoints above. Jev sees compiled state, never frames; the chat model sees frames only while authoring.</span>
     </details>
