@@ -74,6 +74,7 @@ class Agent:
         self.last_answers: dict[str, Any] | None = None
         self.trackers: dict[str, Any] = {}
         self.pressed_at: dict[str, float] = {}      # action id → when its key last went down (for again_ms)
+        self.locked: tuple[str, float] | None = None   # (action id, until): no other key before then (lock_ms)
         if pack.raw.get("frames") == "stream" and hasattr(device, "stream"):
             device.stream()             # frames from the browser's screencast: ~10 ms a frame instead of a 40 ms screenshot
         # the hybrid: which screen is this, does the pack understand it, and who decides when it does not
@@ -220,14 +221,21 @@ class Agent:
         if a.kind == "wait":
             return "wait"
         if a.kind == "key":
+            now = time.perf_counter()
+            if self.locked and self.locked[0] != a.id and now < self.locked[1]:
+                # another key went down a moment ago and the screen may not show it yet: a dino one frame after its
+                # jump key still reads as on the ground, and a duck pressed then is a fast drop out of the jump
+                return f"wait: {self.locked[0]} locks keys for {round((self.locked[1] - now) * 1000)} ms"
             again = p.get("again_ms")
             if again:
                 # not pressed again this soon: at a high frame rate the screen may not show the last press yet (a
                 # dino still on the ground one frame after its jump key), and a second press would cut the first short
-                now, last = time.perf_counter(), self.pressed_at.get(a.id)
+                last = self.pressed_at.get(a.id)
                 if last is not None and now - last < float(again) / 1000:
                     return f"wait: {a.id} pressed {round((now - last) * 1000)} ms ago"
                 self.pressed_at[a.id] = now
+            if p.get("lock_ms"):
+                self.locked = (a.id, now + float(p["lock_ms"]) / 1000)
             hold = int(p.get("hold_ms", 0) or 0)
             if hold and p.get("release") == "later":
                 # held without stopping the loop: let go on the first frame after hold_ms (a device that cannot
