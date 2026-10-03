@@ -20,8 +20,11 @@ Branch `claude/anygame-extension-parity-nknhcy`, PR #4 (https://github.com/Dhruv
 | dino: `ask: async` / `ask_when` (Jev asked once per obstacle, loop keeps running) | missing | `loop.ts` | fake-device test: 2 decider calls, 1 async, jump on the frame at ttc ≤ 205 ms |
 | dino: `release: later`, `repeat: hold` (key held without freezing the loop) | blocking holds | `loop.ts`, `TabDevice` lets go on the next frame | same test |
 | authoring prompt text for `plausible:` | missing | `author.ts` | text matches `author.py` |
+| dino: `frames: stream` (Chrome's screencast instead of a screenshot per frame) | screenshots only | `TabDevice.stream()`, cropped to the region; falls back to a screenshot when nothing new is painted | dino e2e: the loop runs at ~28 frames a second (14 with screenshots) |
+| dino: `again_ms` (a key is not pressed again this soon) | missing | `loop.ts` | unit test |
+| a missing number never meets `gte`/`lte` (Python's `float(None)` fails) | `Number(null)` is 0, so a null read met every `lte` | `loop.ts` | unit test; found on chromedino.com (below) |
 
-Extension tests: 59 pass (41 before), and `tsc` is clean. Python: 81 pass.
+Extension tests: 61 pass (41 before), and `tsc` is clean. Python: 81 pass.
 
 ## Played in headless Chromium from the extension panel
 
@@ -42,6 +45,23 @@ All runs use `ext/test/e2e_parity.py` on the bundled game pages. Logs are in `/m
   - Go read: 64–82 ms median per board.
 - **Go** with the older 64-playout pack against the time-boxed `?ai=mc` white: Jev won 3 of 8 ($0.036) and the stand-in 0 of 4. On a fast machine the CLI got 2 of 8 against this white, and 5 of 8 on a slow one.
 
+- **Dino on chromedino.com**: `ext/test/e2e_dino.py` plays it from the extension panel. Each game runs in a fresh browser, with ads hidden and the capture region set to the game, the same way the CLI harness does it. 8 games per row; scores are the page's own.
+
+  | Run | Extension median (range) | CLI |
+  |---|---|---|
+  | Stand-in at 400 ms, 15 fps | 398 (282–1822) | 606 (266–798), later 311 over 16 |
+  | Real Jev, 15 fps | **714** (189–1788), $0.09 | 1277 (181–3425) |
+  | Stand-in at 400 ms, 30 fps (`frames: stream`) | 462 (197–1033) | 415 over 16 |
+  | Real Jev, 30 fps | **473** (144–1788), $0.08 | 770 over 16 |
+
+  With 8 games the spread is wide, but the extension sits in the CLI's range, and real Jev beats the stand-in at 15 fps.
+
+  At 30 fps Jev dropped, as it did in the CLI (1277 → 770).
+
+  Nearly every death, in both versions, is the same one the CLI reports: the dino clears one obstacle and lands on a second one close behind it. That is the pack's open problem, not a port difference.
+
+  The first runs (stand-in 514, Jev 474) found a real extension bug. The extension treated a missing time-to-contact (`null` on an empty road) as 0. As a result, the reflex and an "in the air, don't keep running" rule fired on an empty road, every action was excluded, and the dino hopped constantly. Python's `float(None)` raises, so the CLI never had this. The fix is a 3-line check in `cond()`.
+
 ## Found along the way
 
 - **The debugger infobar ("… started debugging this browser") shrinks the tab by ~40 px.** That clipped the bottom board rows of the bundled 540×560 regions, and the new plausible check caught it in CI on tic-tac-toe ("count(X)-count(O) is 1 while status equals our_turn"). The e2e scripts now open a 540×900 window. Real users with a short window could hit the same clipping.
@@ -54,4 +74,3 @@ All runs use `ext/test/e2e_parity.py` on the bundled game pages. Logs are in `/m
 - **Truth logging (`ANYGAME_LOG_TRUTH`)** for grading reads.
 - **Probe and authoring changes in `author.py`** beyond the prompt text.
 - **The `learn` loop, task setter and rater.** The panel has setter and rater controls, but the rewrite loop runs only from the CLI.
-- **The dino 30 fps screen-stream setting (round three),** if it lands. It is not in integration yet.
