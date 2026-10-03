@@ -861,7 +861,7 @@ class Agent:
             for k in dirs:
                 disc.press(k, res["wait"]["ram"], res[k]["ram"], full=False)
         base = res["wait"]["screen"].astype(_np.int16)
-        thr = float(r.get("min_change", 0.3))
+        thr = float(r.get("min_change", 0.05))   # the emulator is deterministic: a few letters more is a real difference
         differs = {k: float(_np.abs(v["screen"].astype(_np.int16) - base).mean()) > thr for k, v in res.items() if k != "wait"}
         pos = [str(x) for x in (r.get("pos") or [])]
         def at(k):
