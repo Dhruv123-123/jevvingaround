@@ -219,7 +219,8 @@ def cmd_bench(a):
         url = a.device.replace("{seed}", seed)
         import hashlib
         tag = hashlib.sha1(a.device.encode()).hexdigest()[:6]          # the device URL (level, speed…) is part of the run's name
-        log = os.path.join(a.out, f"{a.pack}-{a.sensor.replace(':', '_').replace('/', '_')}-{tag}-{seed}.jsonl")
+        name = os.path.basename(os.path.dirname(a.pack)) if a.pack.endswith(".yaml") else a.pack     # a pack given by path: its folder's name, so the log lands in --out
+        log = os.path.join(a.out, f"{name}-{a.sensor.replace(':', '_').replace('/', '_')}-{tag}-{seed}.jsonl")
         Path(a.out).mkdir(parents=True, exist_ok=True)
         s = cmd_play_inline(find_pack(a.pack), url, a.max_ticks, log_path=log, sensor=a.sensor)
         score = None

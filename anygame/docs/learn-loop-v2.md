@@ -157,6 +157,46 @@ is left). It held on seed 2 here; the hand-fix thread found that trigger too lat
 fix stays the better line. Pack: `docs/learn-loop-v2/snake-learned`. Jev for the second attempt: $0.14 (run B $0.09,
 run A $0.02, the stopped OCR run $0.03). Azure: 6 diagnoses and about 8 rewrite calls.
 
+## Go: a discovery test (no known fix to find)
+
+Go against the fixed strong white (`games/go.html?ai=mc&playouts=400`), starting from the final Go pack (ladder
+reading, 32 playouts per candidate and 160 for the top 3, "play the playout leader past a 0.06 gap"). Nobody knows
+the next fix here. The loop played 20 learning games on seeds 101 to 120 (a device URL with `{seed}` now gives
+each episode its own seed, apart from the 16 test seeds), with 4-game trials.
+
+**Same-day baseline, unchanged pack, seeds 1 to 16:** 9 won, 7 lost, mean final lead +18.6, median +13.5 (the
+earlier run: 9 of 16, +17.0, +10.5).
+
+**What the diagnoses said** (7 losses diagnosed):
+
+| Loss | Fault kind | Diagnosis | Rewrite | Outcome |
+|---|---|---|---|---|
+| seed 102 | contradicting_text | Jev ignored the "follow the leader past 0.06" paragraph at ticks 45 and 47 | paragraph, then paragraph and question | refused twice: re-asked, Jev made the same moves |
+| seed 103 | unsure_ranking | at tick 55 Jev played c8r9 (win 0.03) over c7r4 (win 0.22 on 160 playouts) | more playouts plus paragraph, twice | refused twice: Jev made the same moves |
+| seed 105 | none parsed | | | |
+| seed 107 | bad_choice | c4r1 at tick 55 where c9r5 was clearly better | a rule; a rule naming a move that does not exist | refused: it blocked moves in won games; did not load |
+| seed 111 | stale_frame | "acted on a frame that did not show its previous move" | `settle: screen_change` | **kept**: 3 won, 2 lost on trial vs 6 and 5 before |
+| seed 116 | bad_choice | c8r1 over a better tactical move | a rule; an invalid rule | refused: same moves; did not load |
+| seed 117 | bad_choice | c7r1 although c8r6 had a much better playout result | a rule "never play a point in `go.doomed`" plus the same line in the paragraph | **on trial** when the 20 games ran out: 2 won, 1 lost |
+
+Four of the seven diagnoses name the same thing: Jev passes up a move whose playout win rate is far higher (0.19 at
+seed 103) and takes the `worth` leader, against the paragraph. That matches what the hand work found (Jev keeps its
+own pick about 40% of the time past the gap). The loop cannot fix it with what it is allowed to change: rewording
+the paragraph did not move Jev on the recorded positions, more playouts do not help when Jev ignores them, and the
+rules can only compare a read with a constant, so "exclude any move more than 0.06 below the playout leader" cannot be
+written. The fix it points at is a compiler option that re-ranks `best` by playout win rate past a gap (or drops such
+moves), which would have to be added by hand, as `reflex` and `lookahead` were. The `stale_frame` diagnosis looks
+wrong for Go (the pack only acts while `status` is `our_turn`); its `settle` change kept on a 5-game trial within noise.
+
+**The learned pack on the test seeds** (v3: settle plus the doomed-point rule): the run stopped after 10 of 16 seeds
+because the OpenRouter account ran out of credit (402 "Insufficient credits", $5.20 used of $5). On seeds 1 to 10:
+5 won, mean lead +20.4, median +7.0; the unchanged pack on the same 10 seeds: 5 won, +18.2, +10.0. No difference so
+far. Seeds 11 to 16 need credit on the OpenRouter account.
+
+Jev for the Go test: $0.23 (baseline $0.08, learning $0.10, test of v3 $0.06). Azure: 7 diagnoses, 14 rewrite calls.
+Pack: `docs/learn-loop-v2/go-learned`. Logs: `/mnt/project-files/anygame/learn-loop-v2/go/` (`baseline/`,
+`learned-v3/`, `bank/`, `learn-stderr.log`).
+
 ## What the loop still lacks
 
 - **Timing changes are judged only by play.** Replay cannot show what a faster or slower loop would have seen. A
@@ -171,6 +211,8 @@ run A $0.02, the stopped OCR run $0.03). Azure: 6 diagnoses and about 8 rewrite 
 - **The held-out drift check measures Jev's noise.** It refused a reflex-plus-read rewrite because Jev changed 81% of
   answers on ordinary ticks under it; Jev flips most snake answers when asked twice under the same pack. It should
   compare against Jev re-asked under the incumbent.
+- **It cannot add a feature.** On Go every useful diagnosis pointed at a compiler option that does not exist
+  (re-rank by playout win rate past a gap); rules compare reads with constants, not with each other.
 - **Five-game trials on one seed** are still small; the long trial reverted a stale-frame rewrite and kept the reflex
   by clear margins, but a closer call would need more games.
 
