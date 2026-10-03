@@ -241,6 +241,16 @@ class MenuTracker:
             if not be["same_screen"]:
                 landings[f"press_{bn}"] = f"press {bn.upper()} → {self._said(be)}"
                 plans[f"press_{bn}"] = [bn]
+        lost = pos is not None and None in (pos() or (None,))
+        firsts = {e["keys"][0] for e in m["entries"] if len(e["keys"]) == 1}
+        if lost and len(firsts) >= 3:
+            # each direction reached its own "entry" in one press and none came round again: more like a player
+            # turning to face four ways than a menu. While where you are is unknown, offer holding each direction (a
+            # walk, in a game where a tap only turns); walking is also what lets the position be found
+            hold = int(self.r.get("walk_hold", 16))
+            for d in ("up", "down", "left", "right"):
+                landings[f"walk_{d}"] = f"hold {d.upper()} for a step (if this is the world and not a menu, you walk {d})"
+                plans[f"walk_{d}"] = [f"{d}:{hold}"]
         before = self.history.get(k) or []
         times = {lab: sum(1 for h in before if h.startswith(lab + ":")) for lab in landings}
         for lab, t in times.items():
@@ -254,7 +264,15 @@ class MenuTracker:
             for lab in idle:                 # an entry that does nothing is not a choice while others do something
                 landings.pop(lab)
                 plans.pop(lab, None)
-        order = sorted(landings, key=lambda lab: (lab in idle, lab == "back_out" or lab.startswith("press_"), lab in back, times[lab], list(landings).index(lab)))
+        def group(lab):
+            if lab in idle:
+                return 4
+            if lab == "back_out" or lab.startswith("press_"):
+                return 3
+            if lab.startswith("walk_"):
+                return 1 + (1 if times[lab] else 0)
+            return 0 if not times[lab] and lab not in back else 2
+        order = sorted(landings, key=lambda lab: (group(lab), times[lab], list(landings).index(lab)))
         landings = {lab: landings[lab] for lab in order}
         self.plans = plans
         self.macros = {kk: list(v) for kk, v in plans.items()}
@@ -286,10 +304,11 @@ class MenuTracker:
         if not plan:
             return f"{label}: no plan"
         for k in plan:
-            device.press(k, hold=self.hold, after=self.gap)
+            k, _, h = k.partition(":")
+            device.press(k, hold=int(h) if h else self.hold, after=self.gap)
         if self.last_key:
             self.history.setdefault(self.last_key, []).append(f"{label}:{self.last_landings.get(label, '')[:60]}")
-        return f"{label}: " + " ".join(k.upper() for k in plan)
+        return f"{label}: " + " ".join(k.split(":")[0].upper() for k in plan)
 
     def dump(self) -> dict[str, Any]:
         return {"history": self.history}
