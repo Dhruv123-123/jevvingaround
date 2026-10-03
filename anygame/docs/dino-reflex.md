@@ -108,3 +108,39 @@ each game, `dino_start` now hides ads and fixed overlays and scrolls the game ba
 ~65 ms. Faster frames, for example a smaller screenshot of only the game's strip, would make the low jump usable.
 Jev spend this round: $0.22 (three runs, two of them with fixes found during the run), over the ~$0.05 asked:
 better runs last longer, and each game costs about $0.007 per 1,000 points.
+
+## Third round (2026-10-03): 30 frames a second
+
+| 8 games each, same 200 s cap | score median | range | Jev cost |
+|---|---|---|---|
+| Stand-in, 15 fps (final pack above) | 606 | 266–798 | – |
+| Stand-in, 30 fps, first try | 428 | 78–1214 | – |
+| Stand-in, 30 fps, double press fixed | **912** | 301–1662 | – |
+| **Real Jev, 30 fps** (final pack) | **770** | 220–1781 | $0.10 |
+| Stand-in, 30 fps, earlier jump before a close pair (dropped) | 910 | 331–1797 | – |
+
+**The limit was the screenshot.** A Playwright screenshot takes 35–50 ms whatever its size or format, so the loop
+could not go much past 15 frames a second. A pack can now say `frames: stream`: the web device takes frames from
+Chrome's screencast, which pushes every painted frame, and `frame()` returns the first one painted after it is
+called (~10 ms), or a screenshot when the page paints nothing new. It is a pack setting, so other games are
+unchanged. The dino pack now runs at `tick_hz: 30`, and ticks measured 34 ms apart.
+
+**A fast loop pressed the jump twice.** One frame after the jump key the screen can still show the dino on the
+ground, so the rules pressed Space again 33 ms later, which let go of the first press (149 double presses in 8 games,
+median 428). Key actions take `again_ms` (the jump: 150), and within it the loop waits instead of pressing.
+
+**Results.** The stand-in went from 606 to 912 and Jev scored 770. That is above Jev's 537 with the low jump. It is
+below the 1277 from the ducking-fix run at 15 fps, but that run used the old pack and 8-game medians spread widely.
+The stand-in's own medians ranged 592–1175 on similar packs. Jev's games cost $0.10, about $0.007 per 1,000 points as
+before, over the ~$0.05 asked because the games ran longer.
+
+**What still kills it: the same close pairs.** In 5 of Jev's 8 deaths the obstacle arrived 580–615 ms after the
+previous jump: the dino lands just as it arrives, too late to jump. Faster frames did not change that, because the
+full jump lasts ~575 ms whatever the frame rate. Jumping earlier when a second obstacle follows within 500 ms did not
+help (910 vs 912), so it was dropped. What is left to try: a fast drop timed from the gap to the second obstacle,
+and the low jump now that frames come every 34 ms.
+
+**Perception at 30 fps.** About 1% of road reads are one game frame (~9 px) behind the page's state, because a
+screencast frame shows the game as drawn up to a frame earlier. Before, with screenshots, there were no such reads.
+
+Logs: `/mnt/project-files/anygame/dino-reflex/r3-*`.
