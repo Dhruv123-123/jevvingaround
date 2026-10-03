@@ -16,9 +16,26 @@ def engine():
     return _engine
 
 
+_memo: dict[str, str] = {}
+
+
 def _text(img: np.ndarray, upscale: float = 2.0) -> str:
+    """OCR of one crop. Memoised on the crop's bytes: replaying recorded frames (the learn loop does it for every
+    candidate pack) reads the same crops again and again, and OCR is the slowest read there is."""
     if img.size == 0:
         return ""
+    import hashlib
+    key = hashlib.md5(np.ascontiguousarray(img).tobytes()).hexdigest() + f"/{upscale}"
+    if key in _memo:
+        return _memo[key]
+    out = _text_raw(img, upscale)
+    if len(_memo) > 4096:
+        _memo.clear()
+    _memo[key] = out
+    return out
+
+
+def _text_raw(img: np.ndarray, upscale: float) -> str:
     if upscale != 1:
         img = cv2.resize(img, None, fx=upscale, fy=upscale, interpolation=cv2.INTER_CUBIC)
     res, _ = engine()(img)

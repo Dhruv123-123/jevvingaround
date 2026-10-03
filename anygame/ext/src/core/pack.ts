@@ -122,7 +122,7 @@ export function dumpPack(raw: Record<string, any>): string {
 
 export class PackError extends Error {}
 
-export const READ_KINDS = new Set(["bar", "templates", "ocr", "vocab", "blobs", "color", "locate", "runs", "around", "tetris", "json", "json_grid", "predict", "margin", "go", "slide", "head", "gap"]);
+export const READ_KINDS = new Set(["bar", "templates", "ocr", "vocab", "blobs", "color", "locate", "runs", "around", "tetris", "json", "json_grid", "predict", "margin", "go", "slide", "head", "gap", "count"]);
 export const QUESTION_TYPES = new Set(["noul", "choice", "score"]);
 
 function parseRect(v: any): Rect {
@@ -159,7 +159,7 @@ export function loadPack(text: string, name = "pack"): Pack {
     if (!READ_KINDS.has(r.kind)) throw new PackError(`${name}: read '${rid}': kind must be one of ${[...READ_KINDS].sort().join(", ")}`);
     px(r, `read '${rid}'`);
     if (r.zone && !zones[r.zone]) throw new PackError(`${name}: read '${rid}': unknown zone '${r.zone}'`);
-    if (r.kind === "locate" || r.kind === "runs") {
+    if (r.kind === "locate" || r.kind === "runs" || r.kind === "count") {
       if (!(r.in in reads) || r.symbol === undefined) throw new PackError(`${name}: read '${rid}': ${r.kind} needs 'in' (a grid read id) and 'symbol'`);
     } else if (r.kind === "around") {
       if (!(r.of in reads) || !(r.in in reads)) throw new PackError(`${name}: read '${rid}': around needs 'of' and 'in'`);

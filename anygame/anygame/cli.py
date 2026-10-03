@@ -412,7 +412,10 @@ def cmd_learn(a):
     from .chat import Chat
     from .device import open_device
     from .fallback import VLMFallback
-    from .learn import Bank, Decision, Incident, better_episode, hints_text, improve, incident_of, lessons_of, median_episode, outcome, relevance, relevance_text, audit_questions
+    from .learn import Bank, Decision, Incident, better_episode, hints_text, improve, improve_v2, incident_of, lessons_of, median_episode, outcome, relevance, relevance_text, audit_questions, trial_verdict
+    from .diagnose import diagnose
+    import cv2
+    import numpy as np
     from .loop import Agent
     from .tasks import choose_order, propose_tasks, tasks_text
     from .pack import dump_pack, load_pack, load_pack_text
@@ -439,6 +442,65 @@ def cmd_learn(a):
     if not (bank.path / "pack.v1.yaml").exists():
         bank.save_version(1, dump_pack(pack.raw))         # the base every success is measured against
     set_tasks = int(getattr(a, "set_tasks", 0) or 0)
+    v2 = not getattr(a, "legacy", False)
+    trial_n = max(1, int(getattr(a, "trial", 1) or 1))
+    trial_eps: list = []
+
+    def revise_v2(inc, recs, ep_n, frame_of):
+        """v2: diagnose the whole episode, add the decisions it names to the incident, ask for a rewrite, check it."""
+        dframes = [(d.rec.get("tick"), d.frame) for d in inc.decisions[-2:]]
+        diag = diagnose(chat, pack, recs, dframes, bank.diagnoses, log)
+        have = {d.rec.get("tick") for d in inc.decisions}
+        extra = []
+        for e in diag.get("evidence") or []:
+            r = next((x for x in recs if x.get("tick") == e["tick"] and x.get("choice")), None)
+            f = frame_of(e["tick"]) if r is not None and e["tick"] not in have else None
+            if f is not None:
+                extra.append(Decision(r, f))
+                have.add(e["tick"])
+        if extra:
+            inc.decisions = sorted(inc.decisions[:-1] + extra, key=lambda d: d.rec.get("tick", 0)) + inc.decisions[-1:]
+            log(f"learn: {len(extra)} evidence decision(s) from earlier in the episode added to the incident")
+        earlier = bank.incidents()
+        d = bank.add_incident(inc)
+        log(f"learn: incident saved to {d}")
+        rel = ""
+        try:
+            rel = relevance_text(relevance(recs))
+        except Exception:  # noqa: BLE001
+            pass
+        hints = "\n\n".join(x for x in (hints_text((pack.raw.get("lessons") or []) + pool_hints, read_kinds), tasks_text(pack.tasks, bank.task_results), rel) if x)
+        try:
+            res = improve_v2(chat, pack, inc, diag, recs, bank.diagnoses, log, keep_rejected=bank.path / "rejected", others=earlier, hints=hints, calibrator=bank.calibrator(),
+                             sensor=jev if a.requery else None, holdout=bank.holdout() if a.requery else None, successes=bank.successes())
+        except Exception as e:  # noqa: BLE001
+            res = {"pack": None, "attempts": [{"fix_kinds": [], "outcome": "error", "why": str(e)[:160]}]}
+            log(f"learn: {str(e)[:140]}")
+        tried = [{"fix_kinds": t.get("fix_kinds"), "fix_kind": "+".join(t.get("fix_kinds") or []) or "none", "outcome": t.get("outcome"), "why": t.get("why")} for t in res.get("attempts") or []]
+        if res.get("pack") is not None and tried:
+            tried[-1]["outcome"], tried[-1]["version"] = "on trial", version + 1
+        bank.add_diagnosis({**{k: diag.get(k) for k in ("cause_id", "category", "cause", "evidence", "first_bad_tick", "fix_kind", "fix", "signature", "repeats")},
+                            "episode": ep_n, "version": version, "tried": tried, "at": time.strftime("%Y-%m-%dT%H:%M:%S")})
+        return res
+
+    def start_trial(res, reason):
+        nonlocal pack, version, incumbent
+        incumbent = (dump_pack(pack.raw), version, reason, len(bank.lessons))
+        version += 1
+        pack = res["pack"]
+        bank.add_revision(version, res.get("features"), res["verdict"]["why"])
+        bank.save_version(version, dump_pack(pack.raw))
+        learned.write_text(dump_pack(pack.raw))
+        log(f"learn: v{version} on trial for {trial_n} episode(s): {res['verdict']['why']}")
+
+    if v2 and getattr(a, "revise_first", False) and bank.incidents():
+        # start from what the bank already holds: diagnose its newest loss before playing
+        inc0 = bank.incidents()[-1]
+        recs0 = bank.episode_records(inc0)
+        log(f"learn: revising from the banked loss at tick {inc0.tick} ({len(recs0)} records) before the first episode")
+        res0 = revise_v2(inc0, recs0, 0, lambda t: None)
+        if res0.get("pack") is not None:
+            start_trial(res0, inc0.reason)
     try:
         import itertools
         first = len(bank.episodes) + 1
@@ -447,6 +509,7 @@ def cmd_learn(a):
             agent.fallback, agent.goal = fallback, a.goal or ""
             agent.stall_ticks = 40          # a game that ended without the pack noticing ends the episode too
             recs, decisions, sample, seen = [], [], [], [0]
+            ep_frames: dict = {}              # tick → PNG of every decision (the newest 300), for evidence the diagnosis names
             rng = random.Random(n)
             # ---- tasks: the setter proposes new ones from the current frame, the weakest categories first
             if set_tasks and (n == first or n % 2 == 1):
@@ -483,6 +546,12 @@ def cmd_learn(a):
                     if len(kept_frames) > 24:
                         del kept_frames[1:-1:2]          # thin the middle, keep the ends
                 if rec.get("choice") and rec.get("choice") != "fallback":
+                    if v2:
+                        ok_, buf_ = cv2.imencode(".png", frame)
+                        if ok_:
+                            ep_frames[rec.get("tick")] = buf_.tobytes()
+                            if len(ep_frames) > 300:
+                                del ep_frames[next(iter(ep_frames))]
                     d = Decision(rec, frame.copy(), getattr(agent, "last_state", None))
                     decisions.append(d)
                     del decisions[:-12]
@@ -522,7 +591,23 @@ def cmd_learn(a):
                     ep["score"] = rating["completion"]
                 log(f"rater: completion {rating.get('completion')}, directedness {rating.get('directedness')}: {rating.get('note')}")
             log(f"episode {n}: {last.get('action')}{' · ' + str(last.get('reason')) if last.get('reason') else ''} after {agent.tick} ticks, ${agent.total_cost:.4f}" + (f", score {ep['score']}" if ep["score"] is not None else "") + (f", tasks {ep['tasks_done']} done" if ep.get("tasks_done") else ""))
-            if incumbent is not None:
+            if incumbent is not None and v2:
+                trial_eps.append(ep)
+                if len(trial_eps) >= trial_n:
+                    keep, why = trial_verdict(trial_eps, bank.of_version(incumbent[1]))
+                    if not keep:
+                        log(f"learn: v{version} played worse than v{incumbent[1]} ({why}); reverting")
+                        bank.record_trial(version, False)
+                        bank.label_diagnosis(version, "reverted", why)
+                        pack, version = load_pack_text(incumbent[0], pack.name), incumbent[1]
+                        ep["version"] = version
+                    else:
+                        log(f"learn: v{version} stays ({why})")
+                        bank.record_trial(version, True, kept_pack=pack, before=load_pack_text(incumbent[0], pack.name), reason=incumbent[2])
+                        bank.label_diagnosis(version, "kept", why)
+                        learned.write_text(dump_pack(pack.raw))
+                    incumbent, trial_eps = None, []
+            elif incumbent is not None:
                 ref = median_episode(bank.of_version(incumbent[1]))
                 if ref and better_episode(ep, ref) and not better_episode(ref, ep):
                     log(f"learn: v{version} played worse than v{incumbent[1]} ({ep['ticks']} vs {ref['ticks']} ticks); reverting")
@@ -553,7 +638,12 @@ def cmd_learn(a):
             if decisions:
                 edge = decisions[0].rec.get("tick", 0)       # the oldest tick still in the fatal window
                 bank.add_holdout([d for d in sample if d.rec.get("tick", 0) < edge])
-            if ep["lost"] and decisions:
+            if ep["lost"] and decisions and v2 and incumbent is None:
+                inc = incident_of(decisions, ep["reason"], agent.tick)
+                res = revise_v2(inc, recs, n, lambda t: cv2.imdecode(np.frombuffer(ep_frames[t], np.uint8), cv2.IMREAD_COLOR) if t in ep_frames else None)
+                if res.get("pack") is not None:
+                    start_trial(res, ep["reason"])
+            elif ep["lost"] and decisions and not v2:
                 inc = incident_of(decisions, ep["reason"], agent.tick)
                 earlier = bank.incidents()
                 d = bank.add_incident(inc)
@@ -834,7 +924,10 @@ def main(argv=None):
     ln.add_argument("--bank", default=None, help="where episodes and incidents go (default <pack>/bank)"); ln.add_argument("--out", default=None, help="the learned pack (default <pack>/pack.learned.yaml)")
     ln.add_argument("--set-tasks", type=int, default=0, metavar="N", help="let the chat model set up to N new practice tasks (verified from the reads) every other episode");
     ln.add_argument("--rate", action="store_true", help="rate every episode 0..100 for completion and directedness with the chat model (the score where the pack has none)");
-    ln.add_argument("--fresh", action="store_true", help="ignore an existing learned pack"); ln.add_argument("--no-requery", dest="requery", action="store_false", help="do not re-ask the decider on banked states when judging a revision"); ln.set_defaults(fn=cmd_learn, requery=True)
+    ln.add_argument("--fresh", action="store_true", help="ignore an existing learned pack");
+    ln.add_argument("--legacy", action="store_true", help="the first loop: no diagnosis, rewrites judged on the last decision by replay alone")
+    ln.add_argument("--trial", type=int, default=1, metavar="N", help="episodes a rewrite plays on trial before it is kept or reverted (v2)")
+    ln.add_argument("--revise-first", action="store_true", help="before playing, diagnose and revise from the newest loss already in the bank (v2)"); ln.add_argument("--no-requery", dest="requery", action="store_false", help="do not re-ask the decider on banked states when judging a revision"); ln.set_defaults(fn=cmd_learn, requery=True)
     su = sub.add_parser("suite", help="the evaluation suite: packs with tasks over seeds; per task done within its limit and at all, per category, against a reference")
     su.add_argument("packs", help="comma-separated pack names"); su.add_argument("--device", required=True, help="use {seed} where the seed goes"); su.add_argument("--seeds", default="1,2,3")
     su.add_argument("--sensor", default="jev"); su.add_argument("--max-ticks", type=int, default=300); su.add_argument("--learned", action="store_true", help="evaluate pack.learned.yaml instead of the pack as written")

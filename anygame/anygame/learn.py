@@ -69,6 +69,26 @@ def median_episode(eps: list[dict[str, Any]]) -> dict[str, Any] | None:
     return sorted(eps, key=_key)[len(eps) // 2]
 
 
+def _value(e: dict[str, Any]) -> int:
+    return 1 if e.get("won") else -1 if e.get("lost") else 0
+
+
+def trial_verdict(trial: list[dict[str, Any]], incumbent: list[dict[str, Any]]) -> tuple[bool, str]:
+    """Does a rewrite on trial stay? Its episodes against the incumbent's: by mean outcome (won 1, ended 0, lost -1)
+    when either side has a win or a loss, ties broken (and outcome-less games judged) by the median episode order.
+    Kept unless it plays worse."""
+    if not trial:
+        return True, "no trial episodes"
+    if not incumbent:
+        return True, "no incumbent episodes to compare with"
+    mt, mi = sum(map(_value, trial)) / len(trial), sum(map(_value, incumbent)) / len(incumbent)
+    if (any(_value(e) for e in trial) or any(_value(e) for e in incumbent)) and abs(mt - mi) > 1e-9:
+        return mt > mi, f"mean outcome {mt:+.2f} over {len(trial)} vs {mi:+.2f} over {len(incumbent)}"
+    rt, ri = median_episode(trial), median_episode(incumbent)
+    worse = better_episode(rt, ri) and not better_episode(ri, rt)
+    return not worse, f"median episode {rt['ticks']} ticks{' score ' + str(rt.get('score')) if rt.get('score') is not None else ''} vs {ri['ticks']}{' score ' + str(ri.get('score')) if ri.get('score') is not None else ''} (outcome {mt:+.2f} vs {mi:+.2f})"
+
+
 def answers_of(rec: dict[str, Any]) -> dict[str, Any]:
     """Jev's answers, rebuilt from a record: enough for the rules to run again."""
     out: dict[str, Any] = {}
@@ -804,6 +824,8 @@ class Bank:
         self.revisions: list[dict[str, Any]] = [json.loads(l) for l in rv.read_text().splitlines() if l.strip()] if rv.exists() else []
         ls = self.path / "lessons.jsonl"
         self.lessons: list[dict[str, Any]] = [json.loads(l) for l in ls.read_text().splitlines() if l.strip()] if ls.exists() else []
+        dg = self.path / "diagnoses.jsonl"
+        self.diagnoses: list[dict[str, Any]] = [json.loads(l) for l in dg.read_text().splitlines() if l.strip()] if dg.exists() else []
         tk = self.path / "tasks.jsonl"
         self.task_results: list[dict[str, Any]] = [json.loads(l) for l in tk.read_text().splitlines() if l.strip()] if tk.exists() else []
 
@@ -827,6 +849,33 @@ class Bank:
             if new:
                 self.lessons.extend(new)
                 self._rewrite("lessons.jsonl", self.lessons)
+
+    def add_diagnosis(self, d: dict[str, Any]) -> None:
+        """A diagnosed loss, with what was tried for it; the next diagnosis is told about it."""
+        self.diagnoses.append(d)
+        self._rewrite("diagnoses.jsonl", self.diagnoses)
+
+    def label_diagnosis(self, version: int, outcome_: str, why: str = "") -> None:
+        """A rewrite's trial verdict, written back onto the attempt that produced it."""
+        for d in reversed(self.diagnoses):
+            for t in d.get("tried") or []:
+                if t.get("version") == version and t.get("outcome") == "on trial":
+                    t["outcome"], t["why"] = outcome_, why[:160]
+                    self._rewrite("diagnoses.jsonl", self.diagnoses)
+                    return
+
+    def episode_records(self, inc: Incident) -> list[dict[str, Any]]:
+        """The whole episode an incident was cut from, from the episode logs the learn command writes (matched on the
+        fatal decision's frame time); the incident's own decisions when no log has it."""
+        last = inc.decisions[-1].rec if inc.decisions else {}
+        for f in sorted(self.path.glob("episode-*.jsonl"), key=lambda p: -p.stat().st_mtime):
+            try:
+                recs = [json.loads(l) for l in f.read_text().splitlines() if l.strip()]
+            except (OSError, json.JSONDecodeError):
+                continue
+            if any(r.get("tick") == last.get("tick") and r.get("t") == last.get("t") for r in recs):
+                return recs
+        return [d.rec for d in inc.decisions]
 
     def calibrator(self) -> "Calibrator":
         return Calibrator(self.revisions)
@@ -908,3 +957,376 @@ class Bank:
 
     def of_version(self, v: int) -> list[dict[str, Any]]:
         return [e for e in self.episodes if e.get("version") == v]
+
+
+# ---------------------------------------------------------------------------------------------------------------- v2
+# The loop as the hand-made fixes needed it: diagnose the whole episode first, let a rewrite add reads, gates and
+# compiler features (not only rules), check a new read on the frames already recorded, and judge the rewrite at the
+# ticks the diagnosis names, by replay where replay can see the change and by re-asking the decider where it cannot.
+
+FEATURES_HINT = (
+    "Beyond rules, a rewrite may change how the loop around the decider works. All of these exist; use the one the diagnosis calls for:\n"
+    "- count: { kind: count, in: <grid read id>, symbol: \"<char>\", minus: \"<char>\" } → an integer: cells holding symbol, less cells holding minus. "
+    "In a game whose marks alternate and where we move first, `{ kind: count, in: cells, symbol: X, minus: O }` is 0 exactly when it is our turn.\n"
+    "- act_when: one condition or a LIST of conditions that must all hold; the agent waits (no decision, no action) while one fails. "
+    "A turn gate goes here, next to any menu check: act_when: [ { read: mode, equals: \"1P\" }, { read: turn, equals: 0 } ].\n"
+    "- settle: screen_change waits for the screen to change after an action; settle_ticks: N caps that wait. tick_hz: decisions per second.\n"
+    "- reflex: { read, equals|in|not|gte|lte } (or a list): when it holds the rules act on the decider's last answers without waiting for a new one "
+    "(a move that must land before the decider can answer). A rule may carry unless: { read, … } (or a list): it does not apply when one holds.\n"
+    "- tetris read options: lookahead: true ranks each landing by the best result after the preview piece too; top_k: N landings offered.\n"
+    "- go read options: playouts: N random playouts per candidate (win rate and margin on each), playouts_top: M, playouts_top_n: K.\n"
+    "- slide read (2048) option depth: N; a question may take criteria_from: <read> to offer that read's ranked list as its options.\n"
+    "- the play paragraph and the questions: what the decider is told. If the compiler ranks the options, the paragraph must not tell "
+    "the decider to prefer something the ranking does not score.")
+
+REVISION_RULES_V2 = (
+    "Revise the pack so the DIAGNOSED cause cannot recur, without a model being trained. Fix the cause the diagnosis names, "
+    "with the kind of change that addresses it: a turn or timing fault needs a read and a gate (act_when) or a timing setting, "
+    "not a strategy rule; an instruction that contradicts the ranking needs the paragraph or question rewritten; a missing "
+    "compiler feature needs that option turned on; a wrong read needs the read fixed. Keep everything that is not part of the "
+    "fix as it is. Do not remove or re-colour existing options, do not change zones, never remove a rule that fired correctly, "
+    "and every rule and gate must only name reads that exist. A rule must generalise: never test the exact cell of a located read. "
+    "The change will be checked on the recorded frames: at the evidence ticks the pack must now act differently (a rule "
+    "excludes the move, the gate holds the agent back, the ranking changes, or the decider re-asked under the new paragraph "
+    "answers differently), the other recorded decisions must stay allowed, and every new read must parse on every recorded "
+    "frame. Then it plays a real game and stays only if it plays no worse. Return the whole pack.yaml in one fenced yaml block.")
+
+
+def _gate_ok(pack: Pack, values: dict[str, Any]) -> bool:
+    from .loop import Agent
+    g = pack.raw.get("act_when")
+    return not g or all(Agent._cond(c, values) for c in (g if isinstance(g, list) else [g]))
+
+
+def _sigs(pack: Pack, ag, answers: dict[str, Any], values: dict[str, Any]) -> tuple[str, str]:
+    """A decision as (label, resolved): the action and its parameter choices after the rules, a choice the questions
+    no longer offer marked blocked; resolved also says what each label means on this frame (landing `a` = `rot0 col3`)."""
+    from .diagnose import resolve
+    act = (answers.get("action") or {}).get("choice") or "wait"
+    offered = ag.questions(values)
+    lab, res = [act], [act]
+    for k in sorted(answers):
+        if "__" not in k or not k.startswith(f"{act}__"):
+            continue
+        c = (answers[k] or {}).get("choice")
+        crit = (offered.get(k) or {}).get("criteria")
+        c = c if crit is None or c in crit else "!blocked"
+        lab.append(f"{k}={c}")
+        res.append(f"{k}={resolve(pack, values, k, c) if c != '!blocked' else c}")
+    return " ".join(lab), " ".join(res)
+
+
+def replay2(pack: Pack, decisions: list[Decision]) -> dict[str, list]:
+    """Push recorded decisions through a pack: the typed frame, whether its gate lets the agent act, the support, and
+    the decision after its rules, as labels and as what the labels mean on each frame."""
+    from .loop import Agent
+    from .device.base import Device
+
+    class _Still(Device):
+        def size(self):
+            return pack.size
+
+    ag = Agent(pack, _Still(), None)
+    out: dict[str, list] = {"values": [], "gated": [], "label": [], "resolved": [], "support": []}
+    try:
+        for d in decisions:
+            v, _, _ = ag.observe(d.frame, pack, want_conf=True, state=d.state)
+            ag.last_values = v
+            a = answers_of(d.rec)
+            ag._apply_rules(a, v)
+            lab, res = _sigs(pack, ag, a, v)
+            out["values"].append(v); out["gated"].append(not _gate_ok(pack, v)); out["label"].append(lab); out["resolved"].append(res)
+            out["support"].append(ag.support(ag.last_conf, v, pack))
+    finally:
+        if ag.pool is not None:
+            ag.pool.shutdown(wait=False)
+    return out
+
+
+def _reask2(sensor, pack: Pack, decisions: list[Decision], log=lambda m: None) -> list[tuple[str, str] | None]:
+    """The decider re-asked under this pack (its typed frame, paragraph and questions) on recorded frames; per decision
+    the (label, resolved) decision after the rules, None where the gate holds it back or the sensor failed."""
+    from .loop import Agent
+    from .device.base import Device
+
+    class _Still(Device):
+        def size(self):
+            return pack.size
+
+    ag = Agent(pack, _Still(), None)
+    out: list[tuple[str, str] | None] = []
+    cost = 0.0
+    try:
+        for k, d in enumerate(decisions):
+            v, _, _ = ag.observe(d.frame, pack, want_conf=True, state=d.state)
+            ag.last_values = v
+            if not _gate_ok(pack, v):
+                out.append(None)
+                continue
+            pv = ag._present(v, pack)
+            st = {"game": pack.name, "tick": d.rec.get("tick", k), "how_to_play": pack.play, "screen": pv,
+                  "recent_actions": [x.rec.get("action") for x in decisions[max(0, k - 6):k]], "last_action_changed_screen": True, "actions_that_did_nothing_since_last_change": []}
+            try:
+                res = sensor.ask(st, ag.questions(v))
+            except Exception as e:  # noqa: BLE001
+                log(f"reask: sensor failed at tick {d.rec.get('tick')}: {str(e)[:80]}")
+                out.append(None)
+                continue
+            a = res["answers"]
+            ag._apply_rules(a, v)
+            out.append(_sigs(pack, ag, a, v))
+            cost += float(res.get("cost_usd") or 0.0)
+    finally:
+        if ag.pool is not None:
+            ag.pool.shutdown(wait=False)
+    log(f"reask: {len(decisions)} recorded decisions re-asked under the candidate, ${cost:.5f}")
+    return out
+
+
+def changed_reads(candidate: Pack, incumbent: Pack) -> list[str]:
+    """Reads the candidate adds or defines differently."""
+    return [rid for rid, r in candidate.reads.items() if json.dumps(r, sort_keys=True, default=str) != json.dumps(incumbent.reads.get(rid), sort_keys=True, default=str)]
+
+
+def read_check(candidate: Pack, incumbent: Pack, decisions: list[Decision], min_ok: float = 0.9) -> dict[str, Any]:
+    """Every new or changed read must parse on the frames already recorded: no error, a value (not null) on at least
+    `min_ok` of them, and, where the read existed before and the definition only changed, the values are reported
+    beside the old ones. A read that is null or throws on recorded frames would gate or rule on nothing."""
+    rids = changed_reads(candidate, incumbent)
+    if not rids or not decisions:
+        return {"ok": True, "reads": {}, "why": "no new reads"}
+    try:
+        r = replay2(candidate, decisions)
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "reads": {}, "why": f"the candidate's reads fail on a recorded frame: {str(e)[:160]}"}
+    rep: dict[str, Any] = {}
+    for rid in rids:
+        vals = [v.get(rid) for v in r["values"]]
+        ok = sum(1 for x in vals if x is not None) / len(vals)
+        rep[rid] = {"non_null": round(ok, 3), "distinct": len({json.dumps(x, sort_keys=True, default=str) for x in vals}), "sample": [x for x in vals[:6]]}
+        if ok < min_ok:
+            return {"ok": False, "reads": rep, "why": f"new read '{rid}' is null on {int((1 - ok) * 100)}% of the {len(vals)} recorded frames"}
+    return {"ok": True, "reads": rep, "why": f"{len(rids)} new or changed read(s) parse on {len(decisions)} recorded frames"}
+
+
+class _Refused(Exception):
+    """A candidate refused before it is checked on the frames."""
+
+
+REPLAY_BLIND_KEYS = ("play", "questions", "tick_hz", "settle", "settle_ticks", "reflex", "ask", "ask_when", "budget_ms", "frames")
+
+
+def blind_changes(candidate: Pack, incumbent: Pack) -> list[str]:
+    """What the candidate changes that replaying recorded answers cannot show: what the decider is told, and timing."""
+    return [k for k in REPLAY_BLIND_KEYS if json.dumps(candidate.raw.get(k), sort_keys=True, default=str) != json.dumps(incumbent.raw.get(k), sort_keys=True, default=str)]
+
+
+def evidence_decisions(inc: Incident, diag: dict[str, Any] | None) -> list[int]:
+    """Indices in the incident of the decisions the diagnosis names (the fatal one always among them)."""
+    want = {int(e["tick"]) for e in (diag or {}).get("evidence") or [] if isinstance(e.get("tick"), (int, float))}
+    if (diag or {}).get("first_bad_tick") is not None:
+        want.add(int(diag["first_bad_tick"]))
+    idx = [k for k, d in enumerate(inc.decisions) if d.rec.get("tick") in want]
+    n = len(inc.decisions) - 1
+    return sorted(set(idx) | {n})
+
+
+def verify_v2(candidate: Pack, incumbent: Pack, inc: Incident, diag: dict[str, Any] | None = None, threshold: float = 0.7, max_overblock: float = 0.34,
+              others: list[Incident] | None = None, successes: list[Incident] | None = None, holdout: list[Decision] | None = None,
+              sensor=None, min_gate_open: float = 0.2, log=lambda m: None) -> dict[str, Any]:
+    """The checks a rewrite passes before it may play: (1) new reads parse on every recorded frame; (2) it reads the
+    incident screens as well as the incumbent; (3) at the evidence ticks the diagnosis names it acts differently: a rule
+    changes the decision, the gate holds the agent back, the ranking changes what a label means, a new read makes the
+    tick visible, or (for what replay cannot show: the paragraph, the questions, timing) the decider re-asked under it
+    answers differently; (4) the ordinary decisions stay allowed, here, in earlier losses and in every banked win or
+    completed task (a tick the new gate merely defers is not a blocked move, provided the gate opens on at least
+    `min_gate_open` of all recorded frames). Returns {ok, why, …}."""
+    if not inc.decisions:
+        return {"ok": False, "why": "no decisions to replay"}
+    every = list(inc.decisions) + [d for o in (others or []) for d in o.decisions] + [d for s in (successes or []) for d in s.decisions] + list(holdout or [])
+    rc = read_check(candidate, incumbent, every)
+    if not rc["ok"]:
+        return {"ok": False, "why": rc["why"], "reads": rc["reads"]}
+    c, i = replay2(candidate, inc.decisions), replay2(incumbent, inc.decisions)
+    worse = next((k for k, s in enumerate(c["support"]) if s < min(threshold, i["support"][k] - 0.05)), None)
+    if worse is not None:
+        return {"ok": False, "why": f"reads the incident screens worse (support {c['support'][worse]:.2f} vs {i['support'][worse]:.2f} at tick {inc.decisions[worse].rec.get('tick')})", "reads": rc["reads"]}
+    # the gate must still open: a gate that never opens "guards" every loss by never playing
+    open_all = replay2(candidate, every)["gated"] if candidate.raw.get("act_when") != incumbent.raw.get("act_when") else []
+    gate_open = (1 - sum(open_all) / len(open_all)) if open_all else 1.0
+    if open_all and gate_open < min_gate_open:
+        return {"ok": False, "why": f"its act_when holds on only {int(gate_open * 100)}% of the {len(open_all)} recorded frames; the agent would hardly play", "reads": rc["reads"]}
+    ev = evidence_decisions(inc, diag)
+    how: dict[int, str] = {}
+    for k in ev:
+        if c["gated"][k] and not i["gated"][k]:
+            how[k] = "the gate holds the agent back"
+        elif c["label"][k] != i["label"][k]:
+            how[k] = f"the rules change it ({i['label'][k]} → {c['label'][k]})"
+        elif c["resolved"][k] != i["resolved"][k]:
+            how[k] = f"the same label means another move now ({i['resolved'][k]} → {c['resolved'][k]})"
+    sep_i = set(separators([i["values"][k] for k in range(len(inc.decisions)) if k not in ev] + [i["values"][ev[-1]]]))
+    visible = [k for k in separators([c["values"][k] for k in range(len(inc.decisions)) if k not in ev] + [c["values"][ev[-1]]]) if k not in sep_i]
+    blind = blind_changes(candidate, incumbent)
+    reasked = None
+    if len(how) * 2 < len(ev) and blind and sensor is not None:
+        # replay cannot see a new paragraph, new questions or timing: ask the decider itself on the evidence frames
+        todo = [k for k in ev if k not in how]
+        ans = _reask2(sensor, candidate, [inc.decisions[k] for k in todo], log)
+        reasked = {}
+        for k, a in zip(todo, ans):
+            if a is None:
+                continue
+            was = i["resolved"][k]
+            reasked[inc.decisions[k].rec.get("tick")] = {"was": was, "now": a[1]}
+            if a[1] != was:
+                how[k] = f"re-asked under the new pack the decider answers {a[1]} (was {was})"
+    acted = len(how) * 2 >= len(ev) or (len(ev) - 1) in how
+    timing_only = blind and set(blind) <= {"tick_hz", "settle", "settle_ticks", "budget_ms", "frames"}
+    if not acted and not visible and not timing_only:
+        return {"ok": False, "why": f"at the {len(ev)} evidence tick(s) ({', '.join(str(inc.decisions[k].rec.get('tick')) for k in ev)}) it acts exactly as before"
+                + (f" (re-asked: {json.dumps(reasked)[:200]})" if reasked else "") + ("" if blind or sensor is not None else "; replay cannot see a paragraph change without a decider to re-ask"),
+                "reads": rc["reads"], "evidence": ev}
+    # ordinary decisions: changed only by blocking (rules or a gate that never reopens), never by a re-ranking
+    deferral_ok = gate_open >= min_gate_open
+
+    def blocked(cand: dict[str, list], inc_: dict[str, list], decs: list[Decision], skip: set[int]) -> tuple[int, int]:
+        n = 0
+        for k in range(len(decs)):
+            if k in skip:
+                continue
+            if cand["gated"][k] and not inc_["gated"][k]:
+                n += 0 if deferral_ok else 1
+            elif cand["label"][k] != inc_["label"][k]:
+                n += 1
+        return n, len(decs) - len(skip)
+
+    changed, total = blocked(c, i, inc.decisions, set(ev))
+    for o in others or []:
+        if o.decisions:
+            a, b = blocked(replay2(candidate, o.decisions), replay2(incumbent, o.decisions), o.decisions, {len(o.decisions) - 1})
+            changed, total = changed + a, total + b
+    broke = 0
+    for s in successes or []:
+        if s.decisions:
+            a, b = blocked(replay2(candidate, s.decisions), replay2(incumbent, s.decisions), s.decisions, set())
+            broke += a; changed, total = changed + a, total + b
+    overblocked = changed / total if total else 0.0
+    if broke:
+        return {"ok": False, "why": f"blocks {broke} of the choices in a span that completed a task or won", "overblocked": overblocked, "reads": rc["reads"], "evidence": ev}
+    if overblocked > max_overblock:
+        return {"ok": False, "why": f"blocks {changed} of {total} ordinary decisions too", "overblocked": overblocked, "reads": rc["reads"], "evidence": ev}
+    why = ("; ".join(f"tick {inc.decisions[k].rec.get('tick')}: {h}" for k, h in sorted(how.items()))
+           or (f"typed frame now separates the evidence ticks: {', '.join(visible[:4])}" if visible else f"a timing change ({', '.join(blind)}); only play can judge it"))
+    return {"ok": True, "why": why, "guarded": bool(how), "distinguished": visible, "overblocked": overblocked, "support": min(c["support"]), "reads": rc["reads"],
+            "evidence": ev, "gate_open": round(gate_open, 3), "blind": blind, "reasked": reasked}
+
+
+def improve_v2(chat, pack: Pack, inc: Incident, diag: dict[str, Any], recs: list[dict[str, Any]], history: list[dict[str, Any]] | None = None, log=lambda m: None,
+               threshold: float | None = None, rounds: int = 2, keep_rejected: Path | None = None, others: list[Incident] | None = None, hints: str = "",
+               calibrator: "Calibrator | None" = None, sensor=None, holdout: list[Decision] | None = None, min_holdout: float = 0.6,
+               successes: list[Incident] | None = None) -> dict[str, Any]:
+    """diagnosis → chat model → candidate → verify_v2 → held-out drift (when a sensor is given) → calibrator, with one
+    repair round. Returns {pack|None, verdict, yaml, features, attempts: [{round, fix_kinds, outcome, why}]}."""
+    from .author import _b64, extract_yaml
+    from .diagnose import diagnosis_text, episode_digest
+    text = (REVISION_RULES_V2 + "\n\n" + diagnosis_text(diag, history) + "\n\n" + PACK_SCHEMA_HINT + "\n" + FEATURES_HINT + ("\n\n" + hints if hints else "")
+            + "\n\n" + episode_digest(pack, recs, max_chars=14000) + "\n\n```yaml\n" + dump_pack(pack.raw) + "\n```")
+    parts: list[dict[str, Any]] = [{"type": "text", "text": text}]
+    n = len(inc.decisions)
+    for k in ([n - 2, n - 1] if n > 1 else [n - 1]):
+        parts.append({"type": "text", "text": f"{'the fatal' if k == n - 1 else 'the previous'} decision's frame (tick {inc.decisions[k].rec.get('tick')}):"})
+        parts.append({"type": "image_url", "image_url": {"url": _b64(inc.decisions[k].frame)}})
+    thr = threshold if threshold is not None else float(pack.raw.get("support_threshold", 0.7))
+    messages: list[dict[str, Any]] = [{"role": "user", "content": parts}]
+    last_yaml, last_verdict, attempts = None, None, []
+    log(f"learn: asking {chat.model} for a rewrite that fixes {diag.get('cause_id')} …")
+    for rnd in range(1, rounds + 1):
+        text_out = chat.complete(messages, max_tokens=12000, temperature=0.2)[0]
+        y = extract_yaml(text_out)
+        problem, cand, v, feats, kinds = None, None, None, None, []
+        if not y:
+            problem = "there was no ```yaml block"
+        else:
+            last_yaml = y
+            try:
+                cand = load_pack_text(y, pack.name)
+                cand.raw["fingerprints"] = {**(pack.raw.get("fingerprints") or {}), **(cand.raw.get("fingerprints") or {})}
+                if "modes" not in cand.raw and pack.raw.get("modes"):
+                    cand.raw["modes"] = pack.raw["modes"]
+                if "tests" not in cand.raw and pack.raw.get("tests"):
+                    cand.raw["tests"] = pack.raw["tests"]
+                cand = load_pack_text(dump_pack(cand.raw), pack.name)
+                kinds = change_kinds(cand, pack)
+                miss = fits_diagnosis(kinds, diag)
+                if miss:
+                    raise _Refused(miss)
+                v = verify_v2(cand, pack, inc, diag, thr, others=others, successes=successes, holdout=holdout, sensor=sensor, log=log)
+                last_verdict = v
+                if not v["ok"]:
+                    problem = f"checking it on the recorded frames: {v['why']}"
+                else:
+                    feats = revision_features(v, cand, pack)
+                    if sensor is not None and holdout:
+                        ho = holdout_check(sensor, cand, holdout, log)
+                        v["holdout"] = {"n": ho["n"], "agreement": ho["agreement"]}
+                        feats["holdout_agreement"] = ho["agreement"]
+                        if ho["n"] and ho["agreement"] < min_holdout:
+                            ex = "; ".join(f"tick {f['tick']}: {f['was']} → {f['now']}" for f in ho["flips"][:3])
+                            problem = f"on {ho['n']} held-out ordinary ticks the decider changes its choice {int((1 - ho['agreement']) * 100)}% of the time under it ({ex}); it drifts everywhere else"
+                    if problem is None and calibrator is not None:
+                        ok, why = calibrator.judge(feats)
+                        v["calibration"] = why
+                        if not ok:
+                            problem = f"revisions shaped like this were reverted on trial before ({why}); change the approach"
+            except _Refused as e:
+                problem = str(e)
+            except Exception as e:  # noqa: BLE001
+                problem = f"it does not load: {str(e)[:200]}"
+        attempts.append({"round": rnd, "fix_kinds": kinds, "outcome": "accepted" if problem is None and cand is not None else "rejected", "why": (v or {}).get("why") if problem is None else problem})
+        if problem is None and cand is not None and v is not None:
+            log(f"learn: accepted (round {rnd}, changes {', '.join(kinds) or 'none'}): {v['why']}" + (f" · holdout agreement {v['holdout']['agreement']:.2f}" if v.get("holdout") else ""))
+            return {"pack": cand, "verdict": v, "yaml": y, "features": feats, "attempts": attempts}
+        log(f"learn: round {rnd} rejected ({', '.join(kinds) or 'no change'}): {problem}")
+        if keep_rejected is not None and y:
+            keep_rejected.mkdir(parents=True, exist_ok=True)
+            (keep_rejected / f"rejected-{time.strftime('%H%M%S')}-{rnd}.yaml").write_text(y)
+        messages = messages + [{"role": "assistant", "content": text_out}, {"role": "user", "content": f"That revision was rejected: {problem}.\n{PACK_SCHEMA_HINT}\n{FEATURES_HINT}\nReturn the whole corrected pack.yaml in one fenced yaml block."}]
+    return {"pack": None, "verdict": last_verdict, "yaml": last_yaml, "features": None, "attempts": attempts}
+
+
+FITS = {"timing": {"gate", "timing", "read"}, "turn_order": {"gate", "timing", "read"}, "perception": {"read"},
+        "instruction": {"paragraph", "question"}, "compiler": {"compiler_option", "read"}}
+
+
+def fits_diagnosis(kinds: list[str], diag: dict[str, Any] | None) -> str:
+    """'' when the rewrite makes a kind of change that can address the diagnosed cause, else why not. A strategy (or
+    unknown) cause takes any change; a turn-order cause is not fixed by a strategy rule, which is what the first loop
+    proposed eight times over."""
+    cat = (diag or {}).get("category")
+    need = FITS.get(str(cat))
+    if not need or set(kinds) & need:
+        return ""
+    return f"the diagnosis is a {cat} fault, which needs a {' or '.join(sorted(need))} change; this rewrite only changes {', '.join(kinds) or 'nothing'}"
+
+
+def change_kinds(candidate: Pack, incumbent: Pack) -> list[str]:
+    """What kind of change a rewrite is, in the diagnosis's terms."""
+    out = []
+    if json.dumps(candidate.rules, sort_keys=True) != json.dumps(incumbent.rules, sort_keys=True):
+        out.append("rule")
+    ch = changed_reads(candidate, incumbent)
+    derived_opts = [r for r in ch if r in incumbent.reads and incumbent.reads[r].get("kind") in ("tetris", "go", "slide", "margin")]
+    if derived_opts:
+        out.append("compiler_option")
+    if set(ch) - set(derived_opts):
+        out.append("read")
+    if json.dumps(candidate.raw.get("act_when"), sort_keys=True) != json.dumps(incumbent.raw.get("act_when"), sort_keys=True):
+        out.append("gate")
+    if candidate.play.strip() != incumbent.play.strip():
+        out.append("paragraph")
+    if json.dumps(candidate.questions, sort_keys=True) != json.dumps(incumbent.questions, sort_keys=True):
+        out.append("question")
+    if any(json.dumps(candidate.raw.get(k), sort_keys=True) != json.dumps(incumbent.raw.get(k), sort_keys=True) for k in ("tick_hz", "settle", "settle_ticks", "reflex", "ask", "ask_when", "budget_ms", "frames")):
+        out.append("timing")
+    return out
