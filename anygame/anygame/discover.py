@@ -19,6 +19,7 @@ from typing import Any
 import numpy as np
 
 LO, HI = 0xC000, 0xE000
+MOVED = 0.2         # a position byte moves on at least this share of its axis's presses (walls and turns take the rest)
 RING = 16           # frames back that a burst is measured against
 BURST_MIN, BURST_X = 150, 2.5   # a burst: at least this many bytes changed over RING frames, and this many times the usual
 WINDOW = 40          # events (rendered frames and presses) around a transition in which a map's bytes change
@@ -41,6 +42,24 @@ def _z(a: np.ndarray) -> bytes:
 def _unz(b: bytes) -> np.ndarray:
     import zlib
     return np.frombuffer(zlib.decompress(b), np.uint8).astype(np.int32)
+
+
+def _split(ns: list[int]) -> float:
+    """Where presses that did little part from presses that did a lot: the best two-group split of the counts'
+    logarithms (Otsu), taken only when the groups are at least three times apart; otherwise everything counts."""
+    v = np.sort(np.log1p(np.asarray([n for n in ns if n > 0], float)))
+    if len(v) < 8:
+        return 1.0
+    best, cut = -1.0, None
+    for i in range(1, len(v)):
+        a, b = v[:i], v[i:]
+        w = len(a) * len(b) * (a.mean() - b.mean()) ** 2
+        if w > best:
+            best, cut = w, i
+    lo, hi = v[cut - 1], v[cut]
+    if np.expm1(v[cut:]).mean() < 3 * np.expm1(v[:cut]).mean():
+        return 1.0
+    return float(np.expm1((lo + hi) / 2))
 
 
 def _wrap(d: np.ndarray) -> np.ndarray:
@@ -102,6 +121,14 @@ class Discoverer:
             self.presses += 1
         if d is None or jump or self.blank:
             return
+        if not full:
+            # against waiting, a press that did little is no evidence either way: a text box ignores the d-pad but a
+            # few bytes (the pad's own state) still differ, while a step rewrites far more (position, sprites, the
+            # screen's tile map). Little is measured against this game's own recent presses
+            n = int((after != before).sum())
+            self._probe_n = (getattr(self, "_probe_n", []) + [n])[-200:]
+            if n < _split(self._probe_n):
+                return
         self._last_ram = after
         d8 = _wrap(after - before)
         b16, a16 = before[:-1] + 256 * before[1:], after[:-1] + 256 * after[1:]
@@ -193,6 +220,17 @@ class Discoverer:
         moved = s["moved"] / s["n"]
         return (s["agree"] / np.maximum(s["moved"], 1)) * (s["still"] / s["n_other"]), moved
 
+    def _walked(self, s: dict) -> bool:
+        """On this visit something followed the d-pad on both axes: the player walked. A menu or a list has a cursor
+        on one axis at most, and a visit spent in one says nothing about the position."""
+        def ok(ax):
+            for w in (1, 2):
+                v = self._score(s[(ax, w)])
+                if v is not None and float((v[0] * (v[1] > MOVED)).max()) >= self.threshold:
+                    return True
+            return False
+        return ok("x") and ok("y")
+
     def _axis(self, ax: str, last: np.ndarray | None = None) -> dict[str, Any] | None:
         """The best position candidate on this axis. A press into a wall moves nothing, so the score is the share of
         presses that moved the byte that moved it the right way, times the share of the other axis's presses that
@@ -203,12 +241,12 @@ class Discoverer:
             sc = self._score(self.st[(ax, w)])
             if sc is None:
                 continue
-            score = sc[0] * (sc[1] > 0.3)
+            score = sc[0] * (sc[1] > MOVED)
             for s in self.segs + [self.seg]:
                 v = self._score(s[(ax, w)])
-                if v is None or float((v[0] * (v[1] > 0.3)).max()) < self.threshold:
+                if v is None or not self._walked(s):
                     continue                      # a visit spent against walls or in menus says nothing
-                score = np.minimum(score, v[0] * (v[1] > 0.3))
+                score = np.minimum(score, v[0] * (v[1] > MOVED))
             top = float(score.max())
             if top < self.threshold:
                 continue
@@ -224,6 +262,10 @@ class Discoverer:
             score, w, i = c
             hi_small = w == 2 and last is not None and i + 1 < N and last[i + 1] <= 3
             return (hi_small, w == 1, score, -i)
+        cur = self.found.get(ax)
+        for c in cands:                           # the one found already stays while it is as good: no flip-flopping
+            if cur and LO + c[2] == cur["addr"] and (c[1] == 1) == (cur["type"] == "u8"):
+                return {**cur, "score": round(c[0], 3)}
         score, w, i = max(cands, key=pref)
         return {"addr": LO + i, "type": "u8" if w == 1 else "u16le", "score": round(score, 3)}
 
@@ -232,14 +274,11 @@ class Discoverer:
         f = self.found.get(ax)
         if not f or self.seg[(ax, 1)]["n"] < 3 * self.min_presses:      # ten presses on arrival prove nothing
             return False
-        w = 1 if f["type"] == "u8" else 2
-        for ww in (1, 2):
-            v = self._score(self.seg[(ax, ww)])
-            if v is not None and float((v[0] * (v[1] > 0.3)).max()) >= self.threshold:
-                mine = self._score(self.seg[(ax, w)])
-                i = f["addr"] - LO
-                return mine is not None and (mine[1][i] < 0.1 or mine[0][i] < 0.5)
-        return False
+        if not self._walked(self.seg):
+            return False
+        mine = self._score(self.seg[(ax, 1 if f["type"] == "u8" else 2)])
+        i = f["addr"] - LO
+        return mine is not None and (mine[1][i] < 0.1 or mine[0][i] < 0.5)
 
     def _update(self) -> None:
         for ax in "xy":
