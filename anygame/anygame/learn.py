@@ -1406,6 +1406,6 @@ PLAY_ONLY_KINDS = {"timing", "reflex"}
 
 
 def timing_only(kinds: list[str]) -> bool:
-    """A change only play can judge (how fast or on what the loop acts, not what it decides): it gets a longer trial,
-    judged on the game's own score."""
-    return bool(kinds) and set(kinds) <= PLAY_ONLY_KINDS
+    """A change only play can judge (it touches how fast or on what the loop acts, alone or beside other changes): it
+    gets a longer trial, judged on the game's own score."""
+    return bool(set(kinds) & PLAY_ONLY_KINDS)

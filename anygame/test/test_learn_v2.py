@@ -238,6 +238,7 @@ def test_a_late_move_fault_needs_a_reflex_not_a_slower_loop():
     assert kinds == ["timing"] and fits_diagnosis(kinds, d).startswith("the diagnosis is a late_move fault, which needs a reflex change")
     kinds = change_kinds(full(), no_reflex())
     assert kinds == ["reflex"] and fits_diagnosis(kinds, d) == "" and timing_only(kinds)
+    assert timing_only(["rule", "reflex"]) and not timing_only(["rule", "gate"])
     assert fits_diagnosis(["gate", "read"], {"fault": "out_of_turn"}) == "" and fits_diagnosis(["rule"], {"fault": "short_sighted"})
     assert parse_diagnosis('{"cause": "x", "fault": "nonsense"}')["fault"] is None
 
