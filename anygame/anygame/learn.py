@@ -1189,7 +1189,9 @@ def verify_v2(candidate: Pack, incumbent: Pack, inc: Incident, diag: dict[str, A
         elif c["resolved"][k] != i["resolved"][k]:
             how[k] = f"the same label means another move now ({i['resolved'][k]} → {c['resolved'][k]})"
     sep_i = set(separators([i["values"][k] for k in range(len(inc.decisions)) if k not in ev] + [i["values"][ev[-1]]]))
-    visible = [k for k in separators([c["values"][k] for k in range(len(inc.decisions)) if k not in ev] + [c["values"][ev[-1]]]) if k not in sep_i]
+    cosmetic = {rid for rid in changed_reads(candidate, incumbent) if rid in incumbent.reads
+                and {k: v for k, v in candidate.reads[rid].items() if k != "as"} == {k: v for k, v in incumbent.reads[rid].items() if k != "as"}}
+    visible = [k for k in separators([c["values"][k] for k in range(len(inc.decisions)) if k not in ev] + [c["values"][ev[-1]]]) if k not in sep_i and k.split(".")[0] not in cosmetic]
     blind = blind_changes(candidate, incumbent)
     reasked = None
     unjudged: set[int] = set()

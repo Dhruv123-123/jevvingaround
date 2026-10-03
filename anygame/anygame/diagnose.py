@@ -184,7 +184,9 @@ DIAGNOSE_RULES = (
     "frames? (3) instruction: does the play paragraph or a question tell the agent something that contradicts the "
     "compiler's ranking or the rules (look at how often it took the first-ranked option and why it skipped it)? "
     "(4) compiler: would a feature the pack does not use (lookahead, a count read, a reflex, playouts) have changed the "
-    "outcome? (5) strategy: was a decision bad given correct reads? Name ONE cause, with the ticks that show it.\n"
+    "outcome? (5) strategy: was a decision bad given correct reads? Name ONE cause, with the ticks that show it. "
+    "If the loss repeats and the cause you would name was already diagnosed and its fixes were rejected, or kept without "
+    "the score improving, that cause is not what loses the game: name the next one on the list instead.\n"
     "Answer with one JSON object, no prose around it:\n"
     '{"cause_id": "<short-kebab-id, reuse an earlier one if this is the same cause>", "category": "<' + "|".join(CATEGORIES) + '>", '
     '"cause": "<one sentence>", "evidence": [{"tick": <n>, "what": "<what the record shows at that tick>"}], '

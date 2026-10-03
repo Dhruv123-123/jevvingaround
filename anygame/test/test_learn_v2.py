@@ -203,3 +203,12 @@ def test_reads_that_track_the_game_across_frames_come_from_the_record_in_replay(
     assert replay2(gated, inc.decisions, {"phase"})["gated"] == [False, False, True]
     v = verify_v2(gated, base, inc)
     assert v["ok"] and "gate holds" in v["why"]
+
+
+def test_showing_a_read_another_way_does_not_count_as_making_the_fatal_tick_visible():
+    inc = snake_incident()
+    base = stripped()
+    raw = yaml.safe_load(dump_pack(base.raw)); raw["read"]["cells"].pop("as", None)
+    plain = load_pack_text(dump_pack(raw), base.name)
+    v = verify_v2(base, plain, inc)          # the only change: cells shown `as: matrix`
+    assert not v["ok"] and "acts exactly as before" in v["why"], v
