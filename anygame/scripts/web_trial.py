@@ -201,11 +201,12 @@ def main():
     ap.add_argument("--sensor", default="jev")
     ap.add_argument("--ticks", type=int, default=None)
     ap.add_argument("--out", default=None)
+    ap.add_argument("--pack", default=None, help="another pack directory for the game (a variant to compare)")
     a = ap.parse_args()
     g = GAMES[a.game]
     out = Path(a.out or HERE / "trial" / a.game)
     out.mkdir(parents=True, exist_ok=True)
-    pack = load_pack(HERE / "packs" / g["pack"])
+    pack = load_pack(a.pack or HERE / "packs" / g["pack"])
     dev = TruthDevice(open_device("web://" + g["url"], pack.size), g["js"])
     if g.get("start"):
         g["start"](dev)

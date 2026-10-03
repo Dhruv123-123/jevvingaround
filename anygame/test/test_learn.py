@@ -750,11 +750,11 @@ def test_dino_jumps_on_the_frame_and_asks_jev_beside_the_loop():
 
     class Road:
         def __init__(self, xs):
-            self.xs, self.i, self.keys = xs, -1, []
+            self.xs, self.i, self.keys, self.pause = xs, -1, [], 0.05
         def size(self):
             return (540, 560)
         def frame(self):
-            time.sleep(0.05)
+            time.sleep(self.pause)
             self.i = min(self.i + 1, len(self.xs) - 1)
             f = np.full((560, 540, 3), 247, np.uint8)
             f[232:268, 56:92] = 83                                  # the dino, standing
@@ -792,3 +792,18 @@ def test_dino_jumps_on_the_frame_and_asks_jev_beside_the_loop():
     jumped = recs[-1]
     assert name == "Space" and hold == 250 and block is False and jumped["choice"] == "jump"      # duck ranked first, but a cactus cannot be ducked
     assert jumped["screen"]["next"]["ttc_ms"] <= 205 and all(r["choice"] == "keep" for r in recs[:-1] if "choice" in r)
+    # the next frame still shows the dino on the ground (a real page takes a frame or two to show the jump): the
+    # jump is not pressed again so soon (again_ms), which would let go of Space and cut the first jump short
+    n, dev.pause = len(dev.keys), 0
+    again = ag.step()
+    assert len(dev.keys) == n and again["choice"] == "jump" and again["action"].startswith("wait: jump pressed")
+
+
+def test_frames_setting_is_checked(tmp_path):
+    from anygame.pack import PackError
+    raw = yaml.safe_load(open(os.path.join(ROOT, "packs", "web-dino", "pack.yaml")))
+    assert raw["frames"] == "stream"
+    raw["frames"], raw["tests"] = "video", []
+    (tmp_path / "pack.yaml").write_text(yaml.safe_dump(raw))
+    with pytest.raises(PackError, match="frames must be"):
+        load_pack(str(tmp_path))
