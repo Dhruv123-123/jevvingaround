@@ -144,3 +144,35 @@ and the low jump now that frames come every 34 ms.
 screencast frame shows the game as drawn up to a frame earlier. Before, with screenshots, there were no such reads.
 
 Logs: `/mnt/project-files/anygame/dino-reflex/r3-*`.
+
+## 15 or 30 frames a second (2026-10-03)
+
+Jev's median fell from 1277 (15 fps, older pack) to 770 (30 fps) while the stand-in rose. So the frame rate was
+compared directly: the same pack at 15 and at 30 fps, 16 stand-in games each, run back to back. Then a second
+8-game Jev round at 30 fps.
+
+| | games | median | mean | range |
+|---|---|---|---|---|
+| Stand-in, 15 fps | 16 | 311 | 455 | 148–1153 |
+| Stand-in, 30 fps | 16 | **415** | 495 | 174–1120 |
+| Real Jev, 30 fps, second round | 8 | **815** | 843 | 252–1492 ($0.10) |
+| Real Jev, 30 fps, both rounds | 16 | 770 | – | 220–1781 |
+
+- **30 fps is ahead in both pairs** (912 vs 606 earlier, 415 vs 311 here). A 30 fps game beats a 15 fps game 61% of
+  the time. That is not decisive at 16 games (p ≈ 0.15), but nothing points the other way. Both batches here scored
+  lower than earlier ones on the same packs: the level drifts from batch to batch, which is why the two frame rates
+  were run back to back.
+- **Jev at 30 fps is steady**: 770 and 815 in two rounds, about twice the same-day stand-in. The 1277 came from one
+  8-game round on an older pack (two games past 3,400, three under 360). Nothing found in the logs costs Jev
+  at 30 fps:
+  - Jev's answer for an obstacle is in before the jump more often: 86% of jumps vs 64% at 15 fps.
+  - The 150 ms jump lockout did cost one death. A jump pressed while the dino was 1 px above the ground was ignored
+    by the game, and the lockout held back the retry. It is now 60 ms, which still stops the double press one frame
+    later, and no death came within 3 ticks of a lockout in the second round.
+  - Lagging reads: 1.7% of road reads are one game frame (~9 px) behind the page. They are spread evenly and are
+    not behind any death.
+- Deaths in Jev's second round: 5 close pairs (the obstacle arrived ~600 ms after the last jump, one of them a bird), 2 birds ducked too late, and 1 jump too early.
+
+**The shipped setting is 30 fps** (`tick_hz: 30`, `frames: stream`, jump `again_ms: 60`).
+
+Logs: `/mnt/project-files/anygame/dino-reflex/r4-*`.
