@@ -1,10 +1,19 @@
 """A stand-in for a CLM server, speaking the /v1/systemone protocol (the same one Jev and clm-serve speak): noul,
 choice and score questions, probabilities over the criteria, usage and the X-CLM-Latency-Ms header. It ranks by a
 fixed heuristic (the first criterion that appears in the state text, else the first), so tests can prove the client,
-the sensor wiring and the loop without a GPU. Not a model. `python test/clm_stub.py [port]`."""
+the sensor wiring and the loop without a GPU. Not a model. CLM_STUB_RANK=<dotted path into the state, e.g. screen.go.best>
+makes it take the first offered criterion in that ranked list instead (a decider that always takes the compiler's top
+pick: a grid's options are offered in board order, so "first criterion" alone would mean "top-left"). `python test/clm_stub.py [port]`."""
 import json
 import os, sys, time
 from http.server import BaseHTTPRequestHandler, HTTPServer
+
+
+def _ranked(state):
+    v = state
+    for k in RANK.split(".") if RANK else []:
+        v = v.get(k) if isinstance(v, dict) else None
+    return v if isinstance(v, list) else []
 
 
 def answer(state, questions):
@@ -17,6 +26,8 @@ def answer(state, questions):
         elif t == "choice":
             opts = list((q.get("criteria") or {}).keys()) or ["none"]
             hit = next((o for o in opts if o.lower() in text and o != "none"), opts[0])
+            ranked = _ranked(state)
+            hit = next((str(x) for x in ranked if str(x) in opts), hit)
             n = len(opts)
             probs = {o: (0.7 if o == hit else 0.3 / max(1, n - 1)) for o in opts}
             out[qid] = {"type": "choice", "choice": hit, "confidence": 0.7 - 0.3 / max(1, n - 1), "probabilities": probs}
@@ -53,6 +64,7 @@ class H(BaseHTTPRequestHandler):
         self.send_response(200); self.send_header("content-type", "application/json"); self.send_header("X-CLM-Latency-Ms", f"{ms:.1f}"); self.end_headers(); self.wfile.write(body)
 
 
+RANK = os.environ.get("CLM_STUB_RANK", "")
 DELAY_S = float(os.environ.get("CLM_STUB_DELAY_MS", "0")) / 1000
 
 
