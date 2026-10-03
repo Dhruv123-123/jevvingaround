@@ -183,13 +183,13 @@ class PyBoyDevice(Device):
     def use_pack(self, raw: dict[str, Any], pack_dir: str | None = None) -> None:
         """The pack's `ram:` map (and an optional `emulator:` block: clock, step, hold, after) configures the device.
         `discover: true` finds the position and map bytes while playing (anygame/discover.py); what it finds is kept
-        in `discovered.yaml` beside the pack (or `discover_file`) and a later run starts from it."""
+        in `discovered-<rom>.yaml` beside the pack (one per ROM, so one pack can serve many games) (or `discover_file`) and a later run starts from it."""
         self.ram = dict(raw.get("ram") or {})
         if raw.get("discover"):
             import yaml
             from ..discover import Discoverer
             self.discoverer = Discoverer()
-            self.discover_file = raw.get("discover_file") or (os.path.join(pack_dir, "discovered.yaml") if pack_dir else None)
+            self.discover_file = raw.get("discover_file") or (os.path.join(pack_dir, f"discovered-{os.path.splitext(os.path.basename(self.rom))[0]}.yaml") if pack_dir else None)
             if self.discover_file and os.path.exists(self.discover_file) and not os.environ.get("ANYGAME_REDISCOVER"):
                 self.discoverer.load(yaml.safe_load(open(self.discover_file)) or {})
         emu = raw.get("emulator") or {}
