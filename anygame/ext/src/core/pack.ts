@@ -210,6 +210,7 @@ export function loadPack(text: string, name = "pack"): Pack {
     if (!condOk(c)) throw new PackError(`${name}: reflex needs {read, equals|in|not|gte|lte} (or a list of them): when it holds, the rules act on the decider's last answers without asking it`);
   }
   if (raw.ask !== undefined && raw.ask !== null && raw.ask !== "async") throw new PackError(`${name}: ask: async is the only option (the decider runs beside the loop, which acts on its last answers meanwhile)`);
+  if (![undefined, null, "shot", "stream"].includes(raw.frames)) throw new PackError(`${name}: frames must be 'shot' (a screenshot per frame, the default) or 'stream' (the browser's screencast: faster frames, Chromium only)`);
   for (const c of Array.isArray(raw.ask_when) ? raw.ask_when : raw.ask_when ? [raw.ask_when] : []) {
     if (!condOk(c)) throw new PackError(`${name}: ask_when needs {read, equals|in|not|gte|lte} (or a list of them): with ask: async, the decider is asked only when it holds`);
   }

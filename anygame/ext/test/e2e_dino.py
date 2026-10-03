@@ -102,7 +102,7 @@ def summarize(n, recs, end, region, secs):
     costs = [r["total_cost_usd"] for r in recs if r.get("total_cost_usd") is not None]
     jumps = [r for r in recs if r.get("choice") and r.get("choice") not in ("keep", "wait")]
     return {"game": n, "score": end and end["score"], "crashed": bool(end), "speed": end and end["speed"], "seconds": round(secs, 1),
-            "ticks": len(recs), "fps": round(len(recs) / secs, 1) if secs else None, "end": last.get("action"), "reason": last.get("reason"),
+            "ticks": len(recs), "fps": round((len(recs) - 1) / ((recs[-1]["t_ms"] - recs[0]["t_ms"]) / 1000), 1) if len(recs) > 1 and recs[-1].get("t_ms") else None, "end": last.get("action"), "reason": last.get("reason"),
             "decider_calls": sum(1 for r in recs if r.get("jev_ms") is not None and not r.get("skipped")),
             "asked_async": sum(1 for r in recs if r.get("asked") == "async"),
             "reflex": sum(1 for r in recs if r.get("skipped") == "reflex"),

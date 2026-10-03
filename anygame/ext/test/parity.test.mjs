@@ -300,3 +300,24 @@ test("the loader checks ask and ask_when", () => {
   assert.throws(() => loadPack(dumpPack({ ...raw, ask: "sometimes" }), "d"), /ask: async is the only option/);
   assert.throws(() => loadPack(dumpPack({ ...raw, ask_when: [{ read: "next.px" }] }), "d"), /ask_when needs/);
 });
+
+test("the dino pack streams its frames and a jump is not pressed again within again_ms", async () => {
+  const pack = packFromText(BUNDLED_PACKS["web-dino"], "web-dino");
+  assert.equal(pack.raw.frames, "stream");
+  const raw = yaml.load(dumpPack(pack.raw));
+  assert.throws(() => loadPack(dumpPack({ ...raw, frames: "video" }), "d"), /frames must be 'shot'/);
+  const keys = [];
+  let streamed = 0;
+  const dev = { size: () => pack.size, frame: async () => ({ width: 1, height: 1, data: new Uint8ClampedArray(4) }), tap: async () => {}, swipe: async () => {},
+    key: async (...a) => { keys.push(a); }, stream: async () => { streamed++; }, close: async () => {} };
+  const ag = new Agent(pack, dev, null, 1);
+  const jump = pack.actions.find((a) => a.id === "jump");
+  assert.match(await ag.act(jump, {}), /^key Space down/);
+  assert.match(await ag.act(jump, {}), /^wait: jump pressed \d+ ms ago/);
+  assert.equal(keys.length, 1);
+  await new Promise((r) => setTimeout(r, Number(jump.params.again_ms) + 5));
+  assert.match(await ag.act(jump, {}), /^key Space down/);
+  ag.step = async () => ({ action: "stop" });
+  await ag.run();
+  assert.equal(streamed, 1);
+});

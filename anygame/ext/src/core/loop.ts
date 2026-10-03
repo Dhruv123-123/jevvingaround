@@ -22,6 +22,7 @@ export interface Device {
   // that cannot do that holds it in place); opts.extend: the same key pressed again while still held keeps holding
   key(name: string, holdMs?: number, opts?: { block?: boolean; extend?: boolean }): Promise<void>;
   mouseMove?(dx: number, dy: number): Promise<void>;     // relative motion (a camera, a cursor)
+  stream?(on?: boolean): Promise<void>;                  // frames from the browser's screencast (a pack's `frames: stream`)
   close(): Promise<void>;
 }
 
@@ -30,7 +31,7 @@ export interface Answer { type: string; choice?: string; probabilities?: Record<
 export interface SensorResult { answers: Record<string, Answer>; latency_ms: number; input_tokens: number; cost_usd: number; model?: string }
 export interface Sensor { ask(state: any, questions: Record<string, any>): Promise<SensorResult>; model?: string }
 
-export interface Rec { tick: number; hash: string; perception_ms: number; timings_ms: Record<string, number>; screen: Values; action: string; reason?: string; choice?: string; rules?: string[]; action_probs?: Record<string, number>; nouls?: Record<string, number>; choices?: Record<string, string | undefined>; jev_ms?: number; tokens?: number; cost_usd?: number; total_cost_usd?: number; sensor?: string; acted_after_ms?: number;
+export interface Rec { tick: number; t_ms?: number; hash: string; perception_ms: number; timings_ms: Record<string, number>; screen: Values; action: string; reason?: string; choice?: string; rules?: string[]; action_probs?: Record<string, number>; nouls?: Record<string, number>; choices?: Record<string, string | undefined>; jev_ms?: number; tokens?: number; cost_usd?: number; total_cost_usd?: number; sensor?: string; acted_after_ms?: number;
   mode?: string; support?: number; known?: string | null; fallback?: string; skipped?: string; reread?: number; implausible?: string[]; asked?: string; sensor_error?: string }
 
 export function stableHash(v: any): string {
@@ -87,6 +88,7 @@ export class Agent {
   skippedBudget = 0;       // over the run
   skippedReflex = 0;
   inflight: Inflight | null = null;    // ask: async — the decider call running beside the loop, if any
+  pressedAt: Record<string, number> = {};     // action id → when its key last went down (for again_ms)
   askedAsync = 0;          // calls started that way, over the run       // ticks the pack's reflex condition acted on the last answers without the decider
   accepted: Values | null = null;   // the last reading that passed the pack's plausibility checks
   implausibleTicks = 0;    // consecutive ticks whose reads broke a check even after re-reading
@@ -409,6 +411,13 @@ export class Agent {
     const [w, h] = this.device.size();
     const p = a.params;
     if (a.kind === "wait") return "wait";
+    if (a.kind === "key" && p.again_ms) {
+      // not pressed again this soon: at a high frame rate the screen may not show the last press yet (a dino still
+      // on the ground one frame after its jump key), and a second press would cut the first short
+      const now = performance.now(), last = this.pressedAt[a.id];
+      if (last !== undefined && now - last < Number(p.again_ms)) return `wait: ${a.id} pressed ${Math.round(now - last)} ms ago`;
+      this.pressedAt[a.id] = now;
+    }
     if (a.kind === "key" && Number(p.hold_ms ?? 0) && p.release === "later") {
       // held without stopping the loop: let go on the first frame after hold_ms
       const hold = Number(p.hold_ms);
@@ -530,7 +539,7 @@ export class Agent {
     else { const last = this.history[this.history.length - 1]; if (last?.key && !this.noops.includes(last.key)) this.noops.push(last.key); }
     const state: Record<string, any> = { game: this.pack.name, tick: this.tick, how_to_play: this.pack.play, screen: values, recent_actions: this.history.slice(-6).map((x) => x.action), last_action_changed_screen: this.history.length ? changed : null, actions_that_did_nothing_since_last_change: [...this.noops] };
     this.lastValues = values;
-    const rec: Rec = { tick: this.tick, hash: h, perception_ms: Math.round(tPerc), timings_ms: timings, screen: values, action: "wait", mode: this.mode, support: Math.round(support * 100) / 100, known: cls.known };
+    const rec: Rec = { tick: this.tick, t_ms: Math.round(t0), hash: h, perception_ms: Math.round(tPerc), timings_ms: timings, screen: values, action: "wait", mode: this.mode, support: Math.round(support * 100) / 100, known: cls.known };
     if (this.mode === "main" && this.base.tasks.length) { this.tasksTick(values, rec); if (this.task) state.task = this.task.instruction; }
     const done = (r: Rec) => { this.lastHash = h; this.onRecord?.(r, frame, null); return r; };
     // ---- the hybrid: a screen the pack cannot read goes to the VLM, which acts now and may define a mode
@@ -682,6 +691,8 @@ export class Agent {
 
   async run(shouldStop?: () => boolean): Promise<Rec> {
     const period = 1000 / this.pack.tickHz;
+    // frames from the browser's screencast: ~10 ms a frame instead of a ~40 ms screenshot
+    if (this.pack.raw.frames === "stream" && this.device.stream) await this.device.stream(true);
     let rec: Rec;
     for (;;) {
       const t = performance.now();

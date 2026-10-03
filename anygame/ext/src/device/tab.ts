@@ -1,5 +1,5 @@
 // A browser tab as a device, through chrome.debugger: Page.captureScreenshot for frames (works on background
-// tabs and canvases), Input.dispatch* for taps, swipes and keys (trusted events, unlike synthetic DOM events).
+// tabs and canvases; or the screencast, for packs with `frames: stream`), Input.dispatch* for taps, swipes and keys (trusted events, unlike synthetic DOM events).
 // A region (CSS px) restricts frames and input to the game's box on the page.
 import type { Frame } from "../core/geometry.js";
 import type { Device } from "../core/loop.js";
@@ -49,13 +49,62 @@ export class TabDevice implements Device {
 
   size(): [number, number] { return this.sz; }
 
+  // ---- frames from Chrome's screencast (a pack's `frames: stream`) ----
+  // A screenshot costs 35-50 ms whatever its size, which caps a loop near 15 frames a second; the screencast pushes
+  // every painted frame of the viewport, and frame() takes the first one painted after it was called, cropped to
+  // the region. A still page paints nothing: then frame() falls back to a screenshot.
+  private shot: { t: number; data: string; meta: any } | null = null;
+  private streaming = false;
+  private onEvent = (src: chrome.debugger.Debuggee, method: string, params?: any) => {
+    if (src.tabId !== this.tabId || method !== "Page.screencastFrame") return;
+    this.shot = { t: (params.metadata?.timestamp ?? Date.now() / 1000) as number, data: params.data, meta: params.metadata ?? {} };
+    this.send("Page.screencastFrameAck", { sessionId: params.sessionId }).catch(() => {});
+  };
+
+  async stream(on = true): Promise<void> {
+    await this.attach();
+    if (on === this.streaming) return;
+    this.streaming = on;
+    if (on) {
+      chrome.debugger.onEvent.addListener(this.onEvent);
+      await this.send("Page.startScreencast", { format: "jpeg", quality: this.jpegQuality, everyNthFrame: 1 });
+    } else {
+      chrome.debugger.onEvent.removeListener(this.onEvent);
+      await this.send("Page.stopScreencast").catch(() => {});
+      this.shot = null;
+    }
+  }
+
+  private async streamed(waitMs = 50): Promise<ImageBitmap | null> {
+    const t0 = Date.now() / 1000, end = performance.now() + waitMs;
+    while (performance.now() < end) {
+      const s = this.shot;
+      if (s && s.t >= t0 - 0.002) {
+        const bytes = Uint8Array.from(atob(s.data), (c) => c.charCodeAt(0));
+        const bmp = await createImageBitmap(new Blob([bytes], { type: "image/jpeg" }));
+        // the frame is the viewport at its device size: map the region (page px) into it
+        const k = bmp.width / (s.meta.deviceWidth || bmp.width), r = this.region!;
+        const sx = (r.x - (s.meta.scrollOffsetX ?? 0)) * k, sy = (r.y - (s.meta.scrollOffsetY ?? 0)) * k;
+        if (sx < 0 || sy < 0 || sx + r.w * k > bmp.width + 0.5 || sy + r.h * k > bmp.height + 0.5) { bmp.close(); return null; }   // the region is not all in view
+        const crop = await createImageBitmap(bmp, sx, sy, r.w * k, r.h * k);
+        bmp.close();
+        return crop;
+      }
+      await new Promise((res) => setTimeout(res, 2));
+    }
+    return null;
+  }
+
   async frame(): Promise<Frame> {
     await this.attach();
     await this.releaseDue();
     const r = this.region!;
-    const res = await this.send("Page.captureScreenshot", { format: "jpeg", quality: this.jpegQuality, clip: { x: r.x, y: r.y, width: r.w, height: r.h, scale: this.scale }, fromSurface: true });
-    const bytes = Uint8Array.from(atob(res.data), (c) => c.charCodeAt(0));
-    const bmp = await createImageBitmap(new Blob([bytes], { type: "image/jpeg" }));
+    let bmp = this.streaming ? await this.streamed() : null;
+    if (!bmp) {
+      const res = await this.send("Page.captureScreenshot", { format: "jpeg", quality: this.jpegQuality, clip: { x: r.x, y: r.y, width: r.w, height: r.h, scale: this.scale }, fromSurface: true });
+      const bytes = Uint8Array.from(atob(res.data), (c) => c.charCodeAt(0));
+      bmp = await createImageBitmap(new Blob([bytes], { type: "image/jpeg" }));
+    }
     const canvas = new OffscreenCanvas(this.sz[0], this.sz[1]);
     const ctx = canvas.getContext("2d")!;
     ctx.drawImage(bmp, 0, 0, this.sz[0], this.sz[1]);
@@ -151,6 +200,7 @@ export class TabDevice implements Device {
 
   async close(): Promise<void> {
     if (!this.attached) return;
+    if (this.streaming) await this.stream(false).catch(() => {});
     this.attached = false;
     await new Promise<void>((resolve) => chrome.debugger.detach({ tabId: this.tabId }, () => resolve()));
   }
