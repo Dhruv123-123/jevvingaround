@@ -810,6 +810,14 @@ class Agent:
                     "nouls": {k: round(v["noul"], 2) for k, v in answers.items() if v.get("type") == "noul"},
                     "choices": {k: v.get("choice") for k, v in answers.items() if v.get("type") == "choice" and k != "action"},
                     "jev_ms": res["latency_ms"], "tokens": res["input_tokens"], "cost_usd": round(res["cost_usd"], 7), "total_cost_usd": round(self.total_cost, 6)})
+        # the compiler's top pick next to the decider's, so the decider's contribution can be measured (and replayed
+        # from a save state both ways)
+        top = {k: next(iter(q["criteria"]), None) for k, q in qs.items() if q.get("type") == "choice" and q.get("criteria")}
+        if top and "sensor" not in rec:
+            rec["top"] = top
+            rec["top_agrees"] = all(answers.get(k, {}).get("choice") == v for k, v in top.items())
+            self.top_asked = getattr(self, "top_asked", 0) + 1
+            self.top_agreed = getattr(self, "top_agreed", 0) + rec["top_agrees"]
         self.last_hash = h
         param = next((answers[k]["choice"] for k in (f"{choice}__cell", f"{choice}__target", f"{choice}__slot", f"{choice}__option") if k in answers), None)
         self.history.append({"tick": self.tick, "action": done, "choice": choice, "key": f"{choice}→{param}" if param else choice})

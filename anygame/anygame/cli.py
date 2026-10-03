@@ -69,7 +69,7 @@ def cmd_play(a):
         last = agent.run()
     finally:
         device.close()
-    summary = {"game": pack.name, "grade": grader.report() if grader else None, "goals": agent.goal_log, "auto_ticks": agent.auto_ticks,
+    summary = {"game": pack.name, "grade": grader.report() if grader else None, "goals": agent.goal_log, "auto_ticks": agent.auto_ticks, "decisions": getattr(agent, "top_asked", 0), "agreed_with_top": getattr(agent, "top_agreed", 0),
                "emulated_frames": getattr(device, "frames", None), "fallback_calls": agent.fallback_calls, "mode": agent.mode, "ticks": agent.tick, "last": last.get("action"), "reason": last.get("reason"), "sensor_errors": agent.errors,
                "total_cost_usd": round(agent.total_cost, 6), "final_screen": {k: v for k, v in (last.get("screen") or {}).items() if not isinstance(v, dict)}}
     print(json.dumps(summary, indent=1))
