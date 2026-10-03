@@ -3,6 +3,7 @@
 import { crop, inset, type Frame, type Rect } from "./geometry.js";
 import { accentColor, hexToRgb, labDist, meanColor, medianColor, nearestNamed, rgbToLab, type RGB } from "./color.js";
 import type { Pack, ReadDef } from "./pack.js";
+import { goRead } from "./go.js";
 
 export type Values = Record<string, any>;
 
@@ -214,6 +215,7 @@ export function readAll(pack: Pack, frame: Frame, only?: Set<string>, state?: an
       case "bar": values[rid] = readBar(frame, pack, r); conf[rid] = 1; break;
       case "locate": values[rid] = locate(values[r.in], r); if (!r.many) conf[rid] = values[rid] ? 1 : 0; break;
       case "runs": values[rid] = runsOf(values[r.in], r); break;
+      case "go": values[rid] = goRead(values[r.in], r); break;
       case "around": case "tetris": case "predict": case "margin": continue;
       default: values[rid] = null;   // ocr, templates, blobs, vocab: not in the extension
     }

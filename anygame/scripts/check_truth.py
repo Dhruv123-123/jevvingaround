@@ -5,7 +5,7 @@ Run the bench with ANYGAME_LOG_TRUTH=1 and `#state=window.__state()` on the devi
 the board, the status and the located things the way the game itself has them. The frame is grabbed a few
 milliseconds before the state is evaluated, so on a real-time game a tick where the game stepped in between shows
 as a mismatch; `--settled` counts only ticks whose truth equals the previous tick's (nothing moved while the frame was taken).
-Covers the bundled games: snake, connect4, 2048, tetris."""
+Covers the bundled games: snake, connect4, 2048, tetris, go."""
 from __future__ import annotations
 import argparse
 import json
@@ -93,7 +93,32 @@ def check_tetris(scr, tr):
     return out
 
 
-CHECKS = {"connect4": check_connect4, "2048": check_2048, "snake": check_snake, "tetris": check_tetris}
+def check_go(scr, tr):
+    """Board and status against the page; the compiled go read (legal points, stones in atari) against the page's own
+    rules engine. A legal point the page refuses is a ko (the compiler is stateless and cannot see one): counted apart."""
+    out = {}
+    board, grid = scr.get("board"), tr.get("grid")
+    if board and grid:
+        sym = {0: ".", 1: "B", 2: "W"}
+        out["board"] = [f"{cell(i % 9 + 1, i // 9 + 1)}:{at(board, i % 9 + 1, i // 9 + 1)}!={sym.get(v)}" for i, v in enumerate(grid) if at(board, i % 9 + 1, i // 9 + 1) != sym.get(v)]
+    want = {0: None, 1: "we_won", 2: "we_lost"}.get(tr.get("over"))
+    st = scr.get("status")
+    out["status"] = ([] if st == want else [f"{st}!={want}"]) if want else ([f"{st} while playing"] if st in ("we_won", "we_lost") else [])
+    g = scr.get("go")
+    if isinstance(g, dict) and "legal_black" in tr and not out.get("board"):
+        page = {cell(i % 9 + 1, i // 9 + 1) for i in tr["legal_black"]}
+        ours = set(g.get("legal") or [])
+        extra = ours - page
+        out["legal"] = sorted(page - ours) + ([] if len(extra) <= 1 else sorted(extra))   # one extra point is a ko
+        out["ko"] = sorted(extra) if len(extra) == 1 else []
+        for side, key in (("black", "our_atari"), ("white", "their_atari")):
+            want_a = {cell(i % 9 + 1, i // 9 + 1) for i in tr.get("atari", {}).get(side, [])}
+            got = set(g.get(key) or [])
+            out[key] = sorted(want_a ^ got)
+    return out
+
+
+CHECKS = {"go": check_go, "connect4": check_connect4, "2048": check_2048, "snake": check_snake, "tetris": check_tetris}
 
 
 def check_log(path: str, settled: bool) -> dict:

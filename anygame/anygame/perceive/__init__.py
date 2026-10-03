@@ -77,6 +77,11 @@ def read_all(pack: Pack, frame: np.ndarray, only: set[str] | None = None, tick: 
             values[rid] = runs_of(values.get(r["in"], {}), r)
             timings[rid] = 0.0
             continue
+        if kind == "go":
+            from . import go
+            values[rid] = go.read(values.get(r["in"]), r)
+            timings[rid] = 0.0
+            continue
         zone = pack.zone(r["zone"]) if "zone" in r else None
         rect = rect_for(pack, r)
         if kind == "bar":

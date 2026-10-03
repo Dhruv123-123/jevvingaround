@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { PNG } from "pngjs";
-import { BUNDLED_PACKS, packFromText, evalPack, Agent, StillDevice, RandomSensor, runsOf, aroundOf, TetrisTracker, accentColor, matches } from "../dist/core.js";
+import { BUNDLED_PACKS, packFromText, evalPack, Agent, StillDevice, RandomSensor, runsOf, aroundOf, goRead, TetrisTracker, accentColor, matches } from "../dist/core.js";
 
 const PACKS = join(process.cwd(), "..", "packs");
 
@@ -73,4 +73,32 @@ test("the loop plays tic-tac-toe frames with the random sensor and only offers l
   const rec = await ag.step();
   assert.equal(rec.choice, "mark");
   assert.ok(matches({ a: 1 }, { a: 1, b: 2 }) && !matches([1, 2], [1]));
+});
+
+test("go read matches the Python compiler", () => {
+  const mid = ["BBW......", "B.W......", ".BBW.....", "..W......", ".....B...", "....WW...", "...B.....", "....B...W", ".WBW....B"];
+  let v = goRead(mid, { kind: "go", us: "B", them: "W", komi: 6.5 });
+  assert.deepEqual(v.saves, ["c3r8", "c8r9"]);
+  assert.deepEqual(v.our_atari, ["c3r9", "c9r9"]);
+  assert.deepEqual(v.self_atari, ["c1r9"]);
+  v = goRead([".........", ".........", "..W......", "....B....", "...BWB...", ".........", "..W......", ".........", "........."], { kind: "go" });
+  assert.deepEqual(v.captures, ["c5r6"]);
+  assert.deepEqual(v.urgent, ["c5r6"]);
+  v = goRead([".B.......", "B........", ...Array(7).fill(".........")], { kind: "go" });
+  assert.deepEqual(v.eyes, ["c1r1"]);
+  assert.equal(v.score.us, 81);
+});
+
+test("go worth ranks the same moves as the Python compiler", () => {
+  const mid = ["BBW......", "B.W......", ".BBW.....", "..W......", ".....B...", "....WW...", "...B.....", "....B...W", ".WBW....B"];
+  const v = goRead(mid, { kind: "go", komi: 6.5 });
+  assert.deepEqual(v.best, ["c6r2", "c7r2", "c1r3", "c7r1", "c5r2", "c8r2"]);
+  assert.equal(v.worth.c6r2, 14);
+  const deep = goRead(["BBW..B...", "B.W..W...", ".BBW..B..", "..W...W..", ".....B...", "....WW..B", "...B...W.", "....B...W", ".WBW....B"], { kind: "go", komi: 6.5 });
+  assert.deepEqual(deep.best, ["c1r3", "c2r8", "c5r1", "c3r5", "c2r6", "c1r7"]);
+  assert.equal(deep.worth.c2r8, 8.5);
+  assert.deepEqual(deep.danger, ["c1r1", "c2r1", "c6r1", "c1r2"]);
+  assert.deepEqual(deep.doomed, ["c4r1", "c9r1", "c2r2", "c4r2", "c9r7", "c8r9"]);
+  assert.deepEqual(goRead([".........", "..WW.....", ".WB......", ...Array(6).fill(".........")], { kind: "go" }).danger, ["c3r3"]);   // a ladder
+  assert.deepEqual(v.estimate, { us: 21, them: 34.5, lead: -13.5 });
 });

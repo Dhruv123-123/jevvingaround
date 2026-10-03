@@ -133,15 +133,6 @@ class Agent:
         left = {k: v for k, v in crit.items() if k not in bare}
         if 1 <= len(left) < len(crit):
             qs["action"] = {**qs["action"], "criteria": left}
-        for n in self.noops:
-            if "→" not in n:
-                continue
-            aid, val = n.split("→", 1)
-            for pq in (f"{aid}__cell", f"{aid}__target", f"{aid}__slot", f"{aid}__option"):
-                if pq in qs:
-                    c = {k: v for k, v in qs[pq]["criteria"].items() if k != val}
-                    if c:
-                        qs[pq] = {**qs[pq], "criteria": c}
         # parameter questions for actions that need a slot and/or a target cell; all asked in the same call.
         # A pack may define its own `<action>__cell` / `__slot` / `__target` question to add instructions.
         for a in self.pack.actions:
@@ -166,6 +157,17 @@ class Agent:
             if a.kind == "tap" and a.params.get("zone") and self.pack.zone(a.params["zone"]).grid and f"{a.id}__cell" not in qs:
                 cells = self.pack.zone(a.params["zone"]).cells()
                 qs[f"{a.id}__cell"] = {"type": "choice", "instructions": f"If the action is {a.id}, which cell of {a.params['zone']}?", "criteria": {k.split('.', 1)[1]: None for k in list(cells)[:255]}}
+        # after the parameter questions exist: a tap on a cell of a grid zone is asked through a question built just
+        # above, and a refused move (a Go ko, a full column) must leave it too, or the model picks it again every tick
+        for n in self.noops:
+            if "→" not in n:
+                continue
+            aid, val = n.split("→", 1)
+            for pq in (f"{aid}__cell", f"{aid}__target", f"{aid}__slot", f"{aid}__option"):
+                if pq in qs:
+                    c = {k: v for k, v in qs[pq]["criteria"].items() if k != val}
+                    if c:
+                        qs[pq] = {**qs[pq], "criteria": c}
         for rl in self.pack.rules:
             for pq, read in (rl.get("only") or {}).items():
                 cells = _get(values, read) or []

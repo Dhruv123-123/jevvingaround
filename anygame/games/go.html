@@ -1,0 +1,70 @@
+<!doctype html><html><head><meta charset="utf-8"><title>go 9x9</title>
+<style>html,body{margin:0;background:#f8fafc;-webkit-user-select:none;user-select:none;font:700 18px/1 -apple-system,Segoe UI,Roboto,sans-serif;color:#0f172a;width:540px;height:570px;overflow:hidden}
+#bar{height:44px;display:flex;align-items:center;justify-content:space-between;padding:0 14px;gap:10px}#status{width:150px;height:28px;border-radius:6px;background:#3b82f6}
+#pass{width:96px;height:28px;border-radius:6px;background:#0f172a;color:#f8fafc;display:flex;align-items:center;justify-content:center;cursor:pointer}
+#msg{flex:1;font-size:15px;text-align:center}
+#b{position:absolute;left:18px;top:52px;width:504px;height:504px;background:#dcb35c;display:grid;grid-template-columns:repeat(9,56px);grid-template-rows:repeat(9,56px)}
+.p{position:relative;width:56px;height:56px}
+.p:before{content:"";position:absolute;top:27px;height:2px;left:0;right:0;background:#5b4a2e}
+.p:after{content:"";position:absolute;left:27px;width:2px;top:0;bottom:0;background:#5b4a2e}
+.p.L:before{left:27px}.p.R:before{right:27px}.p.T:after{top:27px}.p.B:after{bottom:27px}
+.s{position:absolute;left:4px;top:4px;width:48px;height:48px;border-radius:50%;z-index:1}
+.k{background:#111827}.w{background:#f8fafc;box-shadow:inset 0 0 0 1px #94a3b8}
+.last{position:absolute;left:24px;top:24px;width:8px;height:8px;border-radius:50%;background:#dc2626;z-index:2}</style></head>
+<body><div id="bar"><div id="pass">pass</div><span id="msg">your move (black)</span><div id="status"></div></div><div id="b"></div>
+<script>(()=>{
+// 9x9 Go. We are black (1) and move first; the page plays white (2). Area scoring, komi 6.5, positional superko.
+// The game ends after two passes in a row or MAX moves. over: 0 playing, 1 black won, 2 white won.
+const q=new URLSearchParams(location.search);let seed=Number(q.get("seed")||1);const rnd=()=>{seed=(seed*1664525+1013904223)%4294967296;return seed/4294967296};
+const N=9,KOMI=Number(q.get("komi")||6.5),MAX=Number(q.get("max")||180),b=document.getElementById("b"),pts=[];
+for(let i=0;i<N*N;i++){const d=document.createElement("div");const x=i%N,y=(i/N)|0;d.className="p"+(x===0?" L":"")+(x===N-1?" R":"")+(y===0?" T":"")+(y===N-1?" B":"");b.appendChild(d);pts.push(d)}
+let grid=Array(N*N).fill(0),turn=1,over=0,passes=0,moves=0,last=-1,caps=[0,0,0];const seen=new Set([grid.join("")]);
+const preset=q.get("grid");if(preset){grid=preset.split("").map(ch=>ch==="B"?1:ch==="W"?2:0);seen.clear();seen.add(grid.join(""))}
+const nb=i=>{const x=i%N,y=(i/N)|0,o=[];if(x>0)o.push(i-1);if(x<N-1)o.push(i+1);if(y>0)o.push(i-N);if(y<N-1)o.push(i+N);return o};
+const chain=(g,i)=>{const c=g[i],st=new Set([i]),lb=new Set(),todo=[i];while(todo.length){const j=todo.pop();for(const n of nb(j)){if(!g[n])lb.add(n);else if(g[n]===c&&!st.has(n)){st.add(n);todo.push(n)}}}return[st,lb]};
+// the board after p plays at i, or null if occupied, suicide or a repeat of an earlier position
+const tryPlay=(g,i,p)=>{if(g[i])return null;const h=g.slice();h[i]=p;let taken=0;for(const n of nb(i))if(h[n]===3-p){const[st,lb]=chain(h,n);if(!lb.size){for(const s of st)h[s]=0;taken+=st.size}}
+ const[,lb]=chain(h,i);if(!lb.size)return null;if(seen.has(h.join("")))return null;return{h,taken,libs:lb.size}};
+const eye=(g,i,p)=>{if(g[i]||nb(i).some(n=>g[n]!==p))return false;const x=i%N,y=(i/N)|0;let bad=0,on=0;
+ for(const[dx,dy]of[[-1,-1],[1,-1],[-1,1],[1,1]]){const X=x+dx,Y=y+dy;if(X<0||Y<0||X>=N||Y>=N)continue;on++;if(g[Y*N+X]===3-p)bad++}return on<4?bad===0:bad<=1};
+const score=()=>{const s=[0,0,0];grid.forEach(v=>{if(v)s[v]++});const seenE=new Set();
+ for(let i=0;i<N*N;i++){if(grid[i]||seenE.has(i))continue;const reg=[i],border=new Set();seenE.add(i);for(let k=0;k<reg.length;k++)for(const n of nb(reg[k])){if(!grid[n]){if(!seenE.has(n)){seenE.add(n);reg.push(n)}}else border.add(grid[n])}
+  if(border.size===1)s[[...border][0]]+=reg.length}return{black:s[1],white:s[2]+KOMI}};
+const render=()=>{grid.forEach((v,i)=>{pts[i].innerHTML=(v?`<div class="s ${v===1?"k":"w"}"></div>`:"")+(i===last?'<div class="last"></div>':"")});
+ const s=document.getElementById("status");s.style.background=over===1?"#22c55e":over===2?"#ef4444":turn===1?"#3b82f6":"#6b7280";
+ const sc=score();document.getElementById("msg").textContent=(over?(over===1?"black wins ":"white wins "):turn===1?"your move · ":"thinking… · ")+`B ${sc.black} W ${sc.white}`};
+const end=()=>{const sc=score();over=sc.black>sc.white?1:2};
+const commit=(r,i,p)=>{grid=r.h;caps[p]+=r.taken;seen.add(grid.join(""));last=i;passes=0;moves++};
+const step=()=>{if(passes>=2||moves>=MAX)end();turn=over?turn:3-turn;render();if(!over&&turn===2)setTimeout(ai,Number(q.get("delay")||300))};
+// white: capture the biggest chain it can, else save its own chain in atari, else a random move that neither fills
+// its own eye nor puts itself in atari, mildly preferring points next to stones; pass when nothing is left
+// white, ai=heuristic (default): capture the biggest chain it can, else save its own chain in atari, else a random
+// move that neither fills its own eye nor puts itself in atari, mildly preferring points next to stones; pass when
+// nothing is left. ai=mc: the same heuristic picks a capture or a save outright; otherwise its top candidates each
+// get quick random playouts to the end, round robin for `think` ms (default 500), and the best win rate is played.
+const AI=q.get("ai")||"heuristic",THINK=Number(q.get("think")||500);
+const playout=(g,p)=>{g=g.slice();let pass=0,n=0;const empties=[];
+ while(pass<2&&n<150){empties.length=0;for(let i=0;i<N*N;i++)if(!g[i])empties.push(i);let moved=false;
+  for(let k=empties.length;k>0;k--){const j=(rnd()*k)|0,i=empties[j];empties[j]=empties[k-1];if(eye(g,i,p))continue;
+   const h=g.slice();h[i]=p;for(const m of nb(i))if(h[m]===3-p&&!chain(h,m)[1].size)for(const s of chain(h,m)[0])h[s]=0;
+   if(!chain(h,i)[1].size)continue;g=h;moved=true;break}
+  pass=moved?0:pass+1;n++;p=3-p}
+ const s=[0,0,0];g.forEach(v=>{if(v)s[v]++});for(let i=0;i<N*N;i++)if(!g[i]){const o=nb(i).map(m=>g[m]).filter(Boolean);if(o.length&&o.every(v=>v===o[0]))s[o[0]]++}
+ return s[2]+KOMI>s[1]};
+const ai=()=>{if(over||turn!==2)return;const cands=[];for(let i=0;i<N*N;i++){const r=tryPlay(grid,i,2);if(r)cands.push([i,r])}
+ const scored=[];for(const[i,r]of cands){if(eye(grid,i,2))continue;const inAtari=nb(i).some(n=>grid[n]===2&&chain(grid,n)[1].size===1);
+  scored.push([r.taken*100+(inAtari&&r.libs>=2?60:0)+(r.libs===1&&!r.taken?-1000:0)+(nb(i).some(n=>grid[n])?3:0)+rnd()*8,i,r])}
+ scored.sort((a,b)=>b[0]-a[0]);let best=scored.length&&scored[0][0]>-500?scored[0]:null;
+ if(best&&AI==="mc"&&best[0]<60){const top=scored.filter(c=>c[0]>-500).slice(0,12),wins=top.map(()=>0),runs=top.map(()=>0);const t0=performance.now();
+  for(let k=0;performance.now()-t0<THINK;k++){const c=k%top.length;runs[c]++;if(playout(top[c][2].h,1))wins[c]++}
+  let bi=0;for(let c=1;c<top.length;c++)if(wins[c]/runs[c]>wins[bi]/runs[bi])bi=c;best=top[bi];window.__mc={runs:runs.reduce((a,b)=>a+b,0),rate:wins[bi]/runs[bi]}}
+ if(!best){passes++;moves++;last=-1}else commit(best[2],best[1],2);step()};
+window.__play=(i)=>{if(over||turn!==1)return false;const r=tryPlay(grid,i,1);if(!r)return false;commit(r,i,1);step();return true};
+window.__pass=()=>{if(over||turn!==1)return false;passes++;moves++;last=-1;step();return true};
+// for grading a pack's reads: black's legal points (superko included) and the stones in atari, from the page's own rules
+const atari=p=>{const o=[];for(let i=0;i<N*N;i++)if(grid[i]===p&&chain(grid,i)[1].size===1)o.push(i);return o};
+const legalFor=p=>{const o=[];for(let i=0;i<N*N;i++)if(tryPlay(grid,i,p))o.push(i);return o};
+window.__state=()=>({grid:[...grid],turn,over,passes,moves,captures:{black:caps[1],white:caps[2]},score:score(),legal_black:legalFor(1),atari:{black:atari(1),white:atari(2)}});
+b.addEventListener("click",e=>{const r=b.getBoundingClientRect();const x=Math.floor((e.clientX-r.left)/56),y=Math.floor((e.clientY-r.top)/56);if(x>=0&&x<N&&y>=0&&y<N)window.__play(y*N+x)});
+document.getElementById("pass").addEventListener("click",()=>window.__pass());
+render();})();</script></body></html>
