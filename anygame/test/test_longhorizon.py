@@ -141,7 +141,7 @@ def test_menu_entries_found_by_trying_and_ranked(monkeypatch):
     t = MenuTracker({"depth": 4})
     v = t.read(g, g.screen())
     assert v["entries"] == 3
-    assert g.s == {"cur": 0, "open": True, "text": None} and g.real_presses[-1] in ("a", "b", "down", "up")   # put back
+    assert g.s == {"cur": 0, "open": True, "text": None} and g.real_presses[-1] in ("a", "b", "down", "up", "start", "select")   # put back
     lands = list(v["landings"])
     assert lands == ["pick_1", "pick_2", "back_out"]               # entry 3 does nothing: not offered while others do
     assert t.plans["pick_2"] == ["down", "a"]

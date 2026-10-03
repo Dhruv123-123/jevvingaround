@@ -19,7 +19,7 @@ read:
   screen: { kind: probe, pos: [found.x, found.y] }
   text: { kind: ocr, rect_px: [0, 0, 480, 432], when: { read: screen, in: [text, choice] }, otherwise: "" }
   # a choice on screen: its entries and what choosing each does, found by trying them from a save state
-  menu: { kind: menu, when: { read: screen, equals: choice }, pos: [found.x, found.y], depth: 5, settle: 90 }
+  menu: { kind: menu, when: { read: screen, in: [choice, button] }, pos: [found.x, found.y], depth: 5, settle: 90 }
   world: { kind: world, map: map, x: x, y: y, cell: cell, step_hold: 16, after: 6, max_steps: 8, radius: 40,
            learn_when: { read: x, not: null } }
 remember: [text]
@@ -35,7 +35,7 @@ act:
   - { id: wait, kind: wait, description: "do nothing this tick" }
 rules:
   - { if: { read: screen, equals: choice }, exclude: [go, wait, confirm, back, menu] }   # a choice: one of its entries
-  - { if: { read: screen, equals: button }, exclude: [go, wait, pick] }
+  - { if: { read: screen, equals: button }, exclude: [go, wait, confirm, back, menu] }   # only a button works: which one, by what it does
   - { if: { read: screen, in: [walk, text, none] }, exclude: [pick] }
 change: screen
 tick_hz: 1000

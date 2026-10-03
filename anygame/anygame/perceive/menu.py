@@ -11,7 +11,7 @@ state it
      and reads the text on that row: the entry's label;
   3. from each entry presses A and lets the game run, and reads what came of it: the new text on screen, whether
      the player can walk now, whether the screen is the same menu (nothing happened) or a new one;
-  4. does the same for B (back out);
+  4. does the same for B (back out), START and SELECT (a screen where only a button does anything is a choice too);
   5. puts the game back exactly as it was.
 
 The decider gets one choice among `pick_<k>` with each entry's label and consequence, plus what was picked on this
@@ -180,6 +180,10 @@ class MenuTracker:
                 outcomes.append(self._outcome(device, keys + ["a"], total, img, pos))     # against the entry, cursor on it
             device.restore(snap)
             back = self._outcome(device, ["b"], total, base, pos)
+            buttons = {}
+            for b in self.r.get("buttons") or ["start", "select"]:
+                device.restore(snap)
+                buttons[b] = self._outcome(device, [b], total, base, pos)
         finally:
             device.restore(snap)
             device.discoverer = disc
@@ -192,9 +196,10 @@ class MenuTracker:
             lab = _label(_ocr_boxes(img) if i else boxes, cur) if len(entries) > 1 else ""
             out["entries"].append({"keys": keys, "label": lab, **oc})
         out["back"] = back
+        out["buttons"] = buttons
         out["base_text"] = " ".join(b[4] for b in boxes)[:160]
         out["pos_before"] = pos0
-        for e in out["entries"] + [back]:
+        for e in out["entries"] + [back] + list(buttons.values()):
             new = [w for w in _words(e.pop("_text", "")) if w not in base_words]
             e["new_text"] = " ".join(dict.fromkeys(new))[:120]
         return out
@@ -231,6 +236,11 @@ class MenuTracker:
         if not b["same_screen"]:
             landings["back_out"] = f"press B → {self._said(b)}"
             plans["back_out"] = ["b"]
+        for bn, be in (m.get("buttons") or {}).items():
+            # START or SELECT: on a screen where only a button does anything (a pause, a map, a "press START" prompt)
+            if not be["same_screen"]:
+                landings[f"press_{bn}"] = f"press {bn.upper()} → {self._said(be)}"
+                plans[f"press_{bn}"] = [bn]
         before = self.history.get(k) or []
         times = {lab: sum(1 for h in before if h.startswith(lab + ":")) for lab in landings}
         for lab, t in times.items():
@@ -244,7 +254,7 @@ class MenuTracker:
             for lab in idle:                 # an entry that does nothing is not a choice while others do something
                 landings.pop(lab)
                 plans.pop(lab, None)
-        order = sorted(landings, key=lambda lab: (lab in idle, lab == "back_out", lab in back, times[lab], list(landings).index(lab)))
+        order = sorted(landings, key=lambda lab: (lab in idle, lab == "back_out" or lab.startswith("press_"), lab in back, times[lab], list(landings).index(lab)))
         landings = {lab: landings[lab] for lab in order}
         self.plans = plans
         self.macros = {kk: list(v) for kk, v in plans.items()}
