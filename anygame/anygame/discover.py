@@ -91,6 +91,7 @@ class Discoverer:
         self._majority, self._majority_idx = np.zeros(0, bool), np.zeros(0, int)
         self.visits: list[np.ndarray] = []       # work RAM as each map visit settled, the last 200
         self.presses = 0
+        self.crossed = np.zeros(N, bool)    # a pair whose high byte moved with a small step: a position past 255
         self._xdeltas: list[int] = []
         self.transitions = 0
         self.blank = False
@@ -133,6 +134,7 @@ class Discoverer:
         d8 = _wrap(after - before)
         b16, a16 = before[:-1] + 256 * before[1:], after[:-1] + 256 * after[1:]
         d16 = np.concatenate([a16 - b16, [0]])
+        self.crossed |= (d16 != 0) & (before[1:].tolist() + [0] != after[1:].tolist() + [0]) & (np.abs(d16) < 64)
         for ax, want, other in (("x", d[0], d[1]), ("y", d[1], d[0])):
             for w, dd in ((1, d8), (2, d16)):
                 for s in (self.st[(ax, w)], self.seg[(ax, w)]):
@@ -250,7 +252,7 @@ class Discoverer:
             top = float(score.max())
             if top < self.threshold:
                 continue
-            for i in np.where(score >= top - 0.02)[0][:16]:
+            for i in np.where(score >= top - 0.02)[0][-64:]:
                 cands.append((float(score[i]), w, int(i)))
         if not cands:
             return None
@@ -260,8 +262,8 @@ class Discoverer:
         # scores as well while the camera is still, so the pair wins a tie
         def pref(c):
             score, w, i = c
-            hi_small = w == 2 and last is not None and i + 1 < N and last[i + 1] <= 3
-            return (hi_small, w == 1, score, -i)
+            hi_small = w == 2 and last is not None and i + 1 < N and last[i + 1] <= 3 and self.crossed[i]
+            return (hi_small, w == 1, score, i)          # ties: the higher address (buffers and sprite copies sit low)
         cur = self.found.get(ax)
         for c in cands:                           # the one found already stays while it is as good: no flip-flopping
             if cur and LO + c[2] == cur["addr"] and (c[1] == 1) == (cur["type"] == "u8"):

@@ -306,7 +306,8 @@ class BranchingGridGame(GridGame):
         for label, keys in seqs.items():
             self.restore(snap)
             for k in keys:
-                self.press(k, hold=8, after=0)
+                k, _, h = str(k).partition(":")
+                self.press(k, hold=int(h) if h else 8, after=0)
             out[label] = {"screen": self.screen(), "state": self.state(), "ram": None}
         self.restore(snap)
         return out

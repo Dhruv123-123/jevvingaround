@@ -884,7 +884,9 @@ class Agent:
         import numpy as _np
         dirs = list(r.get("keys") or ["down", "up", "left", "right"])
         buttons = list(r.get("buttons") or ["a", "start", "b"])
-        res = self.device.branch({"wait": [], **{k: [k] for k in buttons + dirs}}, frames=int(r.get("frames", 48)))
+        # directions are held long enough to walk a step: a tap only turns the player in some games (Pokemon)
+        hold = int(r.get("hold", 16))
+        res = self.device.branch({"wait": [], **{k: [k] for k in buttons}, **{k: [f"{k}:{hold}"] for k in dirs}}, frames=int(r.get("frames", 48)))
         disc = getattr(self.device, "discoverer", None)
         if disc is not None and res["wait"].get("ram") is not None:
             # each direction against waiting, from the same moment: what the press changed and nothing else, which is
@@ -892,7 +894,7 @@ class Agent:
             for k in dirs:
                 disc.press(k, res["wait"]["ram"], res[k]["ram"], full=False)
         base = res["wait"]["screen"].astype(_np.int16)
-        thr = float(r.get("min_change", 0.3))
+        thr = float(r.get("min_change", 0.05))   # the emulator is deterministic: a few letters more is a real difference
         differs = {k: float(_np.abs(v["screen"].astype(_np.int16) - base).mean()) > thr for k, v in res.items() if k != "wait"}
         pos = [str(x) for x in (r.get("pos") or [])]
         def at(k):
