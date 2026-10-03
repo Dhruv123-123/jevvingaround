@@ -181,4 +181,5 @@ Azure goal and glyph calls (seconds, rate-limited; the glyph labeller needs a fe
 ## Being built first: gap 1, text read exactly
 
 `anygame/perceive/tiletext.py`, a new read kind `tiletext` (no device, scanner, probe, grader or runner change).
-See `docs/tiletext.md` once it lands, and the thread for numbers.
+Landed: `docs/tiletext.md`. On Pokemon it reads 98.9% of learned cells right, 1.00 similarity to the true text late
+in a 400-press run against OCR's 0.93, at 0.75 ms a read instead of 217 ms.

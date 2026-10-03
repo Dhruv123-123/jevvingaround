@@ -7,7 +7,7 @@ from typing import Any
 import yaml
 from .geometry import Rect, Zone
 
-READ_KINDS = {"bar", "templates", "ocr", "vocab", "blobs", "color", "locate", "runs", "around", "tetris", "json", "json_grid", "predict", "margin", "go", "slide", "head", "gap", "world", "probe", "menu"}
+READ_KINDS = {"bar", "templates", "ocr", "vocab", "blobs", "color", "locate", "runs", "around", "tetris", "json", "json_grid", "predict", "margin", "go", "slide", "head", "gap", "world", "probe", "menu", "tiletext"}
 QUESTION_TYPES = {"noul", "choice", "score"}
 
 
