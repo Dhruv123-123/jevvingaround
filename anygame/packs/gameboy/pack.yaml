@@ -27,14 +27,17 @@ auto:
   - { if: { read: screen, equals: text }, key: a, why: "text with nothing to choose: page through it" }
   - { if: { read: screen, equals: none }, wait: 30, why: "nothing responds to any input: let it play" }
 act:
-  - { id: go, kind: macro, options: world, description: "walk one of the computed paths (the goal, a door, inspect a thing, explore a direction)" }
   - { id: pick, kind: macro, options: menu, description: "choose one entry of the menu or choice on screen" }
+  - { id: go, kind: macro, options: world, description: "walk one of the computed paths (the goal, a door, inspect a thing, explore a direction)" }
   - { id: confirm, kind: key, key: a, description: "press A: talk, inspect, choose the highlighted entry" }
   - { id: back, kind: key, key: b, description: "press B: back out of a menu" }
   - { id: menu, kind: key, key: start, description: "press START: open the menu" }
   - { id: wait, kind: wait, description: "do nothing this tick" }
 rules:
-  - { if: { read: screen, equals: choice }, exclude: [go, wait, confirm, back, menu] }   # a choice: one of its entries
+  - { if: [{ read: screen, equals: choice }, { read: x, not: null }], exclude: [go, wait, confirm, back, menu] }   # a choice: one of its entries
+  # where you are is not known yet, so a screen that moves with the d-pad may be the world, not a menu: walking (go) is
+  # offered beside the entries, and walking is what finds the position
+  - { if: [{ read: screen, equals: choice }, { read: x, equals: null }], exclude: [wait, confirm, back, menu] }
   - { if: { read: screen, equals: button }, exclude: [go, wait, confirm, back, menu] }   # only a button works: which one, by what it does
   - { if: { read: screen, in: [walk, text, none] }, exclude: [pick] }
 change: screen
@@ -46,13 +49,15 @@ play: >
   first: `goal` heads for the goal's place when it is known, `inspect_<n>` walks to a blocked tile and presses A at it
   (people, signs and objects block the way as walls do), `explore_<dir>` walks toward the nearest place not seen yet,
   `door_<n>` goes back through a door to a place little explored. Text boxes are paged through for you. When
-  `screen` is `choice`, `menu.landings` lists every entry with what choosing it does (found by trying it): pick the
-  one that serves the goal, a new game over a continue that does nothing, a fight's best move, yes to a quest.
+  `screen` is `choice` and `x` is known, `menu.landings` lists every entry with what choosing it does (found by trying it): pick the
+  one that serves the goal, a new game over a continue that does nothing, a fight's best move, yes to a quest. While
+  `x` is null the position is not known yet and a `choice` screen may be the world itself: walk (`go`) to find out. A
+  button that only reopens a menu you just closed is not progress.
 questions:
   - id: action
     type: choice
     instructions: Which action now? On a choice screen, pick an entry; otherwise `go` with one of the computed paths almost always.
-    criteria: { go: "walk a computed path", pick: "choose a menu entry", confirm: "press A", back: "press B", menu: "press START", wait: "do nothing" }
+    criteria: { pick: "choose a menu entry", go: "walk a computed path", confirm: "press A", back: "press B", menu: "press START", wait: "do nothing" }
 tests:   # a frame and state from Aevilia: the pack reads any game the same way
   - state: fixtures/tutorial.json
     frame: fixtures/tutorial.png
