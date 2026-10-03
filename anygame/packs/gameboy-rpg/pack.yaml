@@ -1,0 +1,57 @@
+# Any top-down Game Boy RPG, with nothing about the game in it: the same pack plays Aevilia and Pokemon Red. Position,
+# step size and map signature are found from RAM while playing (discover: true); the kind of each screen (walk,
+# choice, text, button, none) is found by branching from save states; a menu's entries and what each does are found by
+# trying them from a save state (kind: menu); goals are written from what the game says (goals_from: dialogue, a chat
+# model that never presses a button); world memory and a navigator walk the paths. The ROM is the only game input.
+game: gameboy-rpg
+screen: { orientation: landscape, size: [480, 432] }       # 160x144 at 3x
+emulator: { clock: game, step: 4, hold: 8, after: 8 }
+discover: true
+goals_from: dialogue
+goals_cfg: { max_calls: 60, min_gap: 12, give_up: 250 }
+read:
+  x: { kind: json, path: found.x }
+  y: { kind: json, path: found.y }
+  map: { kind: json, path: found.map, default: 0 }
+  cell: { kind: json, path: found.cell, default: 16 }
+  screen: { kind: probe, pos: [found.x, found.y] }
+  text: { kind: ocr, rect_px: [0, 0, 480, 432], when: { read: screen, in: [text, choice] }, otherwise: "" }
+  # a choice on screen: its entries and what choosing each does, found by trying them from a save state
+  menu: { kind: menu, when: { read: screen, equals: choice }, pos: [found.x, found.y], depth: 5, settle: 60 }
+  world: { kind: world, map: map, x: x, y: y, cell: cell, step_hold: 16, after: 6, max_steps: 8, radius: 40,
+           learn_when: { read: x, not: null } }
+remember: [text]
+auto:
+  - { if: { read: screen, equals: text }, key: a, why: "text with nothing to choose: page through it" }
+  - { if: { read: screen, equals: none }, wait: 30, why: "nothing responds to any input: let it play" }
+act:
+  - { id: go, kind: macro, options: world, description: "walk one of the computed paths (the goal, a door, inspect a thing, explore a direction)" }
+  - { id: pick, kind: macro, options: menu, description: "choose one entry of the menu or choice on screen" }
+  - { id: confirm, kind: key, key: a, description: "press A: talk, inspect, choose the highlighted entry" }
+  - { id: back, kind: key, key: b, description: "press B: back out of a menu" }
+  - { id: menu, kind: key, key: start, description: "press START: open the menu" }
+  - { id: wait, kind: wait, description: "do nothing this tick" }
+rules:
+  - { if: { read: screen, equals: choice }, exclude: [go, wait, confirm, back, menu] }   # a choice: one of its entries
+  - { if: { read: screen, equals: button }, exclude: [go, wait, pick] }
+  - { if: { read: screen, in: [walk, text, none] }, exclude: [pick] }
+change: screen
+tick_hz: 1000
+play: >
+  A top-down RPG on a Game Boy. You walk the world one tile at a time, talk to people and inspect things with A,
+  and the story moves on when you find the right person or object. `goal` is what to do now, written from what the
+  game has said; `recent_text` is what the game said lately. `world.landings` are the paths you can walk now, best
+  first: `goal` heads for the goal's place when it is known, `inspect_<n>` walks to a blocked tile and presses A at it
+  (people, signs and objects block the way as walls do), `explore_<dir>` walks toward the nearest place not seen yet,
+  `door_<n>` goes back through a door to a place little explored. Text boxes are paged through for you. When
+  `screen` is `choice`, `menu.landings` lists every entry with what choosing it does (found by trying it): pick the
+  one that serves the goal, a new game over a continue that does nothing, a fight's best move, yes to a quest.
+questions:
+  - id: action
+    type: choice
+    instructions: Which action now? On a choice screen, pick an entry; otherwise `go` with one of the computed paths almost always.
+    criteria: { go: "walk a computed path", pick: "choose a menu entry", confirm: "press A", back: "press B", menu: "press START", wait: "do nothing" }
+tests:
+  - state: fixtures/tutorial.json
+    frame: fixtures/tutorial.png
+    expect: { x: 48, y: 48, world: { here: { x: 3, y: 3 } } }

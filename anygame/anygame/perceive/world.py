@@ -223,6 +223,8 @@ class WorldTracker:
             gm = goal.get("map", here[0])
             tgt = None
             why = goal.get("label") or "the goal"
+            if gm == here[0] and "x" not in goal and goal.get("toward"):
+                goal = {**goal, "_toward": goal["toward"]}      # only a direction: explore that way first
             if gm == here[0] and "x" in goal and "y" in goal:
                 tgt = (here[0], int(goal["x"]), int(goal["y"]))
                 if tgt == here:

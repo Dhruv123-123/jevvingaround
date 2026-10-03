@@ -7,7 +7,7 @@ from typing import Any
 import yaml
 from .geometry import Rect, Zone
 
-READ_KINDS = {"bar", "templates", "ocr", "vocab", "blobs", "color", "locate", "runs", "around", "tetris", "json", "json_grid", "predict", "margin", "go", "slide", "head", "gap", "world", "probe"}
+READ_KINDS = {"bar", "templates", "ocr", "vocab", "blobs", "color", "locate", "runs", "around", "tetris", "json", "json_grid", "predict", "margin", "go", "slide", "head", "gap", "world", "probe", "menu"}
 QUESTION_TYPES = {"noul", "choice", "score"}
 
 
@@ -271,6 +271,8 @@ def load_pack(path: str | os.PathLike, _allow_no_tests: bool = False) -> Pack:
                 raise PackError(f"{p}: read '{rid}': json_grid needs cols, rows and symbols: {{<char>: {{path, index|slice}}}}")
         elif r.get("kind") == "probe":
             pass                   # branches from a save state on the device; optional when_any, keys, frames
+        elif r.get("kind") == "menu":
+            pass                   # tries a choice screen's entries from a save state (anygame/perceive/menu.py)
         elif r.get("kind") == "world":
             if "x" not in r or "y" not in r:
                 raise PackError(f"{p}: read '{rid}': world needs x and y (read ids or state paths of the player's position), optionally map, cell, step_hold, learn_when")
