@@ -218,7 +218,7 @@ export function readAll(pack: Pack, frame: Frame, only?: Set<string>, state?: an
       case "runs": values[rid] = runsOf(values[r.in], r); break;
       case "go": values[rid] = goRead(values[r.in], r); break;
       case "around": case "tetris": case "predict": case "margin": case "slide": case "head": continue;
-      default: values[rid] = null;   // ocr, templates, blobs, vocab: not in the extension
+      default: values[rid] = null;   // ocr, templates, blobs, vocab, gap: not in the extension
     }
     timings[rid] = Math.round((performance.now() - t0) * 10) / 10;
   }

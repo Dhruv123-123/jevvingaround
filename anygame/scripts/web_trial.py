@@ -93,25 +93,45 @@ def snake_start(dev):
 # ---------------------------------------------------------------- dino: chromedino.com
 DINO_JS = """(() => { const r = Runner.instance_; return {crashed: r.crashed, playing: r.playing, speed: +r.currentSpeed.toFixed(2),
   dist: Math.round(r.distanceRan), score: r.distanceMeter.getActualDistance(r.distanceRan), y: r.tRex.yPos, jumping: r.tRex.jumping,
-  obs: r.horizon.obstacles.map(o => [o.typeConfig.type, Math.round(o.xPos), Math.round(o.yPos), o.width])}; })()"""
+  scroll: window.scrollY, obs: r.horizon.obstacles.map(o => [o.typeConfig.type, Math.round(o.xPos), Math.round(o.yPos), o.width])}; })()"""
+
+
+def dino_truth_next(truth, x0=114, x1=540):
+    """The page's nearest obstacle in front of the dino's nose: (gap px, width px, type, y) or None."""
+    obs = [o for o in truth.get("obs", []) if o[1] + o[3] > x0 and o[1] < x1]
+    if not obs:
+        return None
+    o = min(obs, key=lambda o: o[1])
+    return max(0, o[1] - x0), o[3], o[0], o[2]
 
 
 def dino_compare(values, truth):
-    def band(x0, x1):
-        return "cactus" if any(o[1] < x1 and o[1] + o[3] > x0 and o[2] >= 70 for o in truth.get("obs", [])) else "clear"
     wrong = {}
     if truth.get("crashed"):
         if values.get("status") != "over":
             wrong["status"] = {"read": values.get("status"), "page": "crashed"}
         return wrong
-    for k, (x0, x1) in {"near": (100, 165), "mid": (165, 400), "far": (400, 540)}.items():
-        if values.get(k) != band(x0, x1):
-            wrong[k] = {"read": values.get(k), "page": band(x0, x1), "obs": truth.get("obs")}
     if values.get("status") == "over":
         wrong["status"] = {"read": "over", "page": "running"}
-    birds = [o for o in truth.get("obs", []) if o[0] == "PTERODACTYL"]
-    if birds:
-        wrong["unseen_bird"] = birds
+    ys = {truth.get("y"), (truth.get("before") or truth).get("y")}
+    if values.get("dino") == "air" and ys == {93}:
+        wrong["dino"] = {"read": "air", "page_y": 93}
+    elif values.get("dino") == "ground" and values.get("above") != "dino" and all(y is not None and y < 85 for y in ys):
+        # within 8 px of the ground the legs still show; a cactus under the dino fills `feet`, then `above` shows it
+        wrong["dino"] = {"read": "ground", "page_y": sorted(ys)}
+    nxt = values.get("next") or {}
+    t = dino_truth_next(truth)
+    t0 = dino_truth_next(truth.get("before") or truth)      # the frame was taken between these two page reads
+    if t is None and t0 is None:
+        if nxt.get("rows") not in (None, "none"):
+            wrong["next"] = {"read": nxt, "page": "clear"}
+    elif t is None or t0 is None or t[2] != t0[2] or t[0] > t0[0]:
+        pass        # an obstacle entered or left the road between the two page reads: either read is right
+    elif t[2] == "PTERODACTYL" and t[3] < 60:
+        pass        # a high bird the dino runs under: the road may read it or not, both are safe
+    elif nxt.get("rows") in (None, "none") or not (min(t[0], t0[0]) - 8 <= nxt.get("px", 0) <= max(t[0], t0[0]) + 8):
+        # 8 px: one 6 px column plus rounding
+        wrong["next"] = {"read": {k: nxt.get(k) for k in ("px", "rows", "width_px")}, "page": t, "page_before": t0}
     return wrong
 
 
@@ -119,8 +139,24 @@ def dino_start(dev):
     dev.reload()
     page = dev._page
     page.wait_for_timeout(1500)
+    # ArrowDown (duck, fast drop) scrolls this page when the game lets the key through (after a crash), and the
+    # browser keeps the scroll across a reload: the canvas then sits ~100 px higher and every zone reads the wrong strip
+    page.evaluate("window.scrollTo(0, 0)")
     page.keyboard.press("Space")
     page.wait_for_function("Runner.instance_ && Runner.instance_.activated && !Runner.instance_.crashed && Runner.instance_.tRex.yPos >= 90", timeout=15000)
+    # some visits get an ad anchored over the top of the page (covering the score and the air above the dino) and
+    # pushing the game down ~100 px: hide ads and anything fixed over the page, then scroll so the game sits where
+    # the pack's zones expect it, 137 px from the top
+    page.evaluate("""() => { for (const e of document.querySelectorAll('ins.adsbygoogle, iframe, [id^=google_ads], [id^=aswift], .google-auto-placed'))
+        e.style.display = 'none';
+      for (const e of document.querySelectorAll('body *')) { const p = getComputedStyle(e).position;
+        if ((p === 'fixed' || p === 'sticky') && !e.querySelector('canvas')) e.style.display = 'none'; } }""")
+    page.wait_for_timeout(200)
+    y = page.evaluate("window.scrollTo(0, 0); document.querySelector('canvas').getBoundingClientRect().y")
+    if round(y) != 137:
+        page.evaluate(f"window.scrollTo(0, {y - 137})")
+    y = page.evaluate("document.querySelector('canvas').getBoundingClientRect().y")
+    assert round(y) == 137, f"the game sits at y={y:.0f} on the page: the pack's zones would be off"
 
 
 GAMES = {
@@ -141,9 +177,15 @@ class TruthDevice:
         self.dev, self.js, self.truth = dev, js, None
 
     def frame(self):
+        try:
+            before = self.dev._page.evaluate(self.js)
+        except Exception:  # noqa: BLE001
+            before = None
         f = self.dev.frame()
         try:
             self.truth = self.dev._page.evaluate(self.js)
+            if isinstance(self.truth, dict) and isinstance(before, dict):
+                self.truth["before"] = before      # the page just before the screenshot: the frame lies between the two
         except Exception as e:  # noqa: BLE001
             self.truth = {"error": str(e)[:120]}
         return f
@@ -182,9 +224,13 @@ def main():
             agent.on_record = on_record
             agent.stall_ticks = g.get("stall", 20)
             last = agent.run()
-            time.sleep(g.get("end_wait", 1.0))
-            dev.frame()
-            final = dev.truth
+            # the page as the episode ended (a later look can find the game restarted: Chrome's dino restarts on a
+            # key up after a crash)
+            final = rows[-1]["truth"] if rows and "error" not in rows[-1].get("truth", {"error": 1}) else None
+            if final is None:
+                time.sleep(g.get("end_wait", 1.0))
+                dev.frame()
+                final = dev.truth
             n = len(rows)
             wrong = [r for r in rows if r["wrong"]]
             fields = {}
@@ -193,7 +239,7 @@ def main():
                     fields[k] = fields.get(k, 0) + 1
             acted = [r for r in rows if r.get("action") not in (None, "wait", "stop", "keep")]
             lat = sorted(r["jev_ms"] for r in rows if "jev_ms" in r)
-            row = {"episode": ep + 1, "ticks": n, "end": last.get("reason"), "reads_wrong_ticks": len(wrong), "wrong_by_read": fields,
+            row = {"episode": ep + 1, "ticks": n, "asked_async": getattr(agent, "asked_async", 0), "reflex_ticks": getattr(agent, "skipped_reflex", 0), "end": last.get("reason"), "reads_wrong_ticks": len(wrong), "wrong_by_read": fields,
                    "actions": len(acted), "jev_calls": len(lat), "jev_ms_median": lat[len(lat) // 2] if lat else None,
                    "cost_usd": round(agent.total_cost, 5), "outcome": g["outcome"](final) if final and "error" not in final else final}
             print(json.dumps(row), flush=True)

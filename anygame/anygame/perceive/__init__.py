@@ -78,7 +78,7 @@ def read_all(pack: Pack, frame: np.ndarray, only: set[str] | None = None, tick: 
                 conf[rid] = 1.0 if cells else 0.0
             timings[rid] = 0.0
             continue
-        if kind in ("around", "tetris", "predict", "margin", "slide", "head"):
+        if kind in ("around", "tetris", "predict", "margin", "slide", "head", "gap"):
             continue  # derived in the loop (needs direction / history / per-run tracker state)
         if kind == "runs":
             values[rid] = runs_of(values.get(r["in"], {}), r)
@@ -255,3 +255,77 @@ def margin_num(v: Any, r: dict[str, Any]) -> float | None:
     if "upper" in r:
         ds.append(float(r["upper"]) - x)
     return round(min(ds), 3) if ds else None
+
+
+class GapTracker:
+    """The room in front of a runner and how fast it closes: a grid read scanned from its first column (the side
+    the mover faces) to the first column holding `symbol` in any row. Per frame it gives the free distance (`cells`,
+    and `px` with `cell_px`), the obstacle's `width_px`, which named rows it fills (`rows`: e.g. "low", "chest" or
+    "chest,low"), the closing `speed` in px/s, `ttc_ms`, the time until contact at that speed, and `age_ms`, how
+    long it has been the nearest (a small age means the one before it has only just gone by). `then_px`/`then_ms`:
+    how far behind it the following obstacle starts, front to front, when one is in view. The speed is
+    measured over the obstacle's whole approach (its first sighting to now), not frame to frame, so a column of jitter in its edge does not swing it; until an
+    obstacle has been watched for `baseline_s`, the last speed (at first `speed0`) stands."""
+
+    def __init__(self, r: dict[str, Any]):
+        self.r = r
+        self.speed = float(r["speed0"]) if r.get("speed0") is not None else None
+        self.last: tuple[float, float] | None = None       # (px, t) of the nearest obstacle on the last frame
+        self.first: tuple[float, float] | None = None      # (px, t) where that obstacle was first seen
+
+    def read(self, grid: Any, t: float) -> dict[str, Any] | None:
+        import re as _re
+        if not isinstance(grid, dict):
+            return None
+        sym = str(self.r["symbol"])
+        cols: dict[int, set[int]] = {}
+        nrows = 0
+        for k, v in grid.items():
+            m = _re.match(r"c(\d+)r(\d+)$", k)
+            if not m:
+                continue
+            c, rw = int(m.group(1)), int(m.group(2))
+            nrows = max(nrows, rw)
+            cols.setdefault(c, set())
+            if str(v) == sym:
+                cols[c].add(rw)
+        ncols = max(cols, default=0)
+        cell = float(self.r.get("cell_px", 1))
+        names = list(self.r.get("row_names") or [f"r{i + 1}" for i in range(nrows)])
+        first = next((c for c in range(1, ncols + 1) if cols.get(c)), None)
+        out: dict[str, Any] = {"cells": (first - 1) if first else ncols, "px": round(((first - 1) if first else ncols) * cell),
+                               "width_px": 0, "rows": "none", "then_px": None}
+        if first:
+            w, hit = 0, set()
+            gaps_allowed = int(self.r.get("join", 1))          # a cactus group or a flapping bird can show 1 empty column inside
+            c, empty = first, 0
+            while c <= ncols and empty <= gaps_allowed:
+                if cols.get(c):
+                    hit |= cols[c]
+                    w, empty = c - first + 1, 0
+                else:
+                    empty += 1
+                c += 1
+            out["width_px"] = round(w * cell)
+            # the obstacle after it: the first filled column past this one's end
+            nxt2 = next((cc for cc in range(first + w + gaps_allowed + 1, ncols + 1) if cols.get(cc)), None)
+            out["then_px"] = round((nxt2 - first) * cell) if nxt2 else None
+            out["rows"] = ",".join(names[i - 1] if i - 1 < len(names) else f"r{i}" for i in sorted(hit))
+            px = out["px"]
+            if self.first is None or px > self.last[0] + 2 * cell:
+                self.first = (px, t)        # a new obstacle (the last one passed, or the first one appeared)
+            elif t - self.first[1] >= float(self.r.get("baseline_s", 0.15)):
+                # the speed over this obstacle's whole approach so far: one column of jitter in its edge is a few %
+                v = (self.first[0] - px) / (t - self.first[1])
+                lo, hi = self.r.get("speed_range", [50, 5000])
+                if lo <= v <= hi:
+                    self.speed = v
+            self.last = (px, t)
+        else:
+            self.first = self.last = None
+        out["speed"] = round(self.speed) if self.speed else None
+        out["ttc_ms"] = round(out["px"] / self.speed * 1000) if first and self.speed else None
+        out["age_ms"] = round((t - self.first[1]) * 1000) if first and self.first else None    # since it became the nearest
+        # how long after this one the next obstacle reaches the dino (front to front); None when none is in view
+        out["then_ms"] = round(out["then_px"] / self.speed * 1000) if out.get("then_px") is not None and self.speed else None
+        return out

@@ -27,7 +27,7 @@ export interface Pack {
 export interface TaskDef { id: string; instruction: string; done: Record<string, any>[]; when?: Record<string, any>; hold_ticks: number; limit_ticks: number; category: string; [k: string]: any }
 export const TASK_CATEGORIES = ["navigate", "collect", "score", "survive", "clear", "build", "avoid", "other"];
 
-const condOk = (c: any) => c && typeof c === "object" && "read" in c && ["equals", "in", "not", "gte", "lte"].some((k) => k in c);
+const condOk = (c: any) => c && typeof c === "object" && "read" in c && ["equals", "in", "not", "gte", "lte", "contains"].some((k) => k in c);
 
 // Bounds on a task's tick budget. Any pack: limit_ticks and hold_ticks are whole numbers of at least 1, and the
 // condition must hold for no longer than the attempt lasts. Proposed by the setter (a model guessing at the game):
@@ -123,7 +123,7 @@ export function dumpPack(raw: Record<string, any>): string {
 
 export class PackError extends Error {}
 
-export const READ_KINDS = new Set(["bar", "templates", "ocr", "vocab", "blobs", "color", "locate", "runs", "around", "tetris", "json", "json_grid", "predict", "margin", "go", "slide", "head"]);
+export const READ_KINDS = new Set(["bar", "templates", "ocr", "vocab", "blobs", "color", "locate", "runs", "around", "tetris", "json", "json_grid", "predict", "margin", "go", "slide", "head", "gap"]);
 export const QUESTION_TYPES = new Set(["noul", "choice", "score"]);
 
 function parseRect(v: any): Rect {
@@ -170,6 +170,8 @@ export function loadPack(text: string, name = "pack"): Pack {
       if (!(r.in in reads)) throw new PackError(`${name}: read '${rid}': tetris needs 'in'`);
     } else if (r.kind === "slide") {
       if (!(r.in in reads)) throw new PackError(`${name}: read '${rid}': slide needs 'in' (the 4x4 number grid read), optionally depth and corner`);
+    } else if (r.kind === "gap") {
+      if (!(r.in in reads) || r.symbol === undefined) throw new PackError(`${name}: read '${rid}': gap needs 'in' (a grid read, scanned left to right) and 'symbol' (what counts as an obstacle)`);
     } else if (r.kind === "head") {
       if (!(r.in in reads)) throw new PackError(`${name}: read '${rid}': head needs 'in' (a grid read) and 'symbol' (the body's symbol)`);
     } else if (r.kind === "margin") {
@@ -208,11 +210,13 @@ export function loadPack(text: string, name = "pack"): Pack {
     if (!condOk(c)) throw new PackError(`${name}: reflex needs {read, equals|in|not|gte|lte} (or a list of them): when it holds, the rules act on the decider's last answers without asking it`);
   }
   for (const rl of rules) {
-    const c = rl.if ?? {};
-    const okNoul = "noul" in c && ("gte" in c || "lte" in c);
-    const okRead = "read" in c && ["equals", "in", "not", "gte", "lte"].some((k) => k in c);
-    if (!okNoul && !okRead) throw new PackError(`${name}: rule needs if: {noul, gte|lte} or if: {read, equals|in|not|gte|lte}`);
-    if (rl.unless !== undefined && rl.unless !== null && !condOk(rl.unless)) throw new PackError(`${name}: rule 'unless' needs {read, equals|in|not|gte|lte}: the rule does not apply when it holds`);
+    const cs: any[] = Array.isArray(rl.if) && rl.if.length ? rl.if : [rl.if ?? {}];   // a list: all must hold
+    for (const c of cs) {
+      const okNoul = c && "noul" in c && ("gte" in c || "lte" in c);
+      if (!okNoul && !condOk(c)) throw new PackError(`${name}: rule needs if: {noul, gte|lte} or if: {read, equals|in|not|gte|lte|contains}`);
+    }
+    if (rl.unless !== undefined && !(Array.isArray(rl.unless) && rl.unless.length ? rl.unless : [rl.unless]).every(condOk))
+      throw new PackError(`${name}: rule 'unless' needs {read, equals|in|not|gte|lte|contains}: the rule does not apply when it holds`);
     if (!["exclude", "set", "avoid", "only"].some((k) => k in rl)) throw new PackError(`${name}: rule needs exclude, set, avoid or only`);
     for (const k of ["set", "avoid", "only"]) {
       if (k in rl && (!rl[k] || typeof rl[k] !== "object" || Array.isArray(rl[k])))
