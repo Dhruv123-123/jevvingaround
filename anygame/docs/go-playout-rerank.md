@@ -29,10 +29,26 @@ Per-game final leads (seeds 1 to 16):
 - baseline: −37.5 −3.5 −11.5 +0.5 +6.5 −11.5 −17.5 −5.5 −3.5 −1.5 −11.5 −3.5 +28.5 −43.5 −7.5 −7.5
 - re-rank: +8.5 −1.5 +12.5 −5.5 +8.5 +74.5 +6.5 +18.5 +54.5 +48.5 +74.5 +4.5 +4.5 +18.5 +74.5 +74.5
 
-**Jev with the re-rank has not been run.** The OpenRouter account is still out of credit: `/api/v1/credits` reports
-5.20 used of 5, checked once after the stand-in runs. The Jev comparison (16 seeds, same white, against 9/16) waits
-on credit. With this pack Jev is likely to take the first `best` move nearly every time, as on Tetris and 2048. So
-Go would then measure the compiler more than Jev.
+## Jev with the re-rank (run later the same day, after credit was added)
+
+Same 16 seeds, same white, `--sensor jev`, cost **$0.079**:
+
+| Decider | Pack | Won | Lost | Mean final lead | Median |
+|---|---|---|---|---|---|
+| Jev | v6 (round four) | 9 | 7 | +17.0 | +10.5 |
+| **Jev** | **v7, `rerank: playouts`** | **12** | **4** | **+19.6** | **+8.5** |
+| stand-in (top pick) | v7 | 14 | 2 | +29.8 | +15.5 |
+
+- Jev won 12 of 16, against 9 of 16 on the old pack. That is three more wins, but 16 games can't call it (one-sided
+  Fisher p ≈ 0.23).
+- **Jev now takes the compiler's top pick almost every time.** Of 782 moves it left `best[0]` on only 2 free choices,
+  outside forced captures, saves and refused taps. On the old pack it left it about 1 move in 5. Its games equal the
+  stand-in's on 14 of 16 seeds, move for move.
+- The two departures are the two seeds where it lost and the stand-in won. Seed 6 tick 33: c6r7 (0.57) over c9r3
+  (0.53). Seed 10 tick 37: c8r8 (0.84) over c9r7 (0.80). Both took a slightly higher `win` below the 0.06 margin,
+  the coin-flip zone, and white's replies then differed. One move each can't be called the cause, but neither helped.
+- So on Go, as on Tetris and 2048, the result now measures the compiler, not Jev. The win came from moving the
+  playout rule out of the paragraph and into the ranking.
 
 ## What changed
 
@@ -62,4 +78,4 @@ python3 tally.py <dir>
 ```
 
 The baseline is the same pack without the two `rerank` lines. Logs, `out.json` and `tally.py` are in
-`/mnt/project-files/anygame/go-playout-rerank/` (`stand-in-baseline/`, `stand-in-rerank/`).
+`/mnt/project-files/anygame/go-playout-rerank/` (`stand-in-baseline/`, `stand-in-rerank/`, `jev-rerank/`).
