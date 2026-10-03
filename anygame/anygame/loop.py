@@ -348,12 +348,13 @@ class Agent:
                 self.on_pack_change(dump_pack(self.base.raw), f"mode {name} invalid: {str(e)[:120]}")
             return False
 
-    def observe(self, frame, pack=None, want_conf: bool = False, state: Any = None) -> tuple[dict[str, Any], list, dict[str, float]]:
+    def observe(self, frame, pack=None, want_conf: bool = False, state: Any = None, wait: bool = False) -> tuple[dict[str, Any], list, dict[str, float]]:
         """Frame → the state the model sees: the pack's reads, presented, plus history (<id>_prev/_moving/_reverse)
-        and the derived reads computed here because they need per-run state (around, tetris)."""
+        and the derived reads computed here because they need per-run state (around, tetris). `wait`: a still frame,
+        so slow reads are waited for instead of left at `otherwise`."""
         pack = pack or self.pack
         conf: dict[str, float] = {}
-        values, dets, timings = read_all(pack, frame, tick=self.tick, previous=self.last_values, pool=self.pool, pending=self.pending, conf=conf, state=state)
+        values, dets, timings = read_all(pack, frame, tick=self.tick, previous=self.last_values, pool=self.pool, pending=self.pending, conf=conf, state=state, wait=wait)
         self.last_conf = conf
         raw_values = values
         values = self._present(values, pack)

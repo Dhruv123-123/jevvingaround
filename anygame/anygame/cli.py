@@ -107,7 +107,7 @@ def cmd_eval(a):
         frame = cv2.imread(str(pack.path.parent / t["frame"])) if t.get("frame") else np.zeros((pack.size[1], pack.size[0], 3), np.uint8)
         state = json.loads((pack.path.parent / t["state"]).read_text()) if t.get("state") else None
         t0 = time.perf_counter()
-        values, _, timings = Agent(pack, device=_Dummy(pack.size), jev=None).observe(frame, state=state)
+        values, _, timings = Agent(pack, device=_Dummy(pack.size), jev=None).observe(frame, state=state, wait=True)
         ms = (time.perf_counter() - t0) * 1000
         misses = {k: (v, values.get(k)) for k, v in t["expect"].items() if not _match(v, values.get(k))}
         ok = not misses
@@ -119,7 +119,7 @@ def cmd_eval(a):
                 line += "  (action check skipped: no sensor)"
             else:
                 ag = Agent(pack, device=_Dummy(pack.size), jev=jev)
-                vals, _, _ = ag.observe(frame, state=state)
+                vals, _, _ = ag.observe(frame, state=state, wait=True)
                 res = jev.ask({"game": pack.name, "how_to_play": pack.play, "screen": vals, "recent_actions": []}, ag.questions(vals))
                 choice = res["answers"]["action"]["choice"]
                 ea = t["expect_action"]

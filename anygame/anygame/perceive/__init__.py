@@ -17,10 +17,11 @@ CONF: dict[int, dict[str, float]] = {}   # per-call confidences, keyed by id(val
 
 
 def read_all(pack: Pack, frame: np.ndarray, only: set[str] | None = None, tick: int = 0, previous: dict[str, Any] | None = None,
-             pool=None, pending: dict[str, Any] | None = None, conf: dict[str, float] | None = None, state: Any = None) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, float]]:
+             pool=None, pending: dict[str, Any] | None = None, conf: dict[str, float] | None = None, state: Any = None, wait: bool = False) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, float]]:
     """Returns (values, detections, timings_ms). A read with `every: N` is refreshed every N ticks and otherwise carried
     over. Given a thread `pool`, such a slow read (OCR, a detector) runs in the background and the loop keeps its last
-    value until the new one is ready, so a 1 s OCR never stalls a 300 ms decision loop."""
+    value until the new one is ready, so a 1 s OCR never stalls a 300 ms decision loop. `wait` blocks on a slow read
+    that has no value yet: a still frame (a pack test, an authoring probe) has no next tick to carry it."""
     import time
     values: dict[str, Any] = {}
     dets: list[dict[str, Any]] = []
@@ -41,6 +42,12 @@ def read_all(pack: Pack, frame: np.ndarray, only: set[str] | None = None, tick: 
             if fut is None and (tick % every == 1 or not have_prev):
                 fut = pool.submit(_read_one, pack, frame, rid, tick)
                 pending[rid] = fut
+            if wait and not have_prev:
+                v, _d, t = fut.result()
+                del pending[rid]
+                values[rid] = v.get(rid)
+                timings[rid] = t.get(rid, 0.0)
+                continue
             # never wait: the first OCR of a run can take seconds (the model loads on the first real frame), and a
             # real-time game does not pause for it; until the value arrives the read is its `otherwise` (or null)
             values[rid] = previous[rid] if have_prev else r.get("otherwise")
