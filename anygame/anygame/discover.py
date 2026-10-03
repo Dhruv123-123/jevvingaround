@@ -134,7 +134,9 @@ class Discoverer:
         d8 = _wrap(after - before)
         b16, a16 = before[:-1] + 256 * before[1:], after[:-1] + 256 * after[1:]
         d16 = np.concatenate([a16 - b16, [0]])
-        self.crossed |= (d16 != 0) & (before[1:].tolist() + [0] != after[1:].tolist() + [0]) & (np.abs(d16) < 64)
+        hi_step = np.concatenate([np.abs(_wrap(after[1:] - before[1:])) == 1, [False]])
+        lo_wrap = ((before >= 0xC0) & (after < 0x40)) | ((before < 0x40) & (after >= 0xC0))
+        self.crossed |= hi_step & lo_wrap & (np.abs(d16) < 64)     # the low byte wrapped and carried into the high one
         for ax, want, other in (("x", d[0], d[1]), ("y", d[1], d[0])):
             for w, dd in ((1, d8), (2, d16)):
                 for s in (self.st[(ax, w)], self.seg[(ax, w)]):
@@ -252,8 +254,16 @@ class Discoverer:
             top = float(score.max())
             if top < self.threshold:
                 continue
-            for i in np.where(score >= top - 0.02)[0][-64:]:
-                cands.append((float(score[i]), w, int(i)))
+            cur = self.found.get(ax)
+            if cur and (cur["type"] == "u8") == (w == 1) and score[cur["addr"] - LO] >= self.threshold:
+                held = (float(score[cur["addr"] - LO]), w, cur["addr"] - LO, float(sc[1][cur["addr"] - LO]))
+            keep = score >= top - 0.02
+            idx = np.where(keep)[0]
+            # among equals, the bytes that moved on the most presses: a position changes on every step that lands, a
+            # block or chunk coordinate on some; and the one already found is always looked at
+            idx = idx[np.argsort(-sc[1][idx], kind="stable")][:64].tolist()
+            for i in idx:
+                cands.append((float(score[i]), w, int(i), float(sc[1][i])))
         if not cands:
             return None
         best = max(c[0] for c in cands)
@@ -261,14 +271,18 @@ class Discoverer:
         # a pair whose high byte stays small is a position past 255 (pixels); a byte copied into the sprite table
         # scores as well while the camera is still, so the pair wins a tie
         def pref(c):
-            score, w, i = c
+            score, w, i, moved = c
             hi_small = w == 2 and last is not None and i + 1 < N and last[i + 1] <= 3 and self.crossed[i]
-            return (hi_small, w == 1, score, i)          # ties: the higher address (buffers and sprite copies sit low)
-        cur = self.found.get(ax)
-        for c in cands:                           # the one found already stays while it is as good: no flip-flopping
-            if cur and LO + c[2] == cur["addr"] and (c[1] == 1) == (cur["type"] == "u8"):
-                return {**cur, "score": round(c[0], 3)}
-        score, w, i = max(cands, key=pref)
+            # then the byte that moves on most steps; ties: the higher address (buffers and sprite copies sit low)
+            return (hi_small, w == 1, round(moved, 1), score, i)
+        best = max(cands, key=pref)
+        held = locals().get("held")
+        # a track record: the byte found already stays while it passes, so one odd press (a step through a door, a
+        # turn) cannot hand the position to a byte that agreed for a stretch; only one that moves on clearly more
+        # steps (the real position against a block coordinate or a sprite slot) takes over
+        if held and not (best[3] >= held[3] + 0.15 and best[0] >= held[0] - 0.02):
+            best = held
+        score, w, i, _ = best
         return {"addr": LO + i, "type": "u8" if w == 1 else "u16le", "score": round(score, 3)}
 
     def _dead(self, ax: str) -> bool:
