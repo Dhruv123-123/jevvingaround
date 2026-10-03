@@ -14,4 +14,4 @@ roms/*.gb
 roms/*.gbc
 !roms/2048gb/*.gb
 saves/
-packs/*/discovered.yaml
+packs/*/discovered*.yaml

@@ -1,9 +1,11 @@
-# Any top-down Game Boy RPG, with nothing about the game in it: the same pack plays Aevilia and Pokemon Red. Position,
-# step size and map signature are found from RAM while playing (discover: true); the kind of each screen (walk,
-# choice, text, button, none) is found by branching from save states; a menu's entries and what each does are found by
-# trying them from a save state (kind: menu); goals are written from what the game says (goals_from: dialogue, a chat
-# model that never presses a button); world memory and a navigator walk the paths. The ROM is the only game input.
-game: gameboy-rpg
+# Any top-down Game Boy game, with nothing about the game written down: the same pack plays Aevilia and Pokemon Red.
+# Position, step size and map signature are found from RAM while playing (one discovered-<rom>.yaml per ROM beside this
+# pack); the kind of each screen (walk, choice, text, button, none) is found by branching from save states; a menu's
+# entries and what each does are found by trying them from a save state (kind: menu); goals are written from what the
+# game says (goals_from: dialogue, a chat model that never presses a button); world memory and a navigator walk the
+# paths. The ROM is the only game input.
+#   anygame play packs/gameboy/pack.yaml --device pyboy://<rom.gb> --sensor jev --audit 10 --checkpoint runs/ck --checkpoint-every 100
+game: gameboy
 screen: { orientation: landscape, size: [480, 432] }       # 160x144 at 3x
 emulator: { clock: game, step: 4, hold: 8, after: 8 }
 discover: true
@@ -38,7 +40,7 @@ rules:
 change: screen
 tick_hz: 1000
 play: >
-  A top-down RPG on a Game Boy. You walk the world one tile at a time, talk to people and inspect things with A,
+  A game on a Game Boy, probably a top-down RPG. You walk the world one tile at a time, talk to people and inspect things with A,
   and the story moves on when you find the right person or object. `goal` is what to do now, written from what the
   game has said; `recent_text` is what the game said lately. `world.landings` are the paths you can walk now, best
   first: `goal` heads for the goal's place when it is known, `inspect_<n>` walks to a blocked tile and presses A at it
@@ -51,7 +53,7 @@ questions:
     type: choice
     instructions: Which action now? On a choice screen, pick an entry; otherwise `go` with one of the computed paths almost always.
     criteria: { go: "walk a computed path", pick: "choose a menu entry", confirm: "press A", back: "press B", menu: "press START", wait: "do nothing" }
-tests:
+tests:   # a frame and state from Aevilia: the pack reads any game the same way
   - state: fixtures/tutorial.json
     frame: fixtures/tutorial.png
     expect: { x: 48, y: 48, world: { here: { x: 3, y: 3 } } }

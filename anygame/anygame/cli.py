@@ -73,7 +73,7 @@ def cmd_play(a):
     if getattr(a, "checkpoint", None):
         from .memory import save_checkpoint
         save_checkpoint(agent, a.checkpoint)
-    summary = {"game": pack.name, "grade": grader.report() if grader else None, "goals": agent.goal_log, "auto_ticks": agent.auto_ticks,
+    summary = {"game": pack.name, "grade": grader.report() if grader else None, "goals": agent.goal_log, "auto_ticks": agent.auto_ticks, "decisions": getattr(agent, "top_asked", 0), "agreed_with_top": getattr(agent, "top_agreed", 0),
                "goal_writer": agent.goalbook.report() if agent.goalbook is not None else None,
                "dialogue_lines": len(agent.memory.dialogue) if agent.memory is not None else None,
                "places": len(agent.memory.places) if agent.memory is not None else None,
