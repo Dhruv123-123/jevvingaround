@@ -76,13 +76,14 @@ class Agent:
         self.pressed_at: dict[str, float] = {}      # action id → when its key last went down (for again_ms)
         self.locked: tuple[str, float] | None = None   # (action id, until): no other key before then (lock_ms)
         if hasattr(device, "use_pack"):
-            device.use_pack(pack.raw)    # an emulator's RAM map and clock come from the pack
+            device.use_pack(pack.raw, str(pack.path.parent))    # an emulator's RAM map, clock and discovery come from the pack
         # the long-horizon layer: world memory survives mode changes (a dialogue, a battle), goals are sticky
         self.worlds: dict[str, Any] = {}
         self.goals_done: set[str] = set()
         self.quest: dict[str, Any] | None = None       # the current goal
         self.goal_log: list[dict[str, Any]] = []       # {id, tick, frames}: when each goal was reached
         self.remembered: dict[str, list[str]] = {}    # `remember:` reads → their last distinct values (what was said)
+        self.last_fp = None
         self.auto_ticks = 0                            # ticks a routine screen was handled by an auto rule, no decider
         if pack.raw.get("frames") == "stream" and hasattr(device, "stream"):
             device.stream()             # frames from the browser's screencast: ~10 ms a frame instead of a 40 ms screenshot
@@ -196,6 +197,10 @@ class Agent:
                     c = {k: v for k, v in qs[pq]["criteria"].items() if k != val}
                     if c:
                         qs[pq] = {**qs[pq], "criteria": c}
+                    elif pq.endswith("__option") and len(qs["action"]["criteria"]) > 1:
+                        # every option of this action changed nothing: the action itself is not offered until the
+                        # screen changes (a title screen where walking does nothing and only a button will)
+                        qs["action"] = {**qs["action"], "criteria": {k: v for k, v in qs["action"]["criteria"].items() if k != aid}}
         for rl in self.pack.rules:
             for pq, read in (rl.get("only") or {}).items():
                 cells = _get(values, read) or []
@@ -281,7 +286,9 @@ class Agent:
             tracker = self.trackers.get(p["options"].split(".")[0])
             if tracker is not None and label and hasattr(tracker, "run"):
                 # the tracker plays its own plan, one step at a time, looking after each (a path through a world)
-                return tracker.run(self.device, label, self._look)
+                probe = next((r for r in self.pack.reads.values() if r.get("kind") == "probe"), None)
+                classify = (lambda: self._probe(probe)) if probe is not None else None
+                return tracker.run(self.device, label, self._look, classify=classify)
             keys = tracker.macros.get(label) if (tracker and label) else None
             if not keys:
                 return f"{a.id} (no option)"
@@ -429,6 +436,16 @@ class Agent:
                     values[f"{rid}_reverse"] = {"up": "down", "down": "up", "left": "right", "right": "left"}.get(values[f"{rid}_moving"], "none")
         if self.base.raw.get("goals"):
             self._goals_update(values)
+        probes = [rid for rid, r in pack.reads.items() if r.get("kind") == "probe"]
+        for rid in probes:
+            values[rid] = self._probe(pack.reads[rid], values)
+        if probes:
+            # reads gated on what the probe found (OCR of text only when there is text) are read now
+            for rid, r in pack.reads.items():
+                w = r.get("when")
+                if w and any(c.get("read") in probes for c in (w if isinstance(w, list) else [w])):
+                    v, _, _ = read_all(pack, frame, only={rid}, tick=self.tick, state=state, given=values)
+                    values[rid] = v.get(rid)
         for rid, r in pack.reads.items():
             if r.get("kind") == "world":
                 if rid not in self.worlds:
@@ -517,6 +534,11 @@ class Agent:
         t_perc = (time.perf_counter() - t0) * 1000
         h = stable_hash({k: v for k, v in values.items() if not k.endswith("_prev")})
         changed = h != self.last_hash
+        if self.pack.raw.get("change") == "screen" and self.last_fp is not None:
+            # the reads do not see everything (a title screen, a menu): a frame that looks different is a change too
+            from .fingerprint import distance as _fpd
+            changed = changed or _fpd(fp, self.last_fp) > float(self.pack.raw.get("change_min", 3))
+        self.last_fp = fp
         if changed:
             self.noops = []
         elif self.history and self.history[-1].get("key") and self.history[-1]["key"] not in self.noops:
@@ -801,6 +823,53 @@ class Agent:
         st = self.device.state() if hasattr(self.device, "state") else None
         values, _, _ = read_all(self.pack, frame, tick=self.tick, previous=self.last_values, state=st)
         return self._present(values, self.pack)
+
+    def _probe(self, r: dict[str, Any], values: dict[str, Any] | None = None) -> str | None:
+        """What kind of screen is this, found by trying, with no knowledge of the game: branch from a save state and
+        play each of wait, A and the four directions for the same number of frames, then put the game back.
+
+          walk    a direction moved the player's position (`pos`: state paths of the discovered x and y)
+          choice  no position moved, but a direction changed the screen: a cursor or a selection, a choice to make
+          text    no direction did anything, A did: something to page through
+          none    nothing responds (a cutscene, a transition): wait
+
+        A blinking arrow or scrolling clouds are the same in every branch, so only what an input caused differs.
+        `when_any`: only probe on screens where one of these holds (else `otherwise`)."""
+        conds = r.get("when_any")
+        if conds and values is not None and not any(self._cond(c, values) for c in conds):
+            return r.get("otherwise")
+        if not hasattr(self.device, "branch"):
+            return None
+        import numpy as _np
+        dirs = list(r.get("keys") or ["down", "up", "left", "right"])
+        buttons = list(r.get("buttons") or ["a", "start", "b"])
+        res = self.device.branch({"wait": [], **{k: [k] for k in buttons + dirs}}, frames=int(r.get("frames", 48)))
+        disc = getattr(self.device, "discoverer", None)
+        if disc is not None and res["wait"].get("ram") is not None:
+            # each direction against waiting, from the same moment: what the press changed and nothing else, which is
+            # what finding the position needs (a timer or an animation changes in both and cancels out)
+            for k in dirs:
+                disc.press(k, res["wait"]["ram"], res[k]["ram"])
+        base = res["wait"]["screen"].astype(_np.int16)
+        thr = float(r.get("min_change", 0.3))
+        differs = {k: float(_np.abs(v["screen"].astype(_np.int16) - base).mean()) > thr for k, v in res.items() if k != "wait"}
+        pos = [str(x) for x in (r.get("pos") or [])]
+        def at(k):
+            st = res[k]["state"] or {}
+            return tuple(_get(st, p_) for p_ in pos)
+        moved = [k for k in dirs if pos and None not in at("wait") and at(k) != at("wait")]
+        self.last_probe = {"moved": moved, "changed": [k for k, v in differs.items() if v]}
+        if moved:
+            return "walk"
+        if any(differs[k] for k in dirs):
+            return "choice"
+        if differs["a"]:
+            return "text"
+        if any(differs.get(k) for k in buttons):
+            return "button"             # only START or B does something: a choice of button
+        return "none"
+
+    last_probe: dict[str, Any] = {}
 
     def _goals_update(self, values: dict[str, Any]) -> None:
         """Goals are an ordered list of milestones, each done when its condition holds; once done, done for good.

@@ -1,33 +1,41 @@
 # Aevilia (ISSOtm and the AeviDev team, Apache-2.0: https://github.com/ISSOtm/Aevilia-GB), a free Pokemon-style
 # Game Boy Color RPG, played through the emulator. The stand-in for Pokemon Red while that ROM is not here, and the
-# first test of the long-horizon layer on a game it was not written for: RAM position (found by `anygame ramscan`,
-# not from any documentation), a text box seen in pixels, world memory and a navigator, goals, auto rules.
+# first test of the long-horizon layer on a game it was not written for: RAM position and map found while playing
+# (discover: true, no documentation), the kind of screen found by branching from save states, world memory and a navigator, goals, auto rules.
 # ROM: scripts/fetch_homebrew.sh puts it at roms/homebrew/aevilia.gbc (not in the repo).
 game: aevilia
 screen: { orientation: landscape, size: [480, 432] }       # 160x144 at 3x
 emulator: { clock: game, step: 4, hold: 8, after: 8 }
-ram:
-  y: { addr: 0xD710, type: u16le }       # the player's position in pixels (ramscan: tracks every d-pad press, 12 px a 12-frame hold)
-  x: { addr: 0xD712, type: u16le }
-  map: { addr: 0xD721 }                  # placeholder until a door is crossed and ramscan names the real byte
+discover: true          # position, step size and map signature are found from RAM while playing (anygame/discover.py)
 read:
-  x: { kind: json, path: x }
-  y: { kind: json, path: y }
-  map: { kind: json, path: map, default: 0 }
-  # the text box's white strip under its last line of text (the title bar over its top edge varies with the speaker)
-  textbox: { kind: color, rect_px: [30, 397, 420, 403], options: { open: "#f8f8f8" }, otherwise: closed, max_dist: 30 }
-  text: { kind: ocr, rect_px: [16, 300, 464, 400], when: { read: textbox, equals: open }, otherwise: "" }
-  world: { kind: world, map: map, x: x, y: y, cell: 8, step_hold: 8, after: 6, max_steps: 8, radius: 40,
-           learn_when: { read: textbox, equals: closed } }
+  x: { kind: json, path: found.x }
+  y: { kind: json, path: found.y }
+  map: { kind: json, path: found.map, default: 0 }
+  cell: { kind: json, path: found.cell, default: 16 }
+  # what kind of screen this is, found by branching from a save state (walk, choice, text, button, none): no colours, no
+  # layout, nothing about this game
+  screen: { kind: probe, pos: [found.x, found.y] }
+  text: { kind: ocr, rect_px: [0, 0, 480, 432], when: { read: screen, in: [text, choice] }, otherwise: "" }
+  world: { kind: world, map: map, x: x, y: y, cell: cell, step_hold: 16, after: 6, max_steps: 8, radius: 40,
+           learn_when: { read: x, not: null } }
 remember: [text]        # the last lines of dialogue go to the decider as recent_text: the story's instructions
 auto:
-  - { if: { read: textbox, equals: open }, key: a, why: "a text box: page through it" }
+  - { if: { read: screen, equals: text }, key: a, why: "text with nothing to choose: page through it" }
+  - { if: { read: screen, equals: none }, wait: 30, why: "nothing responds to any input: let it play" }
 act:
   - { id: go, kind: macro, options: world, description: "walk one of the computed paths (goal, a door, inspect a thing, explore a direction)" }
-  - { id: interact, kind: key, key: a, description: "press A at whatever the player faces" }
-  - { id: cancel, kind: key, key: b, description: "press B (close a menu)" }
-  - { id: menu, kind: key, key: start, description: "press START (open the menu)" }
+  - { id: confirm, kind: key, key: a, description: "press A: talk, inspect, choose the highlighted entry" }
+  - { id: cursor_down, kind: key, key: down, description: "move the cursor or selection down" }
+  - { id: cursor_up, kind: key, key: up, description: "move the cursor or selection up" }
+  - { id: cursor_left, kind: key, key: left, description: "move the cursor or selection left" }
+  - { id: cursor_right, kind: key, key: right, description: "move the cursor or selection right" }
+  - { id: back, kind: key, key: b, description: "press B: back out of a menu" }
+  - { id: menu, kind: key, key: start, description: "press START: open the menu" }
   - { id: wait, kind: wait, description: "do nothing this tick" }
+rules:
+  - { if: { read: screen, in: [choice, button] }, exclude: [go, wait] }   # a choice on screen: pick an entry, do not walk
+  - { if: { read: screen, not: choice }, exclude: [cursor_down, cursor_up, cursor_left, cursor_right] }
+change: screen         # a frame that looks different counts as a change, not only a different read
 tick_hz: 1000          # the game waits for us (clock: game); no wall-clock pacing
 play: >
   A top-down RPG on a Game Boy. You walk the world one tile at a time, talk to people and inspect things with A,
@@ -36,17 +44,15 @@ play: >
   next to you and presses A (people, signs and objects block the way, walls do too), `explore_<dir>` walks toward
   the nearest place not seen yet. A tutorial or a quest usually wants you to talk to or inspect something, so
   inspect what is next to you before exploring further. Text boxes are paged through for you; `recent_text`
-  is what the game said lately, and when it tells you to press a button (START for the menu), do that.
+  is what the game said lately, and when it tells you to press a button (START for the menu), do that. When
+  `screen` is `choice`, something on screen moves with the d-pad (a menu, a yes/no, a character select): pick.
 questions:
   - id: action
     type: choice
-    instructions: Which action now? `go` with one of the computed paths almost always.
-    criteria: { go: "walk a computed path", interact: "press A", cancel: "press B", menu: "press START", wait: "do nothing" }
-goals:
-  - id: tutorial
-    instruction: "Finish the tutorial room: the voice wants you to interact with something; find it and press A at it."
-    done: { read: map, not: 0 }
+    instructions: Which action now? On a choice screen, move the cursor to the entry you want and confirm; otherwise `go` with one of the computed paths almost always.
+    criteria: { go: "walk a computed path", confirm: "press A", cursor_down: "cursor down", cursor_up: "cursor up", cursor_left: "cursor left",
+                cursor_right: "cursor right", back: "press B", menu: "press START", wait: "do nothing" }
 tests:
   - state: fixtures/tutorial.json
     frame: fixtures/tutorial.png
-    expect: { x: 48, y: 48, textbox: closed, world: { here: { x: 6, y: 6 } } }
+    expect: { x: 48, y: 48, world: { here: { x: 3, y: 3 } } }

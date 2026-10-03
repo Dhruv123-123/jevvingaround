@@ -26,7 +26,8 @@ def _when(c, values) -> bool:
 
 
 def read_all(pack: Pack, frame: np.ndarray, only: set[str] | None = None, tick: int = 0, previous: dict[str, Any] | None = None,
-             pool=None, pending: dict[str, Any] | None = None, conf: dict[str, float] | None = None, state: Any = None, wait: bool = False) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, float]]:
+             pool=None, pending: dict[str, Any] | None = None, conf: dict[str, float] | None = None, state: Any = None, wait: bool = False,
+             given: dict[str, Any] | None = None) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, float]]:
     """Returns (values, detections, timings_ms). A read with `every: N` is refreshed every N ticks and otherwise carried
     over. Given a thread `pool`, such a slow read (OCR, a detector) runs in the background and the loop keeps its last
     value until the new one is ready, so a 1 s OCR never stalls a 300 ms decision loop. `wait` blocks on a slow read
@@ -66,7 +67,7 @@ def read_all(pack: Pack, frame: np.ndarray, only: set[str] | None = None, tick: 
             continue
         t0 = time.perf_counter()
         kind = r["kind"]
-        if r.get("when") and not _when(r["when"], values):
+        if r.get("when") and not _when(r["when"], {**(given or {}), **values}):
             # computed only when an earlier read says it is worth it (OCR of a text box only while one is open)
             values[rid] = r.get("otherwise")
             timings[rid] = 0.0
@@ -92,7 +93,7 @@ def read_all(pack: Pack, frame: np.ndarray, only: set[str] | None = None, tick: 
                 conf[rid] = 1.0 if cells else 0.0
             timings[rid] = 0.0
             continue
-        if kind in ("around", "tetris", "predict", "margin", "slide", "head", "gap", "world"):
+        if kind in ("around", "tetris", "predict", "margin", "slide", "head", "gap", "world", "probe"):
             continue  # derived in the loop (needs direction / history / per-run tracker state)
         if kind == "runs":
             values[rid] = runs_of(values.get(r["in"], {}), r)

@@ -132,6 +132,9 @@ class PyBoyDevice(Device):
         self.clock = q.get("clock", "wall")
         self.step_frames = int(q.get("step", 4))   # clock=game: frames each frame() runs
         self.ram: dict[str, Any] = {}
+        self.discoverer = None                     # pack `discover: true`: position and map found from RAM while playing
+        self.discover_file: str | None = None
+        self._xdeltas: list[int] = []
         self.frames = 0                            # emulated frames since boot: the game's own clock
         self._pb = PyBoy(path, window="null", sound_emulated=False)
         self._pb.set_emulation_speed(0)
@@ -150,6 +153,9 @@ class PyBoyDevice(Device):
         if n > 0:
             self._pb.tick(1, True)
             self.frames += n
+            if self.discoverer is not None:
+                from ..discover import ram
+                self.discoverer.frame(ram(self._pb.memory), bool(self._pb.screen.ndarray[:, :, :3].std() < 3))
 
     def wait(self, frames: int) -> None:
         self._tick(int(frames), render=False)
@@ -174,9 +180,18 @@ class PyBoyDevice(Device):
         return cv2.resize(bgr, self._size, interpolation=cv2.INTER_NEAREST)
 
     # ---- state -------------------------------------------------------------------------------------
-    def use_pack(self, raw: dict[str, Any]) -> None:
-        """The pack's `ram:` map (and an optional `emulator:` block: clock, step, hold, after) configures the device."""
+    def use_pack(self, raw: dict[str, Any], pack_dir: str | None = None) -> None:
+        """The pack's `ram:` map (and an optional `emulator:` block: clock, step, hold, after) configures the device.
+        `discover: true` finds the position and map bytes while playing (anygame/discover.py); what it finds is kept
+        in `discovered.yaml` beside the pack (or `discover_file`) and a later run starts from it."""
         self.ram = dict(raw.get("ram") or {})
+        if raw.get("discover"):
+            import yaml
+            from ..discover import Discoverer
+            self.discoverer = Discoverer()
+            self.discover_file = raw.get("discover_file") or (os.path.join(pack_dir, "discovered.yaml") if pack_dir else None)
+            if self.discover_file and os.path.exists(self.discover_file) and not os.environ.get("ANYGAME_REDISCOVER"):
+                self.discoverer.load(yaml.safe_load(open(self.discover_file)) or {})
         emu = raw.get("emulator") or {}
         for k in ("clock", "step_frames", "hold", "after"):
             src = "step" if k == "step_frames" else k
@@ -191,11 +206,60 @@ class PyBoyDevice(Device):
         return [self._pb.memory[addr + i] for i in range(n)]
 
     def state(self) -> dict[str, Any] | None:
-        if not self.ram:
+        if not self.ram and self.discoverer is None:
             return None
         s = decode_all(self._pb.memory, self.ram)
+        if self.discoverer is not None:
+            from ..discover import ram
+            s["found"] = self.discoverer.state(ram(self._pb.memory))
         s["frames"] = self.frames
         return s
+
+    def save_discovered(self) -> str | None:
+        if self.discoverer is None or not self.discover_file or not self.discoverer.found:
+            return None
+        import yaml
+        with open(self.discover_file, "w") as f:
+            f.write("# found by anygame/discover.py while playing: the agent's own map of this game's RAM\n")
+            yaml.safe_dump(self.discoverer.dump(), f, sort_keys=False)
+        return self.discover_file
+
+    # ---- branching: the emulator as the forward model of every game on it ------------------------------
+    def snapshot(self) -> tuple[bytes, int]:
+        import io
+        b = io.BytesIO()
+        self._pb.save_state(b)
+        return b.getvalue(), self.frames
+
+    def restore(self, snap: tuple[bytes, int]) -> None:
+        import io
+        self._pb.load_state(io.BytesIO(snap[0]))
+        self.frames = snap[1]
+
+    def branch(self, seqs: dict[str, list], frames: int = 16, hold: int = 4) -> dict[str, dict[str, Any]]:
+        """Play each input sequence from the current moment for `frames` frames, then put the game back exactly as it
+        was. Returns label → {screen, state}. Presses inside a branch teach the discoverer nothing."""
+        snap = self.snapshot()
+        disc, self.discoverer = self.discoverer, None
+        out: dict[str, dict[str, Any]] = {}
+        try:
+            for label, keys in seqs.items():
+                self.restore(snap)
+                used = 0
+                for k in keys:
+                    k, _, h = str(k).partition(":")
+                    h = int(h) if h else hold
+                    self.press(k, hold=h, after=0)
+                    used += h
+                self._tick(max(1, frames - used), render=True)
+                self.discoverer = disc
+                from ..discover import ram
+                out[label] = {"screen": self.screen(), "state": self.state(), "ram": ram(self._pb.memory)}
+                self.discoverer = None
+        finally:
+            self.restore(snap)
+            self.discoverer = disc
+        return out
 
     def save_state(self, path: str) -> None:
         os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
@@ -222,10 +286,21 @@ class PyBoyDevice(Device):
 
     def press(self, button: str, hold: int | None = None, after: int | None = None):
         b = self._button(button)
+        if self.discoverer is not None:
+            from ..discover import ram
+            before = ram(self._pb.memory)
         self._pb.button_press(b)
         self._tick(self.hold if hold is None else int(hold))
         self._pb.button_release(b)
         self._tick(self.after if after is None else int(after))
+        if self.discoverer is not None:
+            after_ = ram(self._pb.memory)
+            self.discoverer.press(b, before, after_)
+            dsc = self.discoverer
+            if b in ("left", "right") and "x" in dsc.found and "cell" not in dsc.fixed and (hold is None or hold >= 8):
+                self._xdeltas.append(dsc.decode(after_, "x") - dsc.decode(before, "x"))
+                self._xdeltas = self._xdeltas[-40:]
+                dsc.learn_cell(self._xdeltas)
 
     def key(self, name, hold_ms=0, **_):
         if hold_ms:
@@ -241,6 +316,10 @@ class PyBoyDevice(Device):
         self.press(("right" if dx > 0 else "left") if abs(dx) > abs(dy) else ("down" if dy > 0 else "up"))
 
     def close(self):
+        try:
+            self.save_discovered()
+        except Exception:  # noqa: BLE001
+            pass
         try:
             self._pb.stop(save=False)
         except Exception:  # noqa: BLE001

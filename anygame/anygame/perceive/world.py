@@ -80,7 +80,7 @@ Tile = tuple[Any, int, int]          # (map, x, y)
 class WorldTracker:
     def __init__(self, r: dict[str, Any]):
         self.r = r
-        self.cell = float(r.get("cell", 1))
+        self.cell = float(r.get("cell", 1)) if isinstance(r.get("cell", 1), (int, float)) else 1.0   # or a read: the discovered step
         self.max_steps = int(r.get("max_steps", 8))
         self.radius = int(r.get("radius", 24))
         self.keys = {d: (r.get("keys") or {}).get(d, d) for d in DIRS}
@@ -95,9 +95,16 @@ class WorldTracker:
         self.plans: dict[str, list[str]] = {}           # label → directions
         self.last_option: str | None = None
         self.goal_target: dict[str, Any] | None = None
+        self.stale = 0                                  # reads since a new tile was stood on or a new thing inspected
+        self.known = 0
+        self.buttons_tried: set[str] = set()            # buttons tried during this stale stretch
 
     # ---- memory ---------------------------------------------------------------------------------------
     def tile_of(self, values: dict[str, Any]) -> Tile | None:
+        if isinstance(self.r.get("cell"), str):
+            c = _get(values, self.r["cell"])
+            if isinstance(c, (int, float)) and c > 0:
+                self.cell = float(c)
         m, x, y = (_get(values, self.r.get(k, k)) for k in ("map", "x", "y"))
         if x is None or y is None:
             return None
@@ -302,7 +309,7 @@ class WorldTracker:
             opts[lab] = f"walk to the blocked tile {COMPASS[k[3]]} of ({k[1]},{k[2]}), {where}, and press A at it ({what}; never inspected; {len(cands)} left on this map)"
         if not opts:
             # nothing new reachable: blocks seen once may have been people who moved; wander and look again
-            d = sorted(DIRS)[self.steps % 4]
+            d = list(DIRS)[(self.steps // 3) % 4]
             plans["wander"] = [d] * 3
             opts["wander"] = f"nothing unexplored or uninspected is reachable: wander {COMPASS[d]} 3 steps"
         return opts, plans
@@ -311,11 +318,30 @@ class WorldTracker:
     def read(self, values: dict[str, Any], goal: dict[str, Any] | None = None) -> dict[str, Any] | None:
         here = self.tile_of(values)
         if here is None:
-            return None
+            # the position is not known yet (still being discovered): walk blind, which is also what discovers it
+            k = (self.steps // 3) % 4
+            order = (list(DIRS)[k:] + list(DIRS)[:k])
+            self.plans = {f"explore_{d}": [d] * 3 for d in order}
+            self.macros = {k: list(v) for k, v in self.plans.items()}
+            return {"here": None, "explored": None, "blocked_around": [],
+                    "landings": {f"explore_{d}": f"walk {COMPASS[d]} 3 steps (where you are is not known yet)" for d in order}}
         self.here = here
         self.visit(here)
         self.goal_target = goal
+        known = sum(len(v) for v in self.visited.values()) + len(self.inspected) + len(self.warps)
+        self.stale = 0 if known > self.known else self.stale + 1
+        if known > self.known:
+            self.buttons_tried = set()
+        self.known = known
         opts, plans = self.options(here, goal)
+        if self.stale >= int(self.r.get("stale_after", 12)):
+            # nothing new for a while: a button not tried in this stretch (a menu, a map, a mode) may be what the game
+            # is waiting for. Offered first, each button once until something new turns up
+            for b in [str(x) for x in (self.r.get("buttons") or ["start", "select", "b"])]:
+                if b not in self.buttons_tried:
+                    plans = {f"try_{b}": [f"button:{b}"], **plans}
+                    opts = {f"try_{b}": f"nothing new for {self.stale} decisions: press {b.upper()} (not tried since)", **opts}
+                    break
         self.plans = plans
         self.macros = {k: [str(s) for s in v] for k, v in plans.items()}
         maps = len(self.visited)
@@ -329,7 +355,8 @@ class WorldTracker:
         self.last_option = label
 
     # ---- playing an option ----------------------------------------------------------------------------
-    def run(self, device, label: str, look: Callable[[], dict[str, Any]], hold: int | None = None, after: int | None = None) -> str:
+    def run(self, device, label: str, look: Callable[[], dict[str, Any]], hold: int | None = None, after: int | None = None,
+            classify: Callable[[], str | None] | None = None) -> str:
         """Walk the plan for `label` step by step. `look()` returns fresh read values without advancing the game.
         Learns walls and doors as it goes and stops when a step does not go as planned or the game leaves the
         situation `learn_when` names (a dialogue opened, a battle started)."""
@@ -343,6 +370,11 @@ class WorldTracker:
         for step in plan:
             v = look()
             here = self.tile_of(v)
+            if here is None and step in DIRS:
+                device.press(self.keys[step], hold=hold, after=after)      # blind: no position to learn from yet
+                self.steps += 1
+                done.append(step)
+                continue
             if here is None or not _cond(self.r.get("learn_when"), v):
                 done.append("stop: left the overworld")
                 break
@@ -356,6 +388,12 @@ class WorldTracker:
                 device.press(interact, hold=4, after=after)
                 done.append("A")
                 continue
+            if step.startswith("button:"):
+                b = step[7:]
+                self.buttons_tried.add(b)
+                device.press(b, hold=4, after=after)
+                done.append(b.upper())
+                continue
             device.press(self.keys[step], hold=hold, after=after)
             v2 = look()
             if not _cond(self.r.get("learn_when"), v2):
@@ -365,7 +403,14 @@ class WorldTracker:
                     self.learn(here, step, t2)
                 done.append(f"{step} → stop: left the overworld")
                 break
-            out = self.learn(here, step, self.tile_of(v2))
+            t2 = self.tile_of(v2)
+            if t2 == here and classify is not None:
+                # it did not move: a wall, or did the step open something (a text, a choice)? Ask by trying
+                kind = classify()
+                if kind not in (None, "walk"):
+                    done.append(f"{step} → stop: {kind} on screen")
+                    break
+            out = self.learn(here, step, t2)
             done.append(step if out == "moved" else f"{step} ({out})")
             if out != "moved":
                 break

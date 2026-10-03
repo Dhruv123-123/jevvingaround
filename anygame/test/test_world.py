@@ -204,3 +204,89 @@ def test_pyboy_device_reads_ram_saves_and_restores_state(tmp_path):
         assert np.abs(d.screen().astype(int) - before.astype(int)).mean() < 1.0
     finally:
         d.close()
+
+
+def test_discoverer_finds_position_and_map_from_ram_alone():
+    from anygame.discover import Discoverer, LO, N
+    rng = np.random.default_rng(0)
+    d = Discoverer()
+    mem = np.zeros(N, np.int32)
+    X, Y, MAP, TIMER = 0xD362 - LO, 0xD361 - LO, 0xD35E - LO, 0xC0F0 - LO
+    mem[X], mem[Y], mem[MAP] = 10, 10, 3
+    for k in range(60):
+        b = ["up", "down", "left", "right"][rng.integers(4)]
+        before = mem.copy()
+        mem[TIMER] = (mem[TIMER] + 7) % 256                        # noise that moves on every press
+        blocked = rng.random() < 0.3                                # a wall
+        if not blocked:
+            mem[X] += {"left": -1, "right": 1}.get(b, 0)
+            mem[Y] += {"up": -1, "down": 1}.get(b, 0)
+        d.press(b, before, mem.copy())
+    assert d.found["x"]["addr"] == 0xD362 and d.found["y"]["addr"] == 0xD361      # u8 or a pair with a zero high byte: the same value
+    # a door: the screen goes blank, the map byte changes and the position jumps
+    d.frame(mem.copy(), blank=False)
+    d.frame(mem.copy(), blank=True)
+    mem[MAP], mem[X], mem[Y] = 7, 3, 4
+    d.frame(mem.copy(), blank=False)
+    assert 0xD35E in d.found["map"]["addrs"] and 0xC0F0 not in d.found["map"]["addrs"]
+    st = d.state(mem)
+    assert st["x"] == 3 and st["y"] == 4 and st["map"] is not None
+
+
+class BranchingGridGame(GridGame):
+    """GridGame with save states: what the probe needs."""
+
+    def snapshot(self):
+        return (self.map, self.x, self.y, self.facing, self.talking, self.talked, self.frames)
+
+    def restore(self, s):
+        self.map, self.x, self.y, self.facing, self.talking, self.talked, self.frames = s
+
+    def screen(self):
+        img = np.zeros((144, 160, 3), np.uint8)
+        img[self.y * 10:(self.y + 1) * 10, self.x * 10:(self.x + 1) * 10] = 255 if self.talking == 0 else 0
+        if self.talking:
+            img[120:, :] = 40 * self.talking                         # a text box that changes as it is paged
+        return img
+
+    def branch(self, seqs, frames=16, hold=4):
+        snap, out = self.snapshot(), {}
+        for label, keys in seqs.items():
+            self.restore(snap)
+            for k in keys:
+                self.press(k, hold=8, after=0)
+            out[label] = {"screen": self.screen(), "state": self.state(), "ram": None}
+        self.restore(snap)
+        return out
+
+
+def test_probe_tells_walking_text_and_nothing_apart_by_branching(tmp_path):
+    pack = _pack(tmp_path)
+    game = BranchingGridGame()
+    agent = Agent(pack, game, None, background=False)
+    probe = {"kind": "probe", "pos": ["x", "y"]}
+    assert agent._probe(probe) == "walk"
+    before = game.snapshot()
+    game.talking = 2
+    assert agent._probe(probe) == "text"                           # only A changes anything
+    assert game.talking == 2 and game.snapshot()[:3] == before[:3]  # and the game is put back as it was
+
+
+def test_graders_read_milestones_the_agent_never_sees():
+    from anygame.graders import for_title
+    from anygame.graders import pokemon_red as pr
+    g = for_title("POKEMON RED")
+    mem = bytearray(0x10000)
+    g.update(mem)
+    assert g.report()["reached"] == []                              # zeroed RAM before New Game is not Pallet Town
+    mem[pr.W_PLAYER_NAME] = 0x91                                    # "R": the game has started
+    mem[pr.W_CUR_MAP] = 0x26
+    assert g.update(mem) == ["intro_done"]
+    mem[pr.W_CUR_MAP], mem[pr.W_PARTY_COUNT] = 0x0C, 1
+    assert g.update(mem) == ["starter", "route_1"]
+    mem[pr.W_OBTAINED_BADGES] = 0x01
+    assert "badge_1" in g.update(mem) and 0 < g.progress() < 1
+    a = for_title("AEVILIA")
+    m2 = bytearray(0x10000)
+    m2[0xC3C4] = 2
+    assert a.update(m2) == ["tutorial"]

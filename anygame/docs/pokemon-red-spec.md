@@ -1,6 +1,31 @@
 # Pokemon Red, start to finish: spec
 
-Status: draft 1, 2026-10-03. Branch `claude/anygame-pokemon-red-zlo39b`, stacked on `claude/anygame-integration` (PR #3).
+Status: draft 2, 2026-10-03. Branch `claude/anygame-pokemon-red-zlo39b`, stacked on `claude/anygame-integration` (PR #3).
+Companions: `roadmap-any-game.md` and `design-review-any-game.md` (PR #10) in the project files.
+
+## Decisions since draft 1
+
+Draft 1 had the agent read Pokemon's published RAM map and page through every text box with a rule. The design
+review showed that this is a bigger hand-written pack, not "any game". Changed, all adopted:
+
+1. **The published RAM map grades, it does not play.** Dhruv's call (2026-10-03, "Map grades only"). The pret/pokered
+   addresses live in `anygame/graders/pokemon_red.py`, which the scoring harness calls and the agent never imports.
+   The agent finds the state it plays from by itself (`anygame/discover.py`: position from what the d-pad changes,
+   map from what changes across a transition), with no addresses written by a person.
+2. **Both ROMs, every phase.** Pokemon Red and Aevilia (a free homebrew RPG) run on the same pack shape and the same
+   code; nothing is written for one of them.
+3. **Save states are the one forward model.** The device branches (`PyBoyDevice.branch`): from a snapshot, play each
+   input for N frames, keep the screen, state and RAM, restore. It already decides what kind of screen this is (below),
+   feeds discovery, and is the instrument for the Jev audit.
+4. **Any screen with a choice is a question to the decider.** The `probe` read branches wait, A, START, B and the four
+   directions from the same moment and compares what each did: a direction that moves the position is `walk`; a
+   direction that changes the screen without moving it is `choice` (a menu, a yes/no, a character select: asked); only
+   A changing it is `text` (paged by an `auto:` rule); only START or B is `button` (asked); nothing is `none` (a cutscene:
+   wait). Only `text` is handled without the decider.
+5. **Goals come from what the game says.** A hand-written goal list with Pokemon's map ids cannot exist when the
+   agent's map ids are its own discovered signatures. The milestone table below grades; goals the agent acts on come
+   later from the dialogue log (roadmap G5). Until then the agent explores and inspects.
+6. **Every decision logs the decider's pick and the top-ranked option**, so the audit can replay both from a save state.
 
 ## Why this game
 
@@ -89,7 +114,9 @@ general; only the RAM map, the goal list and a few game facts are Pokemon-specif
 
 `pyboy://<rom>` already existed for the 2048gb homebrew. It gains:
 
-- **RAM state.** The pack's `ram:` section names addresses and how to decode them: `u8`, `u16` (big/little
+- **Discovered state** (`discover: true`): position, step size and a map signature found from RAM while playing, kept
+  in `discovered.yaml` beside the pack for the next run. This is the agent's state.
+- **RAM state** (for packs that are allowed a map; not Pokemon or Aevilia). The pack's `ram:` section names addresses and how to decode them: `u8`, `u16` (big/little
   endian), `bcd` (money), `bits` (badges, as a count and a list), `bytes` (an array), `text` with a charmap
   (names, the text on screen read from the tile map). `device.state()` returns the decoded dict every tick, and
   the existing `json` reads consume it, exactly as the browser games that publish their state do.
@@ -103,25 +130,26 @@ general; only the RAM map, the goal list and a few game facts are Pokemon-specif
   from its start.
 - **Screenshots** stay for Jev's optional view, the HUD and debugging; they are not the state source.
 
-### 2. RAM map (Pokemon-specific data, general mechanism)
+### 2. RAM map (grader only)
 
-From pret/pokered `wram.asm`: map id 0xD35E, y 0xD361, x 0xD362, party count 0xD163, party species 0xD164,
+The grader (`anygame/graders/pokemon_red.py`) reads, from pret/pokered `wram.asm`: map id 0xD35E, y 0xD361, x 0xD362, party count 0xD163, party species 0xD164,
 party structs from 0xD16B (44 bytes each: HP, level, max HP, moves, PP), badges 0xD356, money 0xD347 (3 bytes
 BCD), in-battle 0xD057, enemy species/HP/level around 0xCFE5, player's battle mon around 0xD014, menu cursor
 0xCC26 and max item 0xCC28, the screen's tile map 0xC3A0 (20x18), event flags from 0xD747, bag 0xD31D. These are
 checked one by one against the ROM before they are trusted (a short script prints each while a scripted
 sequence of known actions runs).
 
-For games without a public RAM map, `anygame ramscan` (new) finds position and map bytes by itself: it walks the
-player in each direction and keeps the bytes that change by +1/−1 in step with the moves. That is how the
-homebrew stand-in (Aevilia) was mapped, and it is the general path for "any game".
+The agent's own state comes from `anygame/discover.py` while it plays, and `anygame ramscan` does the same offline:
+the bytes that change by +1/−1 in step with the d-pad are the position, and the bytes that change across a fade or a
+position jump, and never while walking, are the map's signature. On Aevilia this found the position (the game's
+own `wYPos`/`wXPos` or the player's entity copy of them) and a map signature with no documentation.
 
-### 3. Situations and auto rules (general)
+### 3. Situations, found by branching (general)
 
-At any tick the game is in one situation, decided from reads: overworld, dialogue, menu, battle, transition.
-The pack's `auto:` list maps routine situations to a key without asking the decider: dialogue → A, a
-"yes/no" that the goal already answers → A, a transition → wait. Jev is only asked where there is a choice.
-In Pokemon that cuts calls by roughly 10x, since most frames are text.
+At any tick the `probe` read says what kind of screen this is: walk, choice, text, button or none (see Decisions,
+item 4), by trying each input in a branch from a save state, so no colour, layout or address of any game is needed.
+The `auto:` list handles only `text` (A) and `none` (wait) without the decider. Every choice, including the naming
+screen, the starter and any yes/no, is a question. Text is still most frames of an RPG, so most ticks make no call.
 
 ### 4. World memory and navigator (general, for any tile-based game)
 
@@ -237,9 +265,9 @@ hours. The offline stand-in (takes the top-ranked option) and random deciders ru
 
 | Phase | Work | What it proves |
 |---|---|---|
-| 0 | Emulator device with RAM state, game clock, save states; `ramscan`; tested on Aevilia (free homebrew RPG) | The adapter is general and fast; RAM beats pixels for state |
-| 1 | `auto:` rules, `world` read, `goals:`; Aevilia from new game to leaving the first map, measured | The long-horizon layer works on a game it was not written for |
-| 2 | Pokemon Red pack: RAM map verified, intro, Red's room to Route 1 with a starter (milestones 0–3) | Intro, scripted events, first battle |
+| 0 | Emulator device with discovered state, game clock, save states, branching; graders; tested on Aevilia | The adapter is general; state is found, not written |
+| 1 | `probe` read, `world` read, dialogue log; both ROMs from power-on through the intro and the first choices, graded | One pack shape plays two RPGs it was not written for |
+| 2 | Pokemon: Red's room to Route 1 with a starter (milestones 0–3); Aevilia out of the tutorial; first Jev audit | Intro, scripted events, first battle; whether Jev's picks matter |
 | 3 | Battle option ranking (moves, type chart, switching, run); healing goal | Battles are decided, not mashed |
 | 4 | Viridian to the Boulder Badge (milestones 4–6) | Forest maze, trainers, a gym: one full loop of the game |
 | 5 | Through Cerulean, Vermilion, Lavender (7–12), catching and party management | Hours-long runs without getting stuck; HMs |
