@@ -102,7 +102,7 @@ export function checkTasks(tasks: any, reads: Record<string, ReadDef>, where = "
 export interface ModeWhen { read?: string; equals?: any; in?: any[]; not?: any; fingerprint?: string }
 
 /** A mode is the base pack with these keys overridden or merged. */
-export const MODE_KEYS = ["zones", "read", "act", "play", "questions", "rules", "act_when", "stop_when", "settle", "tick_hz", "reflex", "plausible"];
+export const MODE_KEYS = ["zones", "read", "act", "play", "questions", "rules", "act_when", "stop_when", "settle", "tick_hz", "reflex", "plausible", "ask", "ask_when"];
 
 export function mergeMode(base: Record<string, any>, mode: Record<string, any>): Record<string, any> {
   const out: Record<string, any> = { ...base };
@@ -208,6 +208,10 @@ export function loadPack(text: string, name = "pack"): Pack {
   const rules: Record<string, any>[] = raw.rules ?? [];
   for (const c of Array.isArray(raw.reflex) ? raw.reflex : raw.reflex ? [raw.reflex] : []) {
     if (!condOk(c)) throw new PackError(`${name}: reflex needs {read, equals|in|not|gte|lte} (or a list of them): when it holds, the rules act on the decider's last answers without asking it`);
+  }
+  if (raw.ask !== undefined && raw.ask !== null && raw.ask !== "async") throw new PackError(`${name}: ask: async is the only option (the decider runs beside the loop, which acts on its last answers meanwhile)`);
+  for (const c of Array.isArray(raw.ask_when) ? raw.ask_when : raw.ask_when ? [raw.ask_when] : []) {
+    if (!condOk(c)) throw new PackError(`${name}: ask_when needs {read, equals|in|not|gte|lte} (or a list of them): with ask: async, the decider is asked only when it holds`);
   }
   for (const rl of rules) {
     const cs: any[] = Array.isArray(rl.if) && rl.if.length ? rl.if : [rl.if ?? {}];   // a list: all must hold

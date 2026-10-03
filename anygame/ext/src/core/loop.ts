@@ -5,6 +5,7 @@ export interface TaskEvent { id: string; category: string; outcome: "done" | "fa
 import { aroundOf, marginOf, marginNum, readAll, type Values } from "./reads.js";
 import { TetrisTracker } from "./tetris.js";
 import { slideOf } from "./slide.js";
+import { GapTracker } from "./gap.js";
 import { FingerprintIndex, fingerprint, fpToBase64, type Fingerprint } from "./fingerprint.js";
 import { palette } from "./color.js";
 import { violations } from "./plausible.js";
@@ -17,17 +18,20 @@ export interface Device {
   state?(): Promise<any>;          // a game that publishes its state: what the json / json_grid reads consume
   tap(x: number, y: number): Promise<void>;
   swipe(x0: number, y0: number, x1: number, y1: number, ms?: number): Promise<void>;
-  key(name: string, holdMs?: number): Promise<void>;
+  // opts.block false: key down now, up on the first device call after holdMs, so the loop is not held up (a device
+  // that cannot do that holds it in place); opts.extend: the same key pressed again while still held keeps holding
+  key(name: string, holdMs?: number, opts?: { block?: boolean; extend?: boolean }): Promise<void>;
   mouseMove?(dx: number, dy: number): Promise<void>;     // relative motion (a camera, a cursor)
   close(): Promise<void>;
 }
 
+interface Inflight { settled: boolean; result?: SensorResult; error?: string }
 export interface Answer { type: string; choice?: string; probabilities?: Record<string, number>; confidence?: number; noul?: number; score?: number }
 export interface SensorResult { answers: Record<string, Answer>; latency_ms: number; input_tokens: number; cost_usd: number; model?: string }
 export interface Sensor { ask(state: any, questions: Record<string, any>): Promise<SensorResult>; model?: string }
 
 export interface Rec { tick: number; hash: string; perception_ms: number; timings_ms: Record<string, number>; screen: Values; action: string; reason?: string; choice?: string; rules?: string[]; action_probs?: Record<string, number>; nouls?: Record<string, number>; choices?: Record<string, string | undefined>; jev_ms?: number; tokens?: number; cost_usd?: number; total_cost_usd?: number; sensor?: string; acted_after_ms?: number;
-  mode?: string; support?: number; known?: string | null; fallback?: string; skipped?: string; reread?: number; implausible?: string[] }
+  mode?: string; support?: number; known?: string | null; fallback?: string; skipped?: string; reread?: number; implausible?: string[]; asked?: string; sensor_error?: string }
 
 export function stableHash(v: any): string {
   const s = JSON.stringify(v, (_, val) => (val && typeof val === "object" && !Array.isArray(val) ? Object.keys(val).sort().reduce((o: any, k) => ((o[k] = val[k]), o), {}) : val));
@@ -81,12 +85,14 @@ export class Agent {
   sensorEwmaMs = 0;        // what the decider has been taking lately: the per-tick budget is judged against it
   budgetSkips = 0;         // consecutive ticks the decider was skipped for the budget
   skippedBudget = 0;       // over the run
-  skippedReflex = 0;       // ticks the pack's reflex condition acted on the last answers without the decider
+  skippedReflex = 0;
+  inflight: Inflight | null = null;    // ask: async — the decider call running beside the loop, if any
+  askedAsync = 0;          // calls started that way, over the run       // ticks the pack's reflex condition acted on the last answers without the decider
   accepted: Values | null = null;   // the last reading that passed the pack's plausibility checks
   implausibleTicks = 0;    // consecutive ticks whose reads broke a check even after re-reading
   implausibleTotal = 0;
   rereads = 0;             // fresh frames taken because a reading broke a check
-  trackers: Record<string, TetrisTracker> = {};
+  trackers: Record<string, any> = {};        // per-run state of derived reads: TetrisTracker, GapTracker
   onRecord?: (rec: Rec, frame: Frame, answers: Record<string, Answer> | null) => void;
   // ---- the hybrid: which screen is this, does the pack understand it, and who decides when it does not
   base: Pack;
@@ -351,6 +357,7 @@ export class Agent {
 
   lastState: any = undefined;
   observe(frame: Frame, pack: Pack = this.pack, state: any = this.lastState): { values: Values; timings: Record<string, number>; conf: Record<string, number> } {
+    const tFrame = performance.now() / 1000;
     const { values: raw, timings, conf } = readAll(pack, frame, undefined, state);
     const values = this.present(raw, pack);
     for (const [rid, r] of Object.entries(pack.reads)) {
@@ -373,6 +380,11 @@ export class Agent {
       if (r.kind === "predict") values[rid] = predictCell(values[r.of], values[`${r.of}_prev`], Number(r.steps ?? 1));
       if (r.kind === "around") values[rid] = aroundOf(values[r.of], raw[r.in], values[`${r.of}_moving`] ?? null, r);
       else if (r.kind === "margin") values[rid] = r.in !== undefined ? marginOf(values[r.of], raw[r.in], r) : marginNum(values[r.of], r);
+      else if (r.kind === "gap") {
+        // distance to the next obstacle in a runner, its closing speed and time to contact
+        if (!this.trackers[rid]) this.trackers[rid] = new GapTracker(r);
+        values[rid] = this.trackers[rid].read(raw[r.in], tFrame);
+      }
       else if (r.kind === "tetris") {
         if (!this.trackers[rid]) this.trackers[rid] = new TetrisTracker(r);
         values[rid] = this.trackers[rid].read(raw[r.in], r.next_in ? raw[r.next_in] : null);
@@ -395,6 +407,12 @@ export class Agent {
     const [w, h] = this.device.size();
     const p = a.params;
     if (a.kind === "wait") return "wait";
+    if (a.kind === "key" && Number(p.hold_ms ?? 0) && p.release === "later") {
+      // held without stopping the loop: let go on the first frame after hold_ms
+      const hold = Number(p.hold_ms);
+      await this.device.key(p.key, hold, { block: false, extend: p.repeat === "hold" });
+      return `key ${p.key} down, up after ${hold} ms`;
+    }
     if (a.kind === "key") { const hold = Number(p.hold_ms ?? 0); if (hold) { await this.device.key(p.key, hold); return `key ${p.key} held ${hold} ms`; } await this.device.key(p.key); return `key ${p.key}`; }
     if (a.kind === "chunk") {
       // a short input sequence as one decision (what a demonstration's recurring key runs become)
@@ -582,7 +600,31 @@ export class Agent {
     let res: SensorResult;
     const budget = Number(this.pack.raw.budget_ms ?? 0);
     const reflex = this.pack.raw.reflex;
-    if (reflex && this.lastAnswers && this.pack.rules.length && this.taskOk(reflex, values)) {
+    const askAsync = this.pack.raw.ask === "async" && this.pack.rules.length > 0;
+    let fresh: SensorResult | null = null;
+    if (askAsync && this.inflight?.settled) {
+      // the decider's answer to an earlier frame has come back: it becomes the policy from this frame on
+      if (this.inflight.result) {
+        fresh = this.inflight.result;
+        const lat = Number(fresh.latency_ms ?? 0);
+        this.sensorEwmaMs = this.sensorEwmaMs ? 0.7 * this.sensorEwmaMs + 0.3 * lat : lat;
+      } else { this.errors++; rec.sensor_error = this.inflight.error; }
+      this.inflight = null;
+    }
+    if (askAsync && this.lastAnswers && !this.inflight && !fresh) {
+      const askWhen = this.pack.raw.ask_when;
+      if (!askWhen || this.taskOk(askWhen, values)) {
+        // ask without waiting: the loop keeps reading frames and acting on the last answers while the call runs
+        // (a fast game moves on during a 400 ms call, and a blocked loop sees none of it)
+        const fl: Inflight = { settled: false };
+        this.sensor.ask(state, qs).then((r) => { fl.result = r; }, (e) => { fl.error = String((e as Error)?.message ?? e).slice(0, 120); }).finally(() => { fl.settled = true; });
+        this.inflight = fl;
+        this.askedAsync++;
+        rec.asked = "async";
+      }
+    }
+    if (fresh) res = fresh;
+    else if (reflex && this.lastAnswers && this.pack.rules.length && this.taskOk(reflex, values)) {
       // a reflex: the fresh frame already needs a move before the decider could answer (Snake, a turn into a wall
       // that needs a second turn on the very next step). The rules act on the decider's last answers, its ranking of
       // the moves, at perception speed; the decider is asked again on the next frame
@@ -590,6 +632,11 @@ export class Agent {
       res = { answers: JSON.parse(JSON.stringify(this.lastAnswers)), latency_ms: 0, input_tokens: 0, cost_usd: 0 };
       rec.sensor = "reflex: " + (Array.isArray(reflex) ? reflex : [reflex]).map((c: any) => `${c.read}=${get(values, c.read)}`).join(", ") + " → rules on last answers";
       rec.skipped = "reflex";
+    } else if (askAsync && this.lastAnswers) {
+      // no fresh answer this frame: the rules act on the last ones (a call may be running beside the loop)
+      res = { answers: JSON.parse(JSON.stringify(this.lastAnswers)), latency_ms: 0, input_tokens: 0, cost_usd: 0 };
+      rec.sensor = "async: rules on last answers" + (this.inflight ? " (call in flight)" : "");
+      rec.skipped = "async";
     } else if (budget && this.lastAnswers && this.pack.rules.length && tPerc + this.sensorEwmaMs > budget && this.budgetSkips < Number(this.pack.raw.budget_skip_max ?? 2)) {
       // the tick cannot afford the decider: the rules act on its last answers (the post-posed shield), at most
       // budget_skip_max ticks in a row so a slow decider is never starved out of the loop

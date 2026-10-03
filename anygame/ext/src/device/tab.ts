@@ -51,6 +51,7 @@ export class TabDevice implements Device {
 
   async frame(): Promise<Frame> {
     await this.attach();
+    await this.releaseDue();
     const r = this.region!;
     const res = await this.send("Page.captureScreenshot", { format: "jpeg", quality: this.jpegQuality, clip: { x: r.x, y: r.y, width: r.w, height: r.h, scale: this.scale }, fromSurface: true });
     const bytes = Uint8Array.from(atob(res.data), (c) => c.charCodeAt(0));
@@ -88,13 +89,36 @@ export class TabDevice implements Device {
     await this.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: bx, y: by, button: "left", clickCount: 1 });
   }
 
-  async key(name: string, holdMs = 0): Promise<void> {
+  private pendingUp: { name: string; at: number } | null = null;     // a key held without blocking: when to let go
+
+  async key(name: string, holdMs = 0, opts: { block?: boolean; extend?: boolean } = {}): Promise<void> {
     await this.attach();
+    if (opts.extend && this.pendingUp?.name === name && holdMs && opts.block === false) {
+      // the same key again while it is still held, for a hold that should last (a duck): keep holding and let go
+      // holdMs from now. Not for a press that must come down anew to count (a jump)
+      this.pendingUp = { name, at: performance.now() + holdMs };
+      return;
+    }
+    await this.releaseDue(true);
     const k = keyInfo(name);
     const base = { key: k.key, code: k.code, windowsVirtualKeyCode: k.vk, nativeVirtualKeyCode: k.vk };
     await this.send("Input.dispatchKeyEvent", { type: k.text ? "keyDown" : "rawKeyDown", ...base, text: k.text, unmodifiedText: k.text });
+    if (holdMs > 0 && opts.block === false) {
+      // down now, up on the first device call after holdMs (the next frame, usually): a jump held 120 ms in a fast
+      // game does not cost a frame
+      this.pendingUp = { name, at: performance.now() + holdMs };
+      return;
+    }
     if (holdMs > 0) await new Promise((r) => setTimeout(r, holdMs));     // a held key: a run, a charge, a camera turn
     await this.send("Input.dispatchKeyEvent", { type: "keyUp", ...base });
+  }
+
+  private async releaseDue(force = false): Promise<void> {
+    const p = this.pendingUp;
+    if (!p || (!force && performance.now() < p.at)) return;
+    this.pendingUp = null;
+    const k = keyInfo(p.name);
+    await this.send("Input.dispatchKeyEvent", { type: "keyUp", key: k.key, code: k.code, windowsVirtualKeyCode: k.vk, nativeVirtualKeyCode: k.vk });
   }
 
   private mx = -1; private my = -1;

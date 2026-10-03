@@ -215,3 +215,70 @@ test("go playouts agree with the Python compiler's on real boards from the Jev r
   const mean = diffs.reduce((a, b) => a + b, 0) / diffs.length;
   assert.ok(mean < 0.05 && Math.max(...diffs) < 0.15, `win-rate gap mean ${mean.toFixed(3)} max ${Math.max(...diffs)}`);
 });
+
+// ---- the dino: gap read, asking beside the loop, keys held without blocking ----------------------------------
+test("gap read gives distance, speed and time to contact", async () => {
+  const { GapTracker } = await import("../dist/core.js");
+  const g = new GapTracker({ kind: "gap", in: "road", symbol: "#", cell_px: 10, row_names: ["chest", "low"], speed0: 300, speed_range: [50, 2000] });
+  const road = (col, width = 2, rows = [2]) => { const o = {}; for (let c = 1; c <= 40; c++) for (const r of [1, 2]) o[`c${c}r${r}`] = col <= c && c < col + width && rows.includes(r) ? "#" : "."; return o; };
+  assert.deepEqual(g.read(road(99), 0.0), { cells: 40, px: 400, width_px: 0, rows: "none", then_px: null, speed: 300, ttc_ms: null, age_ms: null, then_ms: null });
+  const a = g.read(road(31), 1.0);
+  assert.deepEqual([a.px, a.width_px, a.rows, a.speed, a.ttc_ms, a.age_ms], [300, 20, "low", 300, 1000, 0]);
+  const b = g.read(road(21, 2, [1, 2]), 1.2);
+  assert.deepEqual([b.px, b.rows, b.speed, b.ttc_ms, b.age_ms], [200, "chest,low", 500, 400, 200]);
+  const c = g.read(road(36, 2, [1]), 1.3);
+  assert.deepEqual([c.px, c.rows, c.speed, c.age_ms, c.then_ms], [350, "chest", 500, 0, null]);
+  const two = { ...road(11) }; for (const col of [21, 22]) two[`c${col}r2`] = "#";
+  const d = g.read(two, 1.4);
+  assert.deepEqual([d.px, d.width_px, d.then_px, d.then_ms], [100, 20, 100, 200]);
+});
+
+test("the dino jumps on the frame and asks the decider beside the loop", async () => {
+  const pack = packFromText(BUNDLED_PACKS["web-dino"], "web-dino");
+  const W = 540, H = 560;
+  const xs = [null, null]; for (let x = 520; x > 60; x -= 30) xs.push(x);
+  const dev = {
+    i: -1, keys: [], size: () => [W, H],
+    async frame() {
+      await new Promise((r) => setTimeout(r, 50));
+      this.i = Math.min(this.i + 1, xs.length - 1);
+      const d = new Uint8ClampedArray(W * H * 4).fill(247);
+      const box = (x0, y0, x1, y1) => { for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) { const k = (y * W + x) * 4; d[k] = d[k + 1] = d[k + 2] = 83; } };
+      box(56, 232, 92, 268);                                   // the dino, standing
+      if (xs[this.i] !== null) box(xs[this.i], 230, xs[this.i] + 40, 266);     // a wide cactus
+      for (let k = 3; k < d.length; k += 4) d[k] = 255;
+      return { width: W, height: H, data: d };
+    },
+    async key(name, hold = 0, opts = {}) { this.keys.push([this.i, name, hold, opts.block !== false]); },
+    async tap() {}, async swipe() {}, async close() {},
+  };
+  let calls = 0;
+  const slow = { model: "slow", async ask(state, qs) {
+    calls++;
+    await new Promise((r) => setTimeout(r, 300));
+    const wide = ((state.screen.next ?? {}).width_px ?? 0) >= 30;
+    const p = wide ? { duck: 0.5, jump: 0.3, drop: 0.1, keep: 0.1 } : { keep: 0.7, jump: 0.2, duck: 0.08, drop: 0.02 };
+    const choice = Object.entries(p).sort((a, b) => b[1] - a[1])[0][0];
+    return { answers: { action: { type: "choice", choice, probabilities: Object.fromEntries(Object.keys(qs.action.criteria).map((c) => [c, p[c] ?? 0])) } }, latency_ms: 300, input_tokens: 10, cost_usd: 0 };
+  } };
+  const ag = new Agent(pack, dev, slow);
+  const recs = [];
+  for (let n = 0; n < xs.length; n++) {
+    const t = performance.now();
+    recs.push(await ag.step());
+    assert.ok(performance.now() - t < 250 || recs.length === 1, `tick ${recs.length} blocked the loop`);
+    if (dev.keys.length) break;
+  }
+  assert.equal(calls, 2); assert.equal(ag.askedAsync, 1);
+  const [, name, hold, block] = dev.keys[0];
+  const jumped = recs.at(-1);
+  assert.equal(name, "Space"); assert.equal(hold, 250); assert.equal(block, false); assert.equal(jumped.choice, "jump");
+  assert.ok(jumped.screen.next.ttc_ms <= 205, `jumped at ${jumped.screen.next.ttc_ms} ms to contact`);
+  assert.ok(recs.slice(0, -1).filter((r) => r.choice).every((r) => r.choice === "keep"));
+});
+
+test("the loader checks ask and ask_when", () => {
+  const raw = yaml.load(dumpPack(packFromText(BUNDLED_PACKS["web-dino"], "web-dino").raw));
+  assert.throws(() => loadPack(dumpPack({ ...raw, ask: "sometimes" }), "d"), /ask: async is the only option/);
+  assert.throws(() => loadPack(dumpPack({ ...raw, ask_when: [{ read: "next.px" }] }), "d"), /ask_when needs/);
+});
