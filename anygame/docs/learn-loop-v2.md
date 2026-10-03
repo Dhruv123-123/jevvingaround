@@ -4,7 +4,8 @@
 with Jev deciding and Azure `gpt-5.6-luna` diagnosing and rewriting, on three games where a fix was found by hand
 this week, with that fix taken out.
 
-**Verdict: yes on all three.** On tic-tac-toe the loop found the known fix (a turn read and gate) on its first
+**Verdict: yes on all three. On Go, once the re-rank option existed, the loop chose it on its first diagnosis, and
+with Jev deciding the result won 14 of 16 against the strong white, against 9 of 16** (see the Go section). On tic-tac-toe the loop found the known fix (a turn read and gate) on its first
 rewrite. On Tetris it found the known fix (lookahead on, and "take the top landing") on its second run, after it
 first fixated on a smaller real bug. On Snake it first diagnosed the right kind of problem (latency) but never reached
 for `reflex:`; after a catalog that maps each kind of fault to the feature that fixes it was added, it found a reflex
@@ -199,8 +200,37 @@ first in `best` past a 0.06 margin); with it the top-pick stand-in wins 14 of 16
 better option and the paragraph says to take it, but the decider keeps taking the first-ranked one), whose fix is
 `rerank: playouts`; a rewrite that turns it on counts as the compiler change the fault needs, and the recorded-frame
 check re-asks Jev when a compiler option changes what it is shown. The start pack for a rerun, without the re-rank,
-is `docs/learn-loop-v2/go-start`. **The rerun, to see whether the loop now picks the option, waits on OpenRouter
-credit.**
+is `docs/learn-loop-v2/go-start`.
+
+**The rerun (2026-10-03 evening, after credit was added): the loop found it.** Same start pack, same 20 learning seeds
+(101 to 120), same 4-game trials. The first loss it diagnosed (seed 102, the same game as the first run's first
+loss) read: *"playout-leader-ignored [compiler/ignores_measure]: the decider repeatedly chose the first-ranked move
+even when the measured playout leader was at least 0.06 better"*, fix `rerank: playouts` with `rerank_margin: 0.06`.
+The first rewrite added exactly those two lines to the go read and nothing else. Re-asked on the evidence positions,
+Jev now played the playout leader (c2r6, win 0.10 to 0.14, where it had played moves at 0.0). Trial: 2 won, 2 lost,
+against 1 and 1 before; kept. Four later diagnoses (a bad-choice rule, a "deeper lookahead" option that does not
+exist for Go, a paragraph change, a settle change) were refused or still on trial when the 20 games ended.
+
+Tested on the 16 seeds:
+
+| Pack | Seeds | Won | Mean lead | Median |
+|---|---|---|---|---|
+| unchanged (first day) | 1–16 | 9 | +18.6 | +13.5 |
+| unchanged (second day) | 11–16 | 2 of 6 | +1.2 | −7.5 |
+| first run's learned pack (settle, no doomed points) | 1–16 | 8 | +20.3 | +5.5 |
+| **rerun's learned pack (rerank on)** | **1–16** | **14** | **+35.4** | **+23.5** |
+| rerun's learned pack, same day as the second baseline | 11–16 | 6 of 6 | | |
+
+The rerank pack wins 14 of 16 with Jev deciding, against 9 of 16 for the unchanged pack; on seeds 11 to 16, run the
+same day, 6 of 6 against 2 of 6. Seeds 1 to 10 of the baseline were run the day before; white plays a fixed number of
+playouts, so the comparison holds across days better than a time-bounded white would, but it is not same-day for
+those ten. PR #8's hand-made pack (rerank plus a paragraph saying "play the first `best` move") got 14 of 16 with the
+top-pick stand-in; the loop's pack keeps the old paragraph and gets 14 of 16 with Jev. Pack:
+`docs/learn-loop-v2/go-learned-rerank`. Logs: `/mnt/project-files/anygame/learn-loop-v2/go/rerun/` and `seeds11-16/`.
+
+Jev for the second Go day: $0.24 by the game logs (learning $0.10, the rerank test $0.08, seeds 11 to 16 twice
+$0.06); the OpenRouter account's usage rose by $0.50 over the same hours, the rest being the checks' re-asks of Jev
+(not booked in the game logs) and any other thread's use.
 
 Jev for the Go test: $0.23 (baseline $0.08, learning $0.10, test of v3 $0.06). Azure: 7 diagnoses, 12 rewrite calls.
 Pack: `docs/learn-loop-v2/go-learned`. Logs: `/mnt/project-files/anygame/learn-loop-v2/go/` (`baseline/`,
