@@ -24,9 +24,10 @@ stop_when: { read: status, equals: over }
 play: >
   Tetris on a 10x20 board. `piece` is the falling tetromino and `next` the one after it. `landings` are the
   reachable places this piece can be dropped, each with its computed consequences (lines cleared, holes made,
-  the stack height afterwards, bumpiness), already ranked best first by a placement
-  score that weighs all of them: `a` is the best by that score. Take `a` unless another landing clears more
-  lines without making more holes than `a`. `place` is the only useful action; `wait` only when `landings` is empty.
+  the stack height afterwards, bumpiness), already ranked best first by a placement score that weighs all of
+  them and also looks ahead to where `next` will fit: `a` is the best by that score. Take `a`. A landing that
+  clears a line now can still be worse than `a`, because `a` may set up a bigger clear with `next`.
+  `place` is the only useful action; `wait` only when `landings` is empty.
 questions:
   - id: stack_dangerous
     type: noul
