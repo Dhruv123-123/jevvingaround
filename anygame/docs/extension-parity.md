@@ -22,9 +22,10 @@ Branch `claude/anygame-extension-parity-nknhcy`, PR #4 (https://github.com/Dhruv
 | authoring prompt text for `plausible:` | missing | `author.ts` | text matches `author.py` |
 | dino: `frames: stream` (Chrome's screencast instead of a screenshot per frame) | screenshots only | `TabDevice.stream()`, cropped to the region; falls back to a screenshot when nothing new is painted | dino e2e: the loop runs at ~28 frames a second (14 with screenshots) |
 | dino: `again_ms` (a key is not pressed again this soon) | missing | `loop.ts` | unit test |
+| dino: `lock_ms` (after a jump, no other key for 100 ms: PR #7, `claude/anygame-dino-framerate-wtqykg`) | missing; the pack loaded and the setting was ignored | `loop.ts` | unit test on PR #7's pack (`ext/test/fixtures/web-dino-lock.yaml`); 4 stand-in games on chromedino.com with that pack: 769–1240, ~29 fps, nothing broke |
 | a missing number never meets `gte`/`lte` (Python's `float(None)` fails) | `Number(null)` is 0, so a null read met every `lte` | `loop.ts` | unit test; found on chromedino.com (below) |
 
-Extension tests: 61 pass (41 before), and `tsc` is clean. Python: 81 pass.
+Extension tests: 62 pass (41 before), and `tsc` is clean. Python: 81 pass.
 
 ## Played in headless Chromium from the extension panel
 
