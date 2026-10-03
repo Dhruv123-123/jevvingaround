@@ -857,7 +857,7 @@ class Agent:
             # each direction against waiting, from the same moment: what the press changed and nothing else, which is
             # what finding the position needs (a timer or an animation changes in both and cancels out)
             for k in dirs:
-                disc.press(k, res["wait"]["ram"], res[k]["ram"])
+                disc.press(k, res["wait"]["ram"], res[k]["ram"], full=False)
         base = res["wait"]["screen"].astype(_np.int16)
         thr = float(r.get("min_change", 0.3))
         differs = {k: float(_np.abs(v["screen"].astype(_np.int16) - base).mean()) > thr for k, v in res.items() if k != "wait"}

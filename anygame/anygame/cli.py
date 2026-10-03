@@ -156,6 +156,8 @@ def _attach_grader(agent, device, saves: str | None = None):
 
     def on_record(rec, frame):
         new = g.update(device.memory, when=getattr(device, "frames", None))
+        # the grader's map and position beside the tick, for checking what the agent discovered (the log only)
+        rec["truth"] = {k: g.last.get(k) for k in ("map", "x", "y") if k in (g.last or {})}
         if new:
             rec["grader"] = new
             print(f"milestone: {', '.join(new)} at tick {rec.get('tick')} ({getattr(device, 'frames', 0) / 3600:.1f} game-min)", file=sys.stderr)
