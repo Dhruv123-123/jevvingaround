@@ -48,12 +48,10 @@ questions: []
 rules:
   # timing is the rules' job: no move before the obstacle is close, then the full jump at 205 ms to contact from
   # the road's start (about 250 ms from the dino's nose). When the next obstacle follows within 650 ms, the full
-  # jump would land too late for it: then a low jump, later (150 ms), so it is still up while the first goes by.
+  # jump would land too late for it: then the low jump, at the same moment, so it lands ~120 ms sooner.
   - { if: { read: next.ttc_ms, gte: 206 }, exclude: [jump, long_jump, duck] }
   - { if: { read: next.rows, equals: none }, exclude: [jump, long_jump, duck, drop] }
-  - { if: [{ read: next.ttc_ms, lte: 205 }, { read: dino, equals: ground }, { read: above, equals: clear }], exclude: [keep, drop], unless: { read: next.then_ms, lte: 650 } }
-  - { if: [{ read: next.ttc_ms, lte: 150 }, { read: dino, equals: ground }, { read: above, equals: clear }], exclude: [keep, drop] }
-  - { if: { read: next.ttc_ms, gte: 151 }, exclude: [jump] }
+  - { if: [{ read: next.ttc_ms, lte: 205 }, { read: dino, equals: ground }, { read: above, equals: clear }], exclude: [keep, drop] }
   - { if: { read: next.rows, not: none }, exclude: [jump], unless: { read: next.then_ms, lte: 650 } }
   - { if: { read: next.then_ms, lte: 650 }, exclude: [long_jump], unless: { read: next.rows, contains: head } }
   # a tall cactus needs the full jump, close behind or not
