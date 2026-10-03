@@ -19,19 +19,24 @@ Base: `claude/anygame-jev-scale-run-dubj38` (which already contains `scale-run`)
 | 8 | author-real-games-qzqqin (PR #2, contains real-web-trial-7zpmin) | `pack.py`, `perceive/__init__.py`, `ext/src/core/pack.ts`, `ext/src/core/reads.ts`, `ext/test/eval.test.mjs` | Additive: read kinds `go`, `slide`, `head` all kept (Python and TS); the extension test imports both `goRead` and `isHollow` |
 | 9 | plausible-reads | `pack.py` | Additive: `MODE_KEYS` keeps `reflex` and `plausible`; `load_pack` keeps the rule shape checks and runs the plausible spec check after the rule loop |
 | 10 | go-playouts | `test/test_anygame.py` | Both tests kept |
+| 11 | dino-reflex | `pack.py`, `perceive/__init__.py` | Additive: read kinds add `gap`; `MODE_KEYS` keeps `reflex`, `plausible`, `ask`, `ask_when` |
 
 No conflict needed one side's behaviour dropped. The auto-merged question builder was checked by hand: 2048's
 `criteria_from` replaces options first, Go's refused-move filter runs after the parameter questions are built, and
 snake's `reflex` branch and the budget skip sit side by side, in both `loop.py` and `loop.ts`.
 
-Not merged: `dino-reflex` (still in progress). It is built on the snake branch plus PR #2, both now in this branch.
+The dino branch's `web-dino` pack did not load in the extension; its own branch fails the extension test the same way.
+The merge commit adds the smallest port that loads and runs it: the TS runtime accepts a `gap` read (null there,
+like OCR) and runs rules like the Python loop (an `if` list must all hold, `unless` cancels a rule, `contains` matches
+an item of a list or comma-joined read), with a test. The async ask, the frame-timed jump and key holds are still
+CLI-only; that is the extension-parity thread's work.
 
 ## Tests (final head)
 
-- Python: 82 passed, 1 failed. The failure is `test_nested_display_runs_the_game_in_a_sandbox_the_runtime_owns`, which
+- Python: 84 passed, 1 failed. The failure is `test_nested_display_runs_the_game_in_a_sandbox_the_runtime_owns`, which
   fails the same way on the base branch: this container has no X display for pynput. It needs the `desktop` extra and an X
   server, which CI provides.
-- Extension: `tsc --noEmit` clean, `npm test` 41/41.
+- Extension: `tsc --noEmit` clean, `npm test` 42/42.
 - Pack evals: all 15 bundled packs pass, including 2048 and 2048gb, which failed on every branch before PR #1's
   OCR wait fix came in.
 
