@@ -18,6 +18,7 @@ budget:
 
 seeds: [1, 2, 3]        # a seed sets the boot delay (so the game's RNG differs) and the random decider's draws
 
-# How the agent is run: the generic Game Boy pack, step-locked (no game time passes while the decider thinks).
-pack: gameboy
+# How the agent is run: a generic Game Boy pack, step-locked (no game time passes while the decider thinks).
+# gameboy-blind is the baseline (buttons only); `--pack gameboy` runs the discovered-state agent as its own column.
+pack: gameboy-blind
 device: { idle: 4, hold: 6, after: 16 }

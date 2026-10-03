@@ -31,13 +31,15 @@ def test_agent_never_imports_or_reads_heldout():
     assert not bad, "\n".join(bad)
 
 
-def test_generic_pack_names_no_game():
-    """The pack the suite plays is the same for every game and names none of them."""
-    text = (ROOT / "packs" / "gameboy" / "pack.yaml").read_text().lower()
+@pytest.mark.parametrize("pack", ["gameboy-blind", "gameboy"])
+def test_generic_pack_names_no_game(pack):
+    """A pack the suite plays is the same for every game and names none of them in anything the agent reads
+    (comments aside: they never reach the decider)."""
+    text = json.dumps(yaml.safe_load((ROOT / "packs" / pack / "pack.yaml").read_text())).lower()
     suite = load_suite()
     for gid in suite["games"]:
         for name in {gid, gid.replace("-", " "), gid.replace("-", "")}:
-            assert name not in text, f"packs/gameboy names {name}"
+            assert name not in text, f"packs/{pack} names {name}"
 
 
 def test_suite_games_are_valid():
@@ -92,7 +94,7 @@ def test_run_is_reproducible_by_seed(tmp_path):
             "milestones": [{"id": "on", "desc": "any frame", "when": {"u8": 0xC000, "ge": 0}},
                            {"id": "never", "desc": "a byte is never 300", "when": {"u8": 0xC000, "eq": 300}}]}
     suite = {"budget": {"frames": 1200, "presses": 40, "wall_s": 60, "jev_calls": 40, "usd": 0.01}, "games": {"t2048": game},
-             "pack": "gameboy", "device": {"idle": 4, "hold": 6, "after": 16}}
+             "pack": "gameboy-blind", "device": {"idle": 4, "hold": 6, "after": 16}}
     rows = [run_one(suite, "t2048", "random", 7, tmp_path / f"r{i}") for i in range(2)]
     for r in rows:
         assert r["score"] == 0.5 and r["stop"] in ("frames", "presses")

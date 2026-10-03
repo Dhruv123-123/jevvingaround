@@ -6,8 +6,8 @@
     python -m heldout.report runs/random runs/standin > heldout-score.md
 
 Each run: the game's ROM (fetched and checked, see roms.py) is copied to a fresh folder so no save file carries over;
-the agent gets a step-locked PyBoy device and the generic Game Boy pack, with nothing about the game, not even its
-name; after every agent step the grader reads memory and latches milestones; the run stops at the first budget limit.
+the agent gets a step-locked PyBoy device and a generic Game Boy pack (packs/gameboy-blind by default, or --pack),
+with nothing about the game, not even its name; after every agent step the grader reads memory and latches milestones; the run stops at the first budget limit.
 Output per run: <out>/<game>-<decider>-<seed>.jsonl (one line per step), a summary line in <out>/runs.jsonl, and
 screenshots at each milestone and at the end.
 """
@@ -29,7 +29,7 @@ import yaml
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent                         # anygame/ (the pack and the stand-in live there)
-DECIDERS = ("random", "standin", "jev")
+DECIDERS = ("random", "standin", "top", "jev")
 
 
 def load_suite(path: Path | None = None) -> dict[str, Any]:
@@ -82,6 +82,8 @@ def open_decider(name: str, seed: int, standin: StandIn | None):
     from anygame.sensors import open_sensor
     if name == "random":
         return open_sensor(f"random:{seed}")
+    if name == "top":
+        return open_sensor("top")              # in process: the first option of every choice, the compiler's top pick
     if name == "standin":
         return open_sensor(f"clm:http://127.0.0.1:{standin.port}", timeout=5)
     if name == "jev":
@@ -107,7 +109,7 @@ def _save_png(pb, path: Path) -> None:
 
 
 def run_one(suite: dict[str, Any], gid: str, decider: str, seed: int, out: Path, standin: StandIn | None = None,
-            scale: float = 1.0, fetch: bool = True) -> dict[str, Any]:
+            scale: float = 1.0, fetch: bool = True, pack_name: str | None = None) -> dict[str, Any]:
     from anygame.device.pyboy import PyBoyDevice
     from anygame.loop import Agent
     from anygame.pack import load_pack
@@ -116,7 +118,10 @@ def run_one(suite: dict[str, Any], gid: str, decider: str, seed: int, out: Path,
 
     game = suite["games"][gid]
     budget = budget_for(suite, game, scale)
-    row: dict[str, Any] = {"game": gid, "tier": game["tier"], "kind": game.get("kind"), "decider": decider, "seed": seed,
+    default_pack = suite.get("pack", "gameboy-blind")
+    pack_name = pack_name or default_pack
+    label = decider if pack_name == default_pack else f"{pack_name}+{decider}"   # another agent is its own column
+    row: dict[str, Any] = {"game": gid, "tier": game["tier"], "kind": game.get("kind"), "decider": label, "pack": pack_name, "seed": seed,
                            "milestones": len(game["milestones"]), "budget": budget}
     try:
         rom = resolve(game, fetch=fetch)
@@ -129,15 +134,19 @@ def run_one(suite: dict[str, Any], gid: str, decider: str, seed: int, out: Path,
         shutil.copyfile(rom, local)              # a fresh folder: PyBoy loads <rom>.ram if one sits beside the ROM
         dev = suite.get("device") or {}
         boot = 120 + 17 * seed                   # the seed moves power-on by a few frames, so the game's RNG differs
-        url = f"pyboy://{local}?lock=1&idle={dev.get('idle', 4)}&hold={dev.get('hold', 6)}&after={dev.get('after', 16)}&boot={boot}"
+        # clock=game: step-locked; a pack's own `emulator:` block may set step, hold and after for its agent
+        url = f"pyboy://{local}?clock=game&step={dev.get('idle', 4)}&hold={dev.get('hold', 6)}&after={dev.get('after', 16)}&boot={boot}"
         device = PyBoyDevice(url)
-        pack = load_pack(ROOT / "packs" / suite.get("pack", "gameboy"))
+        # the pack is copied too, so whatever the agent learns about this game (a discovered RAM map) dies with the
+        # run: no seed starts from what an earlier seed found
+        shutil.copytree(ROOT / "packs" / pack_name, work / "pack")
+        pack = load_pack(work / "pack")
         sensor = open_decider(decider, seed, standin)
         agent = Agent(pack, device, sensor, None, background=False)
         grader = Grader(game)
         pb = device._pb                          # the grader's view; the agent only ever gets device.frame()
         mem = pb.memory.__getitem__
-        tag = f"{gid}-{decider}-{seed}"
+        tag = f"{gid}-{label}-{seed}"
         shots = out / "shots"
         shots.mkdir(parents=True, exist_ok=True)
         steps, presses, calls, noop = 0, 0, 0, 0
@@ -152,7 +161,7 @@ def run_one(suite: dict[str, Any], gid: str, decider: str, seed: int, out: Path,
                 act = str(rec.get("action") or "wait")
                 if act not in ("wait", "stop", "keep"):
                     presses += 1
-                if "jev_ms" in rec and decider != "random":
+                if "jev_ms" in rec and decider not in ("random", "top"):
                     calls += 1
                 h = _screen_hash(pb)              # the frame the agent decided on (presses do not render)
                 if h == last_hash:
@@ -200,6 +209,7 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--decider", required=True, choices=DECIDERS)
     ap.add_argument("--games", help="comma-separated game ids (default: every game in suite.yaml)")
     ap.add_argument("--seeds", help="comma-separated seeds (default: suite.yaml)")
+    ap.add_argument("--pack", help="the agent's pack (default: suite.yaml's); a different pack is reported as its own column, <pack>+<decider>")
     ap.add_argument("--out", help="output folder (default: runs/<decider>)")
     ap.add_argument("--scale", type=float, default=1.0, help="multiply the frame/press/time/call budget (a quick check: 0.1)")
     ap.add_argument("--no-fetch", action="store_true", help="never download a ROM; use only what is in the cache")
@@ -218,7 +228,7 @@ def main(argv: list[str] | None = None) -> None:
     try:
         for gid in games:
             for seed in seeds:
-                row = run_one(suite, gid, a.decider, seed, out, standin, a.scale, fetch=not a.no_fetch)
+                row = run_one(suite, gid, a.decider, seed, out, standin, a.scale, fetch=not a.no_fetch, pack_name=a.pack)
                 with open(out / "runs.jsonl", "a") as f:
                     f.write(json.dumps(row) + "\n")
                 brief = {k: row.get(k) for k in ("game", "decider", "seed", "score", "reached", "stop", "presses", "wall_s", "skipped") if row.get(k) is not None}

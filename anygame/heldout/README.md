@@ -12,8 +12,10 @@ python -m heldout.report runs/random runs/standin runs/jev
 
 ## What a run is
 
-- **The agent** is `packs/gameboy`: the eight buttons and a paragraph that names no game. No reads, no rules, no
-  per-game code; the decider is told the game is `gameboy`, never its title. The device is `pyboy://…?lock=1`:
+- **The agent** is `packs/gameboy-blind` by default: the eight buttons and a paragraph that names no game. No reads, no rules, no
+  per-game code; the decider is told the game is `gameboy`, never its title. `--pack gameboy` runs the
+  discovered-state agent instead (RAM scan, branching probe, world memory; still nothing per game), reported as its
+  own column, `gameboy+<decider>`. The device is `pyboy://…?clock=game`:
   step-locked, so no game time passes while the decider thinks and a seed replays exactly.
 - **The grader** (`grader.py`) reads emulator memory after every agent step and latches milestones. It is the only
   code that touches memory. The agent gets frames only.
@@ -61,7 +63,7 @@ source or by RAM search; the agent never sees them).
 ## Keeping it held out
 
 - `heldout/` sits beside the agent package, not in it. `test/test_heldout.py` fails if any module under
-  `anygame/anygame/` imports `heldout` or names it in a string, or if `packs/gameboy` names any suite game.
+  `anygame/anygame/` imports `heldout` or names it in a string, or if a pack the suite plays names any suite game.
 - Nobody tunes on the held-out games: a change made because of a held-out result must also be justified on the
   development games (Pokemon Red, Aevilia), which are worked on openly.
 - The held-out set below is **provisional**. Dhruv picks the real one.

@@ -39,7 +39,7 @@ def table(rows: list[dict[str, Any]]) -> dict[str, Any]:
             continue
         by[(r["game"], r["decider"])].append(r)
     games = sorted({g for g, _ in by}, key=lambda g: (by_tier(rows, g) != "held_out", g))
-    deciders = [d for d in ("random", "standin", "jev") if any(k[1] == d for k in by)] + sorted({d for _, d in by} - {"random", "standin", "jev"})
+    deciders = [d for d in ("random", "standin", "top", "jev") if any(k[1] == d for k in by)] + sorted({d for _, d in by} - {"random", "standin", "top", "jev"})
     cells: dict[tuple[str, str], dict[str, Any]] = {}
     for (g, d), rs in by.items():
         score = statistics.mean(r["score"] for r in rs)
