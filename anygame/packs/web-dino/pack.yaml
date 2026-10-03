@@ -11,14 +11,14 @@ zones:
   # x 111). Four 10 px rows: head (only a tall cactus or a bird reaches it), chest, waist, low (just above the
   # ground; a bird with nothing here can be ducked under)
   ahead:  { rect_px: [114, 222, 540, 262], grid: [71, 4] }
-  front:  { rect_px: [82, 255, 114, 263] }       # between the standing dino's legs and the road: a cactus going under it
+  front:  { rect_px: [44, 256, 114, 264] }       # under the dino and up to the road: a cactus going under it
   feet:   { rect_px: [56, 255, 80, 263] }        # the dino's body when it stands or runs; empty while it is in the air
   sky:    { rect_px: [72, 165, 92, 222] }        # above the dino's head: its body is here only while it jumps
   banner: { rect_px: [170, 175, 375, 195] }      # "GAME OVER"
 read:
   road:   { kind: color, zone: ahead, stat: mean, max_dist: 400, options: { ".": "#f7f7f7", "#": "#c8c8c8" } }   # "#": a sixth or more of the cell is ink
   next:   { kind: gap, in: road, symbol: "#", cell_px: 6, row_names: [head, chest, waist, low], speed0: 380, speed_range: [200, 1200] }
-  under:  { kind: color, zone: front, stat: mean, max_dist: 400, options: { clear: "#f7f7f7", ink: "#c8c8c8" } }
+  under:  { kind: color, zone: front, stat: accent, min_share: 0.03, max_dist: 80, otherwise: clear, options: { clear: "#f7f7f7", ink: "#535353" } }   # any ink: even one thin cactus
   dino:   { kind: color, zone: feet, stat: mean, max_dist: 400, options: { air: "#f7f7f7", ground: "#808080" } }   # ground: the body fills most of the box
   above:  { kind: color, zone: sky, stat: accent, min_share: 0.05, max_dist: 80, otherwise: clear, options: { clear: "#f7f7f7", dino: "#535353" } }
   status: { kind: color, zone: banner, stat: accent, min_share: 0.02, max_dist: 80, otherwise: running, options: { running: "#f7f7f7", over: "#535353" } }
@@ -68,7 +68,7 @@ rules:
   - { if: { read: under, equals: ink }, exclude: [drop] }
   - { if: { read: next.age_ms, gte: 121 }, exclude: [drop] }         # one press per flight
   - { if: { read: next.ttc_ms, gte: 416 }, exclude: [drop] }
-  - { if: [{ read: dino, equals: air }, { read: next.age_ms, lte: 120 }, { read: next.ttc_ms, lte: 415 }], exclude: [keep] }
+  - { if: [{ read: dino, equals: air }, { read: next.age_ms, lte: 120 }, { read: next.ttc_ms, lte: 415 }], exclude: [keep], unless: { read: under, equals: ink } }
   # a low obstacle cannot be ducked; a bird with nothing low is ducked or jumped, by Jev's ranking, and a bird
   # only at head height is never jumped into
   - { if: { read: next.rows, contains: low }, exclude: [duck] }
