@@ -51,12 +51,17 @@ def episode(p, game, seed, args, pack_yaml, size, clm_base):
     path = os.path.abspath(os.path.join(ROOT, "games", page))
     url = "file://" + path + "?" + q
     profile = tempfile.mkdtemp(prefix="anygame-e2e-")
-    ctx = p.chromium.launch_persistent_context(profile, headless=False, executable_path=CHROME if os.path.exists(CHROME) else None,
-        args=["--headless=new", "--no-sandbox", f"--disable-extensions-except={EXT}", f"--load-extension={EXT}", "--window-size=600,900"], viewport={"width": 540, "height": 570}, no_viewport=True)
+    proxy = None
+    if args.sensor == "jev" and os.environ.get("HTTPS_PROXY"):
+        from urllib.parse import urlparse
+        u = urlparse(os.environ["HTTPS_PROXY"])
+        proxy = {"server": f"{u.scheme}://{u.hostname}:{u.port}"}      # its CA must be in ~/.pki/nssdb (certutil)
+    ctx = p.chromium.launch_persistent_context(profile, headless=False, proxy=proxy, executable_path=CHROME if os.path.exists(CHROME) else None,
+        args=["--headless=new", "--no-sandbox", f"--disable-extensions-except={EXT}", f"--load-extension={EXT}", "--window-size=540,900"], viewport={"width": 540, "height": 570}, no_viewport=True)
     try:
         sw = ctx.service_workers[0] if ctx.service_workers else ctx.wait_for_event("serviceworker")
         ext_id = sw.url.split("/")[2]
-        store = {"keys": {"clmBase": clm_base}} if clm_base else {}
+        store = {"keys": {"clmBase": clm_base}} if clm_base else {"keys": {"openrouter": os.environ.get("OPENROUTER_API_KEY") or "proxy"}} if args.sensor == "jev" else {}
         pack_name = game
         if pack_yaml is not None:
             pack_name = f"{game}-variant (authored)"
@@ -64,7 +69,13 @@ def episode(p, game, seed, args, pack_yaml, size, clm_base):
             store["regions"] = {path: {"x": 0, "y": 0, "w": size[0], "h": size[1]}}
         g = ctx.pages[0] if ctx.pages else ctx.new_page()
         g.goto(url); g.wait_for_load_state("load")
-        tab_id = sw.evaluate("async () => { const [t] = await chrome.tabs.query({}); return t.id; }")
+        # the worker can answer before its chrome.* bindings are up: wait for them
+        tab_id = None
+        for _ in range(50):
+            tab_id = sw.evaluate("async () => { if (!globalThis.chrome || !chrome.tabs) return null; const [t] = await chrome.tabs.query({}); return t ? t.id : null; }")
+            if tab_id is not None:
+                break
+            time.sleep(0.2)
         panel = ctx.new_page()
         panel.goto(f"chrome-extension://{ext_id}/panel.html?tab={tab_id}")
         panel.wait_for_function("document.getElementById('log').textContent.includes('ready')", timeout=15000)
@@ -115,7 +126,8 @@ def summarize(game, seed, recs, state, secs):
         out.update(over=bool(state.get("over")), lines=state.get("lines"), score=state.get("score"))
         lands = [r["screen"]["piece"]["landings"] for r in recs if isinstance((r.get("screen") or {}).get("piece"), dict) and r["screen"]["piece"].get("landings")]
         out["ticks_with_landings"] = len(lands)
-        out["took_a"] = sum(1 for r in acting if (r.get("choices") or {}).get("drop__option", r.get("choice")) in ("a",) or r.get("choice") == "a")
+        placed = [r for r in acting if r.get("choice") == "place"]
+        out["placed"], out["took_a"] = len(placed), sum(1 for r in placed if (r.get("choices") or {}).get("place__option") == "a")
     if game == "go" and state:
         sc = state.get("score") or {}
         out.update(over=state.get("over"), black=sc.get("black"), white=sc.get("white"), moves=state.get("moves"))
@@ -131,7 +143,7 @@ def main():
     ap.add_argument("--seeds", default="1-4")
     ap.add_argument("--ticks", type=int, default=150)
     ap.add_argument("--seconds", type=float, default=600)
-    ap.add_argument("--sensor", default="clm", choices=["clm", "random"])
+    ap.add_argument("--sensor", default="clm", choices=["clm", "random", "jev"], help="jev: real Jev on OpenRouter (costs money), through HTTPS_PROXY when set")
     ap.add_argument("--delay", type=int, default=0, help="CLM_STUB_DELAY_MS for the stand-in")
     ap.add_argument("--query", default="")
     ap.add_argument("--out", default="", help="a directory for each episode's records")
@@ -149,7 +161,12 @@ def main():
     try:
         with sync_playwright() as p:
             for s in seeds(args.seeds):
-                print(json.dumps(episode(p, args.game, s, args, pack_yaml, size, clm_base)), flush=True)
+                for attempt in (1, 2):         # a browser that fails to start is tried once more, not counted as a game
+                    try:
+                        print(json.dumps(episode(p, args.game, s, args, pack_yaml, size, clm_base)), flush=True)
+                        break
+                    except Exception as e:  # noqa: BLE001
+                        print(f"seed {s} attempt {attempt}: {e}", file=sys.stderr)
     finally:
         if stub:
             stub.terminate()
