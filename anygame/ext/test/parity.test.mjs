@@ -199,6 +199,13 @@ test("go playouts score the candidates the same way every time", async () => {
   assert.deepEqual(goRead(board, { komi: 6.5, playouts: 32 }).playouts, po);    // seeded from the board
 });
 
+test("go playouts spend more games on the leaders", async () => {
+  const { goRead } = await import("../dist/core.js");
+  const v = goRead(Array(9).fill("........."), { komi: 6.5, playouts: 8, playouts_top: 2, playouts_top_n: 24 });
+  const ns = Object.values(v.playouts).map((x) => x.n).sort((a, b) => a - b);
+  assert.deepEqual(ns.slice(-2), [24, 24]); assert.deepEqual(new Set(ns.slice(0, -2)), new Set([8]));
+});
+
 test("go playouts agree with the Python compiler's on real boards from the Jev run", async () => {
   // test/fixtures/go-playouts.json: four mid-game boards from the go-playouts run with perceive/go.py's 512-playout
   // results. The random streams differ (Python's Mersenne Twister, a small seeded generator here), so the check is
@@ -210,7 +217,7 @@ test("go playouts agree with the Python compiler's on real boards from the Jev r
     const v = goRead(c.board, { komi: 6.5, playouts: 256 });
     assert.deepEqual(v.best, c.best); assert.deepEqual(v.worth, c.worth);
     assert.deepEqual(Object.keys(v.playouts).sort(), Object.keys(c.playouts).sort());
-    for (const k of Object.keys(c.playouts)) diffs.push(Math.abs(v.playouts[k].win - c.playouts[k].win));
+    for (const k of Object.keys(c.playouts)) { assert.equal(v.playouts[k].n, 256); diffs.push(Math.abs(v.playouts[k].win - c.playouts[k].win)); }
   }
   const mean = diffs.reduce((a, b) => a + b, 0) / diffs.length;
   assert.ok(mean < 0.05 && Math.max(...diffs) < 0.15, `win-rate gap mean ${mean.toFixed(3)} max ${Math.max(...diffs)}`);

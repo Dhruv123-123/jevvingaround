@@ -190,29 +190,37 @@ function playout(g0: Uint8Array, p: number, rng: () => number, nb: number[][], d
   return sc[1] - sc[2];
 }
 
-const PLAYOUT_CACHE = new Map<string, Record<string, { win: number; margin: number }>>();
+const PLAYOUT_CACHE = new Map<string, Record<string, number[]>>();      // per board: each candidate's game margins so far
 
 /** For each candidate move of ours: n random games from the board after it (white to move), our win rate and mean
  *  margin after komi. Cached per board and seeded from it, so a board that has not changed costs nothing. */
-export function goPlayouts(b: B, cands: string[], us: string, them: string, w: number, h: number, empty: string, komi: number, n: number): Record<string, { win: number; margin: number }> {
+export function goPlayouts(b: B, cands: string[], us: string, them: string, w: number, h: number, empty: string, komi: number, n: number,
+                           top = 0, topN = 0): Record<string, { win: number; margin: number; n: number }> {
+  // `top` with `topN`: the `top` best of the first pass are played on to `topN` games each, so the close contenders separate
   const flat = (bb: B) => { const g = new Uint8Array(w * h); for (let r = 1; r <= h; r++) for (let c = 1; c <= w; c++) { const v = bb.get(key(c, r)); g[(r - 1) * w + c - 1] = v === us ? 1 : v === them ? 2 : 0; } return g; };
-  const k = `${w}x${h}:${n}:${komi}:` + flat(b).join("");
-  const out = PLAYOUT_CACHE.get(k) ?? {};
-  const todo = cands.filter((p) => !(p in out));
-  if (todo.length) {
-    const [nb, dg] = geometry(w, h);
-    for (const p of todo) {
-      const res = play(b, p, us, them, w, h, empty);
-      if (!res) continue;
-      const g = flat(res.nb), rng = seeded(k + p);
-      let wins = 0, sum = 0;
-      for (let i = 0; i < n; i++) { const m = playout(g, 2, rng, nb, dg) - komi; if (m > 0) wins++; sum += m; }
-      out[p] = { win: Math.round((wins / n) * 100) / 100, margin: Math.round((sum / n) * 10) / 10 };
-    }
-    if (PLAYOUT_CACHE.size > 64) PLAYOUT_CACHE.clear();
-    PLAYOUT_CACHE.set(k, out);
+  const k = `${w}x${h}:${komi}:` + flat(b).join("");
+  let runs = PLAYOUT_CACHE.get(k);
+  if (!runs) { if (PLAYOUT_CACHE.size > 64) PLAYOUT_CACHE.clear(); runs = {}; PLAYOUT_CACHE.set(k, runs); }
+  const starts: Record<string, Uint8Array | null> = {};
+  let geo: [number[][], number[][]] | null = null;
+  const more = (p: string, upto: number) => {
+    const got = (runs![p] ??= []);
+    if (got.length >= upto) return;
+    if (!(p in starts)) { const res = play(b, p, us, them, w, h, empty); starts[p] = res ? flat(res.nb) : null; }
+    const g = starts[p];
+    if (!g) return;
+    geo ??= geometry(w, h);
+    const rng = seeded(k + p + got.length);     // seeded by the games it already has: same board, same games
+    while (got.length < upto) got.push(playout(g, 2, rng, geo![0], geo![1]) - komi);
+  };
+  const summary = (p: string) => { const m = runs![p]; return { win: Math.round((m.filter((x) => x > 0).length / m.length) * 100) / 100, margin: Math.round((m.reduce((a, x) => a + x, 0) / m.length) * 10) / 10, n: m.length }; };
+  for (const p of cands) more(p, n);
+  const done = cands.filter((p) => runs![p]?.length);
+  if (top && topN > n) {
+    const lead = [...done].sort((x, y) => { const a = summary(x), c = summary(y); return c.win - a.win || c.margin - a.margin; }).slice(0, top);
+    for (const p of lead) more(p, topN);
   }
-  return Object.fromEntries(cands.filter((p) => p in out).map((p) => [p, out[p]]));
+  return Object.fromEntries(done.map((p) => [p, summary(p)]));
 }
 export const clearGoPlayoutCache = () => PLAYOUT_CACHE.clear();
 
@@ -280,7 +288,7 @@ export function goRead(src: any, r: ReadDef): Record<string, any> | null {
   const best = Object.keys(worth).sort((a, c) => worth[c] - worth[a]).slice(0, Number(r.top_k ?? 6));
   const extra: Record<string, any> = {};
   const nPo = Number(r.playouts ?? 0);
-  if (nPo > 0) extra.playouts = goPlayouts(b, [...new Set([...best, ...captures, ...saves])], us, them, w, h, empty, komi, nPo);
+  if (nPo > 0) extra.playouts = goPlayouts(b, [...new Set([...best, ...captures, ...saves])], us, them, w, h, empty, komi, nPo, Number(r.playouts_top ?? 0), Number(r.playouts_top_n ?? 0));
   return {
     ...extra,
     legal, good, captures, saves, self_atari: selfAtari, eyes,
