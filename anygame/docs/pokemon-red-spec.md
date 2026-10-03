@@ -1,6 +1,8 @@
 # Pokemon Red, start to finish: spec
 
-Status: draft 2, 2026-10-03. Branch `claude/anygame-pokemon-red-zlo39b`, stacked on `claude/anygame-integration` (PR #3).
+Status: draft 3, 2026-10-03. Draft 3 takes in the full-run gap analysis (`full-run-gaps.md`): sections 5, 6, 8 and
+the phased plan are rewritten to match "map grades only". Branch `claude/anygame-pokemon-red-zlo39b`, stacked on
+`claude/anygame-integration` (PR #3).
 Companions: `roadmap-any-game.md` and `design-review-any-game.md` (PR #10) in the project files.
 
 ## Decisions since draft 1
@@ -95,7 +97,8 @@ cannot, on its own:
 
 So the split is: the harness turns the game into a short list of meaningful options with their consequences
 (the same idea as Tetris landings and Go playouts, at a larger scale), and Jev picks one. The harness parts are
-general; only the RAM map, the goal list and a few game facts are Pokemon-specific.
+general, and since draft 2 none of it is Pokemon-specific: the RAM map grades, goals come from dialogue, and
+consequences come from playing a choice out on the emulator (draft 3).
 
 ## Architecture
 
@@ -175,29 +178,30 @@ Rocket hideout spinner tiles (a step that moves you several tiles: recorded as a
 same mechanism already handles), strength boulders, surf (water is blocked until the party has Surf and
 the goal says to use it), and darkness in Rock Tunnel (position still works; only the screenshot is dark).
 
-### 5. Goals (Pokemon-specific list, general mechanism)
+### 5. Goals (general: written from what the game says)
 
-The pack's `goals:` is the ordered milestone list above, each with a `done:` condition over reads, an
-`instruction` shown to Jev as the current goal, and optional `target:` (a map and tile, or a map to reach)
-for the navigator. Goals are sticky: once done they stay done (saved with the run). The current goal is the
-first not done. A goal with no known target falls back to exploration, biased toward unvisited warps.
+Withdrawn in draft 3: the hand-written goal list. With the agent's map ids being its own discovered signatures, a
+list of Pokemon map ids cannot exist. Goals are written by the Azure chat model from the dialogue log and the world
+memory (`anygame/goals.py`, PR #14) as conditions the code checks, and the milestone table above only grades.
 
-Where the goal list comes from: written once by hand from the walkthrough structure (about 60 lines of YAML for
-the whole game), with the Azure chat model available to draft sub-goals when a goal stalls (for example, "find
-the Silph Scope" → "the Rocket hideout is under the Celadon Game Corner; the switch is behind the poster").
-That drafting is optional and is not on the critical path.
+What the campaign adds to it (full-run gaps 1, 3, 7): the dialogue must be read exactly (text from the screen's
+8x8 cells, each glyph learned once, `kind: tiletext`), the conditions gain numbers read from the screen
+(`{number: {name, at_least | at_most}}`: a level, an HP share, a count), and the writer's budget is per game-hour
+with a stall diagnosis, not 60 calls per run.
 
-### 6. Battles (Pokemon-specific facts, general shape)
+### 6. Battles, healing, items (general: choices played out to the next decision)
 
-In battle the options are the four moves, switching to each party member, an item, and run, each with its
-consequence computed from RAM and the ROM's own tables: move power, type, PP left, type effectiveness against
-the enemy (the type chart is a 15x15 table in the ROM), expected damage as a fraction of the enemy's HP, our HP
-fraction, whether running is allowed. Ranked best first, the way 2048 swipes are, and Jev picks. Menu
-navigation (FIGHT → move 2) is a macro, not a decision.
+Withdrawn in draft 3: move power, type chart and expected damage read from the ROM's tables. That is a Pokemon
+module by another name. Instead (full-run gap 2), every battle menu is the menu question that already exists, and
+each entry is played from a save state **until the game asks again** (text paged with A, stop at the next choice or
+walking screen, or a frame cap), so its consequence is what the game itself printed and which numbers moved:
+"WATER GUN → 'It's super effective! Enemy GEODUDE fainted!'". The emulator is the forward model; RNG makes it a
+sample. The menu read is cached by its text, so a battle menu with new HP bars is still the same menu.
 
-Outside battle the same treatment covers healing (go to the Pokemon Center when the party's HP fraction is low
-— a goal that preempts the milestone goal), buying Poke Balls and potions, and catching (throw a ball when the
-enemy's HP is low and the party has a free slot).
+Healing, buying and training are goals over numbers read from the screen (gap 3), written by the planner and
+checked by the code; Jev sees the numbers and decides when to heal or run. Using an item or a field move (HM teach,
+Cut, Surf, Strength, Poke Flute) is a goal that names the outcome plus one Jev question per menu on the way (gap 4);
+the world memory re-tests blocked edges after a line that says something was learned or received.
 
 ### 7. How Jev is called, and how often
 
@@ -220,18 +224,9 @@ hours. The offline stand-in (takes the top-ranked option) and random deciders ru
 
 ### 8. Which parts are Pokemon-specific
 
-| Part | Specific to Pokemon? |
-|---|---|
-| PyBoy device: RAM state, game clock, holds, save states | No: any Game Boy ROM |
-| `ram:` decoding (u8, u16, bcd, bits, text + charmap) | No |
-| `anygame ramscan` | No |
-| `auto:` rules for routine screens | No |
-| `world` read: map memory, blocked edges, warps, frontier, paths | No: any tile-based game with a position |
-| `goals:` mechanism (ordered, sticky, with targets) | No |
-| Battle option ranking | Shape general ("options with computed consequences"), facts Pokemon (type chart, move table) |
-| The RAM addresses, charmap, map ids | Yes |
-| The goal list | Yes |
-| The play paragraph | Yes |
+None of the agent. The grader (`anygame/graders/pokemon_red.py`, the published RAM map and the milestone table) and
+the ROM are the only Pokemon files. The pack is the generic `packs/gameboy`, shared with Aevilia and the held-out
+Game Boy games. A change that only helps Pokemon is not taken.
 
 ## Known hard parts
 
@@ -263,19 +258,23 @@ hours. The offline stand-in (takes the top-ranked option) and random deciders ru
 
 ## Phased plan
 
-| Phase | Work | What it proves |
-|---|---|---|
-| 0 | Emulator device with discovered state, game clock, save states, branching; graders; tested on Aevilia | The adapter is general; state is found, not written |
-| 1 | `probe` read, `world` read, dialogue log; both ROMs from power-on through the intro and the first choices, graded | One pack shape plays two RPGs it was not written for |
-| 2 | Pokemon: Red's room to Route 1 with a starter (milestones 0–3); Aevilia out of the tutorial; first Jev audit | Intro, scripted events, first battle; whether Jev's picks matter |
-| 3 | Battle option ranking (moves, type chart, switching, run); healing goal | Battles are decided, not mashed |
-| 4 | Viridian to the Boulder Badge (milestones 4–6) | Forest maze, trainers, a gym: one full loop of the game |
-| 5 | Through Cerulean, Vermilion, Lavender (7–12), catching and party management | Hours-long runs without getting stuck; HMs |
-| 6 | Rocket Hideout, Tower, Safari, Silph, Saffron (13–16) | The hard navigation cases: spinners, warp pads, step limits |
-| 7 | Cinnabar, Viridian gym, Victory Road, Elite Four (17–21), with a training goal | The full game |
+Draft 3: phases follow the full-run gap ranking (`full-run-gaps.md`). Every phase ends with a measured run on
+Pokemon Red **and** Aevilia (milestones, game time, wall time, Jev and Azure spend, stuck time, the audit table), and a
+phase is done when two runs in a row reach its target from the previous phase's checkpoint.
 
-Each phase ends with a measured run: milestones reached, game time, wall time, calls, cost, stuck time. A phase is
-done when two runs in a row reach its last milestone from the previous phase's save state.
+| Phase | Work (gap) | Pokemon Red ends at | Aevilia ends at |
+|---|---|---|---|
+| 0 | Device, discovered state, branching, graders (done) | Red's room from power-on (done) | first room (done) |
+| 1 | Menus as Jev questions, world memory, goals from dialogue, audit (done on Aevilia); map label stability (gap 0, emulator thread) | out of Pallet with a starter (milestones 0–3) | Startham Forest (done, 6 of 6) |
+| 2 | Text read exactly (gap 1); choices played out to the next decision (gap 2) | Oak's parcel delivered, Brock beaten (4–6) | its demo's dialogue read exactly; every menu choice with a played-out effect |
+| 3 | Numbers and goals over them (gap 3); planner budget and stall diagnosis (gap 7); throughput (gap 6) | Mt. Moon, Misty, Bill (7–8), healing on its own | a run with a number-goal (if the demo has none, a held-out RPG instead) |
+| 4 | Using things: menu chains toward an outcome, walls re-tested after a capability (gap 4) | SS Anne, Cut, Surge, Erika (9–12) | the same rule on its own blocked paths |
+| 5 | Movement that does not follow the d-pad (gap 5) | Hideout, Tower, Safari, Silph, Saffron (13–16) | regression run |
+| 6 | Long runs: checkpoints every few minutes, a softlock watchdog, log compaction | Cinnabar, Giovanni, Victory Road, Elite Four (17–21) | regression run |
+
+Jev cost estimate for the whole game: about $5 (72k decisions at $0.00007), inside the $3–8 range if the agent stays
+within 2–5x of a person's game time (per-segment table in `full-run-gaps.md`). Wall time, at about 1 s a tick today,
+is the budget that binds until gap 6 is done.
 
 ## Risks and open questions
 

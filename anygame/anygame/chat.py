@@ -66,9 +66,11 @@ class Chat:
             return {"api-key": self.key, "content-type": "application/json"}
         return {"authorization": f"Bearer {self.key}", "content-type": "application/json"}
 
-    def complete(self, messages: list[dict[str, Any]], max_tokens: int = 1000, temperature: float = 0.0) -> tuple[str, dict[str, Any], int]:
-        """Returns (text, usage, latency_ms). Adds to self.cost when the server reports a cost."""
-        body: dict[str, Any] = {"messages": messages, "model": self.model}
+    def complete(self, messages: list[dict[str, Any]], max_tokens: int = 1000, temperature: float = 0.0,
+                 extra: dict[str, Any] | None = None) -> tuple[str, dict[str, Any], int]:
+        """Returns (text, usage, latency_ms). Adds to self.cost when the server reports a cost. `extra` goes into the
+        request body as is (for example {"reasoning_effort": "low"} on a reasoning model)."""
+        body: dict[str, Any] = {"messages": messages, "model": self.model, **(extra or {})}
         # newer OpenAI-family models take max_completion_tokens and only the default temperature
         strict = self.api.startswith("azure") or self.model.split("/")[-1].startswith(("gpt-5", "o1", "o3", "o4"))
         if strict:
