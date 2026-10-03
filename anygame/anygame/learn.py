@@ -997,7 +997,9 @@ FEATURES_HINT = (
     "- reflex: { read, equals|in|not|gte|lte } (or a list): when it holds the rules act on the decider's last answers without waiting for a new one "
     "(a move that must land before the decider can answer; the answer to a late_move fault, never a slower tick_hz or settle). A rule may carry unless: { read, … } (or a list): it does not apply when one holds.\n"
     "- tetris read options: lookahead: true ranks each landing by the best result after the preview piece too; top_k: N landings offered.\n"
-    "- go read options: playouts: N random playouts per candidate (win rate and margin on each), playouts_top: M, playouts_top_n: K.\n"
+    "- go read options: playouts: N random playouts per candidate (win rate and margin on each), playouts_top: M, playouts_top_n: K; "
+    "rerank: playouts (rerank_margin: 0.06) puts the playout leader first in best when its win rate beats the first move's by the margin, "
+    "so the decider's usual top pick is the measured best.\n"
     "- slide read (2048) option depth: N; a question may take criteria_from: <read> to offer that read's ranked list as its options.\n"
     "- the play paragraph and the questions: what the decider is told. If the compiler ranks the options, the paragraph must not tell "
     "the decider to prefer something the ranking does not score.")
@@ -1223,7 +1225,9 @@ def verify_v2(candidate: Pack, incumbent: Pack, inc: Incident, diag: dict[str, A
     blind = blind_changes(candidate, incumbent)
     reasked = None
     unjudged: set[int] = set()
-    told = [k for k in blind if k in ("play", "questions")]
+    # what the decider is told: the paragraph, the questions, and a compiler option that reorders or annotates the
+    # options it is shown (rerank, playouts) when replay alone saw no change
+    told = [k for k in blind if k in ("play", "questions")] + (["compiler_option"] if "compiler_option" in change_kinds(candidate, incumbent) else [])
     if len(how) * 2 < len(ev) and told and sensor is not None:
         # replay cannot see a new paragraph or new questions: ask the decider itself on the evidence frames (not for
         # timing alone: what the decider is told is unchanged, so a different answer would only be its own noise)
@@ -1369,12 +1373,12 @@ def fits_diagnosis(kinds: list[str], diag: dict[str, Any] | None) -> str:
     from .diagnose import FAULTS
     fault = FAULTS.get(str((diag or {}).get("fault")))
     if fault is not None:
-        need, what = fault["needs"], f"a {diag['fault']} fault"
+        need, what = fault["needs"], f"the fault {diag['fault']}"
     else:
         need, what = FITS.get(str((diag or {}).get("category"))), f"a {(diag or {}).get('category')} fault"
     if not need or set(kinds) & need:
         return ""
-    return (f"the diagnosis is {what}, which needs a {' or '.join(sorted(need))} change"
+    return (f"the diagnosis names {what}, which needs a {' or '.join(sorted(need))} change"
             + (f" ({fault['fix'].rstrip('.')})" if fault is not None else "") + f"; this rewrite only changes {', '.join(kinds) or 'nothing'}")
 
 

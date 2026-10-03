@@ -193,6 +193,15 @@ because the OpenRouter account ran out of credit (402 "Insufficient credits", $5
 5 won, mean lead +20.4, median +7.0; the unchanged pack on the same 10 seeds: 5 won, +18.2, +10.0. No difference so
 far. Seeds 11 to 16 need credit on the OpenRouter account.
 
+**Since then: the missing option exists.** PR #8 adds `rerank: playouts` to the go read (the playout leader goes
+first in `best` past a 0.06 margin); with it the top-pick stand-in wins 14 of 16 against the same white, against 3 of
+16 without. This branch carries that commit and a new fault kind, `ignores_measure` (the compiler measured a clearly
+better option and the paragraph says to take it, but the decider keeps taking the first-ranked one), whose fix is
+`rerank: playouts`; a rewrite that turns it on counts as the compiler change the fault needs, and the recorded-frame
+check re-asks Jev when a compiler option changes what it is shown. The start pack for a rerun, without the re-rank,
+is `docs/learn-loop-v2/go-start`. **The rerun, to see whether the loop now picks the option, waits on OpenRouter
+credit.**
+
 Jev for the Go test: $0.23 (baseline $0.08, learning $0.10, test of v3 $0.06). Azure: 7 diagnoses, 12 rewrite calls.
 Pack: `docs/learn-loop-v2/go-learned`. Logs: `/mnt/project-files/anygame/learn-loop-v2/go/` (`baseline/`,
 `learned-v3/`, `bank/`, `learn-stderr.log`).

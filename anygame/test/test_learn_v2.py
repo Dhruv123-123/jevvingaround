@@ -171,7 +171,7 @@ def test_trial_verdict_by_outcome_then_by_the_median_episode(tmp_path):
 
 def test_a_rewrite_must_make_the_kind_of_change_the_diagnosis_calls_for():
     from anygame.learn import fits_diagnosis
-    assert fits_diagnosis(["rule"], {"category": "turn_order"}).startswith("the diagnosis is a turn_order fault")
+    assert fits_diagnosis(["rule"], {"category": "turn_order"}).startswith("the diagnosis names a turn_order fault")
     assert fits_diagnosis(["read", "gate"], {"category": "turn_order"}) == "" and fits_diagnosis(["rule"], {"category": "strategy"}) == ""
     assert fits_diagnosis(["rule"], {"category": "instruction"}) and not fits_diagnosis(["paragraph"], {"category": "instruction"})
     inc = snake_incident()
@@ -235,7 +235,7 @@ def test_a_late_move_fault_needs_a_reflex_not_a_slower_loop():
     assert "late_move" in diagnosis_text(d) and "reflex" in diagnosis_text(d)
     slower = variant(no_reflex(), tick_hz=1)
     kinds = change_kinds(slower, no_reflex())
-    assert kinds == ["timing"] and fits_diagnosis(kinds, d).startswith("the diagnosis is a late_move fault, which needs a reflex change")
+    assert kinds == ["timing"] and fits_diagnosis(kinds, d).startswith("the diagnosis names the fault late_move, which needs a reflex change")
     kinds = change_kinds(full(), no_reflex())
     assert kinds == ["reflex"] and fits_diagnosis(kinds, d) == "" and timing_only(kinds)
     assert timing_only(["rule", "reflex"]) and not timing_only(["rule", "gate"])
@@ -268,3 +268,19 @@ def test_the_page_s_own_score_beats_an_ocr_read_of_it():
             {"tick": 3, "action": "stop", "reason": "status is dead", "screen": {}}]
     assert outcome(recs, 1, 1, "score")["score"] == 160
     assert outcome([{k: v for k, v in r.items() if k != "truth"} for r in recs], 1, 1, "score")["score"] == 1660
+
+
+def test_ignoring_the_playout_leader_maps_to_rerank_and_a_rewrite_may_turn_it_on():
+    from anygame.learn import fits_diagnosis, features_hint
+    from anygame.diagnose import FAULTS
+    assert FAULTS["ignores_measure"]["needs"] == {"compiler_option"} and "rerank: playouts" in FAULTS["ignores_measure"]["fix"]
+    assert "rerank: playouts" in features_hint()
+    d = parse_diagnosis('{"cause": "Jev took the worth top over the playout leader", "fault": "ignores_measure", "evidence": [{"tick": 55, "what": "x"}]}')
+    assert d["category"] == "compiler" and "rerank" in diagnosis_text(d)
+    start = load_pack(os.path.join(ROOT, "docs", "learn-loop-v2", "go-start", "pack.yaml"))
+    raw = yaml.safe_load(dump_pack(start.raw))
+    raw["read"]["go"].update({"rerank": "playouts", "rerank_margin": 0.06})
+    on = load_pack_text(dump_pack(raw), start.name)
+    kinds = change_kinds(on, start)
+    assert kinds == ["compiler_option"] and fits_diagnosis(kinds, d) == ""
+    assert fits_diagnosis(["paragraph"], d).startswith("the diagnosis names the fault ignores_measure, which needs a compiler_option change")

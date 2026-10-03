@@ -41,6 +41,11 @@ FAULTS: dict[str, dict[str, Any]] = {
     "unsure_ranking": {"category": "compiler", "needs": {"compiler_option"},
                        "when": "the ranking is a static heuristic and fails in tactical positions where simulating the game would tell",
                        "fix": "playouts: N on a go read (win rate and margin per candidate), shown to the decider"},
+    "ignores_measure": {"category": "compiler", "needs": {"compiler_option"},
+                        "when": "the compiler measured a clearly better option (a playout win rate well above the first-ranked "
+                                "move's) and the paragraph says to take it, but the decider kept taking the first-ranked option",
+                        "fix": "rerank: playouts (rerank_margin: 0.06) on the go read, so the measured leader is ranked first and "
+                               "the decider's usual first pick is it; rewording the paragraph does not move the decider"},
     "contradicting_text": {"category": "instruction", "needs": {"paragraph", "question"},
                            "when": "the play paragraph or a question tells the decider to prefer something the compiler's ranking "
                                    "does not score, so it skips the top-ranked option",
