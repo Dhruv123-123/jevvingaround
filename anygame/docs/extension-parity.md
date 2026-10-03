@@ -15,6 +15,7 @@ Branch `claude/anygame-extension-parity-nknhcy`, PR #4 (https://github.com/Dhruv
 | Tetris `lookahead: true` (rank each landing after the preview piece too) | one piece deep | `tetris.ts` | same ranking as `perceive/tetris.py` on 60 random boards (lookahead reorders 43 of them); Tetris e2e |
 | Go `playouts: n` win rate and margin per candidate | missing | `go.ts`, seeded and cached per board | same candidates and worth as Python on 12 real boards; win rates within sampling error (mean gap 0.022 at 512 games, no bias) |
 | Go `playouts_top` / `playouts_top_n` (round three: 32 games each, top 3 to 160) | missing | `go.ts` | test mirroring the Python one; ~85–180 ms per board (Python ~700 ms); Go e2e |
+| Go `rerank: playouts` / `rerank_margin` (PR #8, `claude/anygame-go-playout-rerank-k5roqu`) | missing | `goRerank` in `go.ts` | unit tests mirroring the Python ones; Go e2e below |
 | 2048 ranked swipes | already ported | unchanged | same as Python on 40 random boards |
 | dino: `gap` read | missing | new `gap.ts` | unit test |
 | dino: `ask: async` / `ask_when` (Jev asked once per obstacle, loop keeps running) | missing | `loop.ts` | fake-device test: 2 decider calls, 1 async, jump on the frame at ttc ≤ 205 ms |
@@ -25,7 +26,7 @@ Branch `claude/anygame-extension-parity-nknhcy`, PR #4 (https://github.com/Dhruv
 | dino: `lock_ms` (after a jump, no other key for 100 ms: PR #7, `claude/anygame-dino-framerate-wtqykg`) | missing; the pack loaded and the setting was ignored | `loop.ts` | unit test on the bundled pack (PR #7 is merged into integration and here); 4 stand-in games on chromedino.com with that pack: 769–1240, ~29 fps, nothing broke |
 | a missing number never meets `gte`/`lte` (Python's `float(None)` fails) | `Number(null)` is 0, so a null read met every `lte` | `loop.ts` | unit test; found on chromedino.com (below) |
 
-Extension tests: 62 pass (41 before), and `tsc` is clean. Python: 81 pass.
+Extension tests: 64 pass (41 before), and `tsc` is clean. Python: 81 pass.
 
 ## Played in headless Chromium from the extension panel
 
@@ -44,6 +45,10 @@ All runs use `ext/test/e2e_parity.py` on the bundled game pages. Logs are in `/m
   - CLI round four, for comparison: 9 of 16, mean +17.0.
   - Stand-in, 4 seeds: 0 of 4 (it always takes the first best move).
   - Go read: 64–82 ms median per board.
+- **Go re-rank (PR #8)**: PR #8's v7 pack, stand-in taking the top pick (`CLM_STUB_RANK=screen.go.best`), fixed white `?ai=mc&playouts=400`, seeds 1–8.
+  - Without the re-rank: 2 of 8 won. The final leads were **identical game for game** to the CLI's seeds 1–8 (−37.5 −3.5 −11.5 +0.5 +6.5 −11.5 −17.5 −5.5). Without playout randomness, the extension and the CLI play the same moves.
+  - With the re-rank: 4 of 8 won, mean lead +16.9 (+22.5 +21.5 −3.5 −9.5 +36.5 +74.5 −1.5 −5.5). The CLI won 6 of its first 8 seeds, mean +15.2. The two differ because the playout random streams differ, so the leaders sometimes differ. The leader moved to the top on 141 of 386 moves.
+  - The stand-in bug PR #8 fixed (it took the top-left cell, not the top pick) is in `test/clm_stub.py`. The extension uses that same stand-in over HTTP and has no stand-in of its own, so PR #8's fix covers it once merged. The earlier extension Go stand-in rows above (0 of 4) ran with that bug.
 - **Go** with the older 64-playout pack against the time-boxed `?ai=mc` white: Jev won 3 of 8 ($0.036) and the stand-in 0 of 4. On a fast machine the CLI got 2 of 8 against this white, and 5 of 8 on a slow one.
 
 - **Dino on chromedino.com**: `ext/test/e2e_dino.py` plays it from the extension panel. Each game runs in a fresh browser, with ads hidden and the capture region set to the game, the same way the CLI harness does it. 8 games per row; scores are the page's own.
