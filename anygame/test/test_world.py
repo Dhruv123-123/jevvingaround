@@ -331,8 +331,12 @@ def test_graders_read_milestones_the_agent_never_sees():
     mem = bytearray(0x10000)
     g.update(mem)
     assert g.report()["reached"] == []                              # zeroed RAM before New Game is not Pallet Town
-    mem[pr.W_PLAYER_NAME] = 0x91                                    # "R": the game has started
+    mem[pr.W_PLAYER_NAME: pr.W_PLAYER_NAME + 6] = bytes(pr.NINTEN)  # the title demo's placeholder names, and
+    mem[pr.W_RIVAL_NAME: pr.W_RIVAL_NAME + 4] = bytes(pr.SONY)      # New Game sets Red's room before Oak's speech
     mem[pr.W_CUR_MAP] = 0x26
+    assert g.update(mem) == []
+    mem[pr.W_PLAYER_NAME] = 0x91                                    # "R..." and a rival named: the game has started
+    mem[pr.W_RIVAL_NAME] = 0x81
     assert g.update(mem) == ["intro_done"]
     mem[pr.W_CUR_MAP], mem[pr.W_PARTY_COUNT] = 0x0C, 1
     assert g.update(mem) == ["starter", "route_1"]

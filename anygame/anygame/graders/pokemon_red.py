@@ -15,6 +15,7 @@ from typing import Any
 W_PARTY_COUNT = 0xD163
 W_PARTY_MONS = 0xD16B          # 44 bytes each; level at +0x21, HP at +1 (2 bytes, big-endian)
 W_PLAYER_NAME = 0xD158
+W_RIVAL_NAME = 0xD34A
 W_NUM_BAG_ITEMS = 0xD31D
 W_BAG_ITEMS = 0xD31E           # (id, quantity) pairs, 0xFF ends
 W_PLAYER_MONEY = 0xD347        # 3 bytes BCD
@@ -37,6 +38,10 @@ ITEMS = {"OAKS_PARCEL": 0x46, "SS_TICKET": 0x3F, "SILPH_SCOPE": 0x48, "POKE_FLUT
          "HM01": 0xC4, "HM03": 0xC6, "HM04": 0xC7}
 
 
+NINTEN = [0x8D, 0x88, 0x8D, 0x93, 0x84, 0x8D]
+SONY = [0x92, 0x8E, 0x8D, 0x98]
+
+
 def facts(mem) -> dict[str, Any]:
     """The grader's view of the game: what it reads, decoded. `mem` is anything indexable by address."""
     n = mem[W_PARTY_COUNT]
@@ -51,11 +56,13 @@ def facts(mem) -> dict[str, Any]:
     for i in range(3):
         b = mem[W_PLAYER_MONEY + i]
         money = money * 100 + (b >> 4) * 10 + (b & 15)
-    name0 = mem[W_PLAYER_NAME]
+    name = [mem[W_PLAYER_NAME + i] for i in range(6)]
+    rival = [mem[W_RIVAL_NAME + i] for i in range(4)]
     return {
-        # before New Game the RAM is zeros, and map 0 is Pallet Town: the player's name (letters 0x80-0xBF in the
-        # game's charmap) says the game has started
-        "started": 0x80 <= name0 <= 0xBF,
+        # before New Game the RAM is zeros and map 0 is Pallet Town; the title demo and Oak's speech hold the
+        # placeholder names NINTEN and SONY (and New Game sets the map to Red's room before the speech). The game has
+        # started once both names are the player's own (letters 0x80-0xBF in the game's charmap)
+        "started": 0x80 <= name[0] <= 0xBF and 0x80 <= rival[0] <= 0xBF and name != NINTEN and rival != SONY,
         "map": mem[W_CUR_MAP], "map_name": MAPS.get(mem[W_CUR_MAP]), "x": mem[W_X], "y": mem[W_Y],
         "party_count": n, "levels": [mem[W_PARTY_MONS + 44 * i + 0x21] for i in range(n)],
         "badges": bin(mem[W_OBTAINED_BADGES]).count("1"), "badge_bits": mem[W_OBTAINED_BADGES],
