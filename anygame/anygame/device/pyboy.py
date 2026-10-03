@@ -134,7 +134,6 @@ class PyBoyDevice(Device):
         self.ram: dict[str, Any] = {}
         self.discoverer = None                     # pack `discover: true`: position and map found from RAM while playing
         self.discover_file: str | None = None
-        self._xdeltas: list[int] = []
         self.frames = 0                            # emulated frames since boot: the game's own clock
         self._pb = PyBoy(path, window="null", sound_emulated=False)
         self._pb.set_emulation_speed(0)
@@ -189,6 +188,8 @@ class PyBoyDevice(Device):
             import yaml
             from ..discover import Discoverer
             self.discoverer = Discoverer()
+            if os.environ.get("ANYGAME_DISCOVER_TRACE"):
+                self.discoverer.trace = []
             self.discover_file = raw.get("discover_file") or (os.path.join(pack_dir, f"discovered-{os.path.splitext(os.path.basename(self.rom))[0]}.yaml") if pack_dir else None)
             if self.discover_file and os.path.exists(self.discover_file) and not os.environ.get("ANYGAME_REDISCOVER"):
                 self.discoverer.load(yaml.safe_load(open(self.discover_file)) or {})
@@ -214,6 +215,15 @@ class PyBoyDevice(Device):
             s["found"] = self.discoverer.state(ram(self._pb.memory))
         s["frames"] = self.frames
         return s
+
+    def save_trace(self) -> None:
+        path = os.environ.get("ANYGAME_DISCOVER_TRACE")
+        if self.discoverer is None or self.discoverer.trace is None or not path:
+            return
+        import pickle
+        import zlib
+        with open(path, "wb") as f:
+            f.write(zlib.compress(pickle.dumps(self.discoverer.trace), 1))
 
     def save_discovered(self) -> str | None:
         if self.discoverer is None or not self.discover_file or not self.discoverer.found:
@@ -295,12 +305,7 @@ class PyBoyDevice(Device):
         self._tick(self.after if after is None else int(after))
         if self.discoverer is not None:
             after_ = ram(self._pb.memory)
-            self.discoverer.press(b, before, after_)
-            dsc = self.discoverer
-            if b in ("left", "right") and "x" in dsc.found and "cell" not in dsc.fixed and (hold is None or hold >= 8):
-                self._xdeltas.append(dsc.decode(after_, "x") - dsc.decode(before, "x"))
-                self._xdeltas = self._xdeltas[-40:]
-                dsc.learn_cell(self._xdeltas)
+            self.discoverer.press(b, before, after_, full=hold is None or hold >= 8)
 
     def key(self, name, hold_ms=0, **_):
         if hold_ms:
@@ -318,6 +323,7 @@ class PyBoyDevice(Device):
     def close(self):
         try:
             self.save_discovered()
+            self.save_trace()
         except Exception:  # noqa: BLE001
             pass
         try:

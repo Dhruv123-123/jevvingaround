@@ -227,10 +227,62 @@ def test_discoverer_finds_position_and_map_from_ram_alone():
     d.frame(mem.copy(), blank=False)
     d.frame(mem.copy(), blank=True)
     mem[MAP], mem[X], mem[Y] = 7, 3, 4
-    d.frame(mem.copy(), blank=False)
-    assert 0xD35E in d.found["map"]["addrs"] and 0xC0F0 not in d.found["map"]["addrs"]
+    mem[0xC400 - LO: 0xC600 - LO] = rng.integers(0, 256, 512)    # the new map's tiles and sprites loaded
+    for _ in range(20):
+        d.frame(mem.copy(), blank=False)
+    assert 0xC0F0 not in d.found["map"]["addrs"]                    # the timer moves on every press: never the map
     st = d.state(mem)
     assert st["x"] == 3 and st["y"] == 4 and st["map"] is not None
+
+
+def test_discoverer_drops_a_copy_that_stops_following_and_keeps_the_map_steady():
+    """A sprite copy of the position follows the d-pad in the first room and freezes after a door (Aevilia's
+    tutorial entity at 0xC212): the real position, which follows in every room, must win. A byte that changes on
+    some doors and also between frames (a timer reset by a fade) is not the map."""
+    from anygame.discover import Discoverer, LO, N
+    rng = np.random.default_rng(1)
+    d = Discoverer()
+    mem = np.zeros(N, np.int32)
+    X, Y, CX, CY, MAP, TICK = 0xD712 - LO, 0xD710 - LO, 0xC212 - LO, 0xC210 - LO, 0xC3C4 - LO, 0xC100 - LO
+    mem[X], mem[Y], mem[MAP] = 40, 40, 2
+
+    def walk(n, copy_follows):
+        for _ in range(n):
+            b = ["up", "down", "left", "right"][rng.integers(4)]
+            before = mem.copy()
+            if rng.random() > 0.25:
+                dx, dy = {"left": -1, "right": 1}.get(b, 0), {"up": -1, "down": 1}.get(b, 0)
+                mem[X] += dx
+                mem[Y] += dy
+                if copy_follows:
+                    mem[CX] = mem[X] + 1        # a copy that scores the same while it follows: listed first
+                    mem[CY] = mem[Y] + 1
+            d.press(b, before, mem.copy())
+            mem[TICK] = (mem[TICK] + 1) % 256
+            d.frame(mem.copy(), blank=False)
+
+    def door(new_map):
+        d.frame(mem.copy(), blank=True)
+        mem[MAP], mem[X], mem[Y], mem[TICK] = new_map, 20, 20, 0
+        mem[0xC400 - LO: 0xC600 - LO] = np.random.default_rng(new_map).integers(0, 256, 512)   # the map's tiles, the same each time
+        d.frame(mem.copy(), blank=False)
+
+    walk(60, copy_follows=True)
+    sigs = {}
+    for m in (5, 4, 0, 4, 5):
+        door(m)
+        walk(40, copy_follows=False)
+        seen = set()
+        for _ in range(10):                          # steady within a visit, whatever the timer does
+            walk(2, copy_follows=False)
+            seen.add(d.state(mem)["map"])
+        assert len(seen) == 1
+        sigs.setdefault(m, []).append(mem.copy())
+    assert d.found["x"]["addr"] == 0xD712 and d.found["y"]["addr"] == 0xD710
+    assert 0xC100 not in d.found["map"]["addrs"]
+    sigs = {m: {d.state(x)["map"] for x in v} for m, v in sigs.items()}   # with what was learned by the end
+    assert all(len(v) == 1 for v in sigs.values())                # coming back to a map gives its signature back
+    assert len({next(iter(v)) for v in sigs.values()}) == 3     # three maps, three signatures
 
 
 class BranchingGridGame(GridGame):
