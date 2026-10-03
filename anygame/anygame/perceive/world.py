@@ -289,10 +289,14 @@ class WorldTracker:
         # 3. explore, one option per direction
         toward = (goal or {}).get("_toward")
         explore = []
+        # tiles a step into is refused now: a refusal seen once or twice expires with its block (a person who moved,
+        # or a step misread while the place was misnamed), so a tile once refused is explored again later
+        walls = {(k[1] + DIRS[k[3]][0], k[2] + DIRS[k[3]][1]) for k in self.blocked
+                 if k[0] == here[0] and self.is_blocked((k[0], k[1], k[2]), k[3])}
         for d, (dx, dy) in DIRS.items():
             best = None
             for t, (_, _, dist) in tree.items():
-                if t == here or (t[1], t[2]) in vis or (t[1], t[2]) in self.walls_at.get(here[0], ()):
+                if t == here or (t[1], t[2]) in vis or (t[1], t[2]) in walls:
                     continue
                 ox, oy = t[1] - here[1], t[2] - here[2]
                 along = ox * dx + oy * dy
