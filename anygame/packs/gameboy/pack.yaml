@@ -1,0 +1,27 @@
+# Any Game Boy game, with nothing written for it: the eight buttons and a paragraph that names no game. This is what
+# the held-out score (heldout/) plays: today's agent on a game nobody tuned it for. It has no reads, because the
+# agent has no general Game Boy perception yet (roadmap G1: tiles, sprites and RAM discovered by the platform); when
+# that lands, its reads go here, still with nothing per game.
+game: gameboy
+screen: { orientation: landscape, size: [480, 432] }        # the 160x144 Game Boy screen at 3x
+act:
+  - { id: a,      kind: key, key: a }
+  - { id: start,  kind: key, key: start }
+  - { id: up,     kind: key, key: up }
+  - { id: right,  kind: key, key: right }
+  - { id: down,   kind: key, key: down }
+  - { id: left,   kind: key, key: left }
+  - { id: b,      kind: key, key: b }
+  - { id: select, kind: key, key: select }
+play: >
+  A Game Boy game you have not seen before. Get past title screens and menus into play, then make progress: explore
+  new places, finish levels, go further, and avoid losing. A and Start usually confirm, B usually goes back, the d-pad
+  moves. If a button changed nothing, try another.
+questions:
+  - id: action
+    type: choice
+    instructions: Which button now?
+    criteria: { a: "press A", start: "press Start", up: "press up", right: "press right", down: "press down", left: "press left", b: "press B", select: "press Select" }
+tests:
+  - frame: fixtures/2048gb-title.png      # any Game Boy frame: the pack reads nothing, so the test only proves it loads and decides
+    expect: {}

@@ -1,0 +1,23 @@
+# The held-out any-game suite. To change the games, edit the two lists below; that is the whole change for a game
+# that already has a file in games/. A new game is one more file there: where its ROM comes from, and 3 to 5
+# milestones as memory conditions (see grader.py). Nothing under anygame/anygame/ reads this directory.
+#
+# held_out: scored, and nobody tunes the agent on them. These four are PROVISIONAL, picked 2026-10-03 from freely
+#   licensed Game Boy homebrew across kinds; Dhruv picks the real set.
+# development: worked on openly (roadmap section 6), scored and reported beside, never in the aggregate.
+held_out: [tobutobugirl, postbot, renegade-rush, gbhack]
+development: [aevilia, pokemon-red]
+
+# The budget per run; a run ends at the first limit reached. A game file may override any of these.
+budget:
+  frames: 36000         # game time: 10 minutes at 60 frames a second
+  presses: 1500         # button presses
+  wall_s: 900           # wall-clock seconds
+  jev_calls: 1500       # decider calls (Jev, or any metered sensor)
+  usd: 0.25             # decider dollars
+
+seeds: [1, 2, 3]        # a seed sets the boot delay (so the game's RNG differs) and the random decider's draws
+
+# How the agent is run: the generic Game Boy pack, step-locked (no game time passes while the decider thinks).
+pack: gameboy
+device: { idle: 4, hold: 6, after: 16 }
