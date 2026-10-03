@@ -173,8 +173,8 @@ earlier run: 9 of 16, +17.0, +10.5).
 |---|---|---|---|---|
 | seed 102 | contradicting_text | Jev ignored the "follow the leader past 0.06" paragraph at ticks 45 and 47 | paragraph, then paragraph and question | refused twice: re-asked, Jev made the same moves |
 | seed 103 | unsure_ranking | at tick 55 Jev played c8r9 (win 0.03) over c7r4 (win 0.22 on 160 playouts) | more playouts plus paragraph, twice | refused twice: Jev made the same moves |
-| seed 105 | none parsed | | | |
-| seed 107 | bad_choice | c4r1 at tick 55 where c9r5 was clearly better | a rule; a rule naming a move that does not exist | refused: it blocked moves in won games; did not load |
+| seed 105 | none parsed | | no change; then a rule plus paragraph | refused: no change; the rule blocked moves in won games |
+| seed 107 | bad_choice | c4r1 at tick 55 where c9r5 was clearly better | paragraph; then an invalid rule | refused: re-asked, Jev changed 1 of 4 evidence moves; did not load |
 | seed 111 | stale_frame | "acted on a frame that did not show its previous move" | `settle: screen_change` | **kept**: 3 won, 2 lost on trial vs 6 and 5 before |
 | seed 116 | bad_choice | c8r1 over a better tactical move | a rule; an invalid rule | refused: same moves; did not load |
 | seed 117 | bad_choice | c7r1 although c8r6 had a much better playout result | a rule "never play a point in `go.doomed`" plus the same line in the paragraph | **on trial** when the 20 games ran out: 2 won, 1 lost |
@@ -193,7 +193,7 @@ because the OpenRouter account ran out of credit (402 "Insufficient credits", $5
 5 won, mean lead +20.4, median +7.0; the unchanged pack on the same 10 seeds: 5 won, +18.2, +10.0. No difference so
 far. Seeds 11 to 16 need credit on the OpenRouter account.
 
-Jev for the Go test: $0.23 (baseline $0.08, learning $0.10, test of v3 $0.06). Azure: 7 diagnoses, 14 rewrite calls.
+Jev for the Go test: $0.23 (baseline $0.08, learning $0.10, test of v3 $0.06). Azure: 7 diagnoses, 12 rewrite calls.
 Pack: `docs/learn-loop-v2/go-learned`. Logs: `/mnt/project-files/anygame/learn-loop-v2/go/` (`baseline/`,
 `learned-v3/`, `bank/`, `learn-stderr.log`).
 
