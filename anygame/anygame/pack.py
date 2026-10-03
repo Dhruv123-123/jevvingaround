@@ -7,7 +7,7 @@ from typing import Any
 import yaml
 from .geometry import Rect, Zone
 
-READ_KINDS = {"bar", "templates", "ocr", "vocab", "blobs", "color", "locate", "runs", "around", "tetris", "json", "json_grid", "predict", "margin", "go", "slide", "head", "gap"}
+READ_KINDS = {"bar", "templates", "ocr", "vocab", "blobs", "color", "locate", "runs", "around", "tetris", "json", "json_grid", "predict", "margin", "go", "slide", "head", "gap", "world"}
 QUESTION_TYPES = {"noul", "choice", "score"}
 
 
@@ -269,6 +269,9 @@ def load_pack(path: str | os.PathLike, _allow_no_tests: bool = False) -> Pack:
         elif r.get("kind") == "json_grid":
             if "cols" not in r or "rows" not in r or not isinstance(r.get("symbols"), dict):
                 raise PackError(f"{p}: read '{rid}': json_grid needs cols, rows and symbols: {{<char>: {{path, index|slice}}}}")
+        elif r.get("kind") == "world":
+            if "x" not in r or "y" not in r:
+                raise PackError(f"{p}: read '{rid}': world needs x and y (read ids or state paths of the player's position), optionally map, cell, step_hold, learn_when")
         elif r.get("kind") == "json":
             if "path" not in r:
                 raise PackError(f"{p}: read '{rid}': json needs 'path' into the device's state")
@@ -349,6 +352,18 @@ def load_pack(path: str | os.PathLike, _allow_no_tests: bool = False) -> Pack:
         mp.raw["own_reads"] = list((m.get("read") or {}).keys())
         modes[mn] = mp
     tasks = check_tasks(raw.get("tasks"), reads, str(p), zones=zones)
+    for rl in raw.get("auto") or []:
+        conds = rl.get("if") if isinstance(rl.get("if"), list) else [rl.get("if")]
+        if not all(_cond_ok(c) for c in conds) or not any(k in rl for k in ("key", "wait")):
+            raise PackError(f"{p}: auto needs if: {{read, equals|in|not|gte|lte}} (or a list) and key: <button> or wait: <frames>: a routine screen handled without asking the decider")
+    ids = set()
+    for g in raw.get("goals") or []:
+        if not isinstance(g, dict) or "id" not in g or "instruction" not in g or g["id"] in ids:
+            raise PackError(f"{p}: every goal needs a unique id and an instruction (optionally done, when, target)")
+        ids.add(g["id"])
+        for k in ("done", "when"):
+            if k in g and not all(_cond_ok(c) for c in (g[k] if isinstance(g[k], list) else [g[k]])):
+                raise PackError(f"{p}: goal '{g['id']}': {k} needs {{read, equals|in|not|gte|lte}} (or a list of them, all of which must hold)")
     fingerprints = dict(raw.get("fingerprints") or {})
     for mn, m in (raw.get("modes") or {}).items():
         if isinstance(m.get("when"), dict) and m["when"].get("fingerprint"):

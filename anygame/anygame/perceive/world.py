@@ -1,0 +1,389 @@
+"""World memory and a navigator: what lets a per-tick decider play a game whose world is bigger than the screen.
+
+A derived read, `kind: world`. It takes position reads (a map id and x, y) and keeps, for the whole run:
+
+  visited   every tile stood on, per map
+  blocked   edges (tile, direction) a step did not cross: a wall, or an NPC (seen once: forgotten after a while;
+            seen three times: permanent)
+  warps     edges that put the player somewhere else: a door to another map, a staircase, a spinner tile
+  inspected the things already faced and pressed A at, so an "inspect" option is not offered forever
+
+Every tick it offers the decider a few options, each a path it can walk in one go, best first:
+
+  goal        walk toward the current goal's target (a tile on this map, or the known door chain to its map)
+  door_<k>    walk through a known door to a map not yet explored
+  inspect_<d> face the blocked tile next to the player and press A (a sign, a person, an item, a switch)
+  explore_<d> walk to the nearest unexplored tile in that direction and on until something blocks
+
+The option labels and what they mean (with step counts) go to the decider as a choice; `macro` actions play the
+chosen one through run(), one step at a time, learning walls and doors as they happen and stopping early when a step
+does not go as planned or the game leaves the overworld (a dialogue, a battle). Unknown tiles count as open, so a
+plan is optimistic and a bump re-plans on the next tick. Nothing here knows which game it is: Pokemon, Aevilia and
+any other tile-based game differ only in the pack's reads, `cell` and `step_hold`.
+
+    world: { kind: world, map: map, x: x, y: y, cell: 1, step_hold: 16, after: 4, max_steps: 8, radius: 24,
+             learn_when: { read: overworld, equals: true }, keys: { up: up, down: down, left: left, right: right },
+             interact: a }
+"""
+from __future__ import annotations
+import json
+from collections import deque
+from typing import Any, Callable
+
+DIRS = {"up": (0, -1), "down": (0, 1), "left": (-1, 0), "right": (1, 0)}
+OPP = {"up": "down", "down": "up", "left": "right", "right": "left"}
+COMPASS = {"up": "north", "down": "south", "left": "west", "right": "east"}
+
+
+def _get(values: dict[str, Any], path: str | None) -> Any:
+    if not path:
+        return None
+    cur: Any = values
+    for part in str(path).split("."):
+        if isinstance(cur, dict):
+            cur = cur.get(part)
+        elif isinstance(cur, list):
+            try:
+                cur = cur[int(part)]
+            except (ValueError, IndexError):
+                return None
+        else:
+            return None
+    return cur
+
+
+def _cond(c: Any, values: dict[str, Any]) -> bool:
+    if not c:
+        return True
+    if isinstance(c, list):
+        return all(_cond(x, values) for x in c)
+    v = _get(values, c["read"])
+    if "equals" in c:
+        return v == c["equals"]
+    if "in" in c:
+        return v in c["in"]
+    if "not" in c:
+        return v != c["not"]
+    try:
+        if "gte" in c:
+            return float(v) >= float(c["gte"])
+        if "lte" in c:
+            return float(v) <= float(c["lte"])
+    except (TypeError, ValueError):
+        return False
+    return False
+
+
+Tile = tuple[Any, int, int]          # (map, x, y)
+
+
+class WorldTracker:
+    def __init__(self, r: dict[str, Any]):
+        self.r = r
+        self.cell = float(r.get("cell", 1))
+        self.max_steps = int(r.get("max_steps", 8))
+        self.radius = int(r.get("radius", 24))
+        self.keys = {d: (r.get("keys") or {}).get(d, d) for d in DIRS}
+        self.visited: dict[Any, set[tuple[int, int]]] = {}
+        self.blocked: dict[tuple, list[int]] = {}       # (map, x, y, dir) → [times seen, step when last seen]
+        self.warps: dict[tuple, Tile] = {}              # (map, x, y, dir) → where it put us
+        self.inspected: set[tuple] = set()
+        self.walls_at: dict[Any, set[tuple[int, int]]] = {}   # tiles a step into was refused: not a place to explore
+        self.steps = 0                                  # steps tried over the run: the clock blocked edges age by
+        self.here: Tile | None = None
+        self.macros: dict[str, list[str]] = {}
+        self.plans: dict[str, list[str]] = {}           # label → directions
+        self.last_option: str | None = None
+        self.goal_target: dict[str, Any] | None = None
+
+    # ---- memory ---------------------------------------------------------------------------------------
+    def tile_of(self, values: dict[str, Any]) -> Tile | None:
+        m, x, y = (_get(values, self.r.get(k, k)) for k in ("map", "x", "y"))
+        if x is None or y is None:
+            return None
+        try:
+            return (m if m is not None else 0, int(round(float(x) / self.cell)), int(round(float(y) / self.cell)))
+        except (TypeError, ValueError):
+            return None
+
+    def visit(self, t: Tile) -> None:
+        self.visited.setdefault(t[0], set()).add((t[1], t[2]))
+
+    def is_blocked(self, t: Tile, d: str) -> bool:
+        b = self.blocked.get((t[0], t[1], t[2], d))
+        if not b:
+            return False
+        seen, when = b
+        if seen >= 3:
+            return True
+        # seen once or twice: maybe a person standing there; try again after a while
+        return self.steps - when < int(self.r.get("forget_after", 150))
+
+    def learn(self, before: Tile, d: str, after: Tile | None) -> str:
+        """One step's outcome: 'moved', 'blocked', 'warp' or 'off' (pushed somewhere unexpected)."""
+        self.steps += 1
+        if after is None:
+            return "off"
+        dx, dy = DIRS[d]
+        if after == before:
+            k = (before[0], before[1], before[2], d)
+            seen = self.blocked.get(k, [0, 0])[0] + 1
+            self.blocked[k] = [seen, self.steps]
+            self.walls_at.setdefault(before[0], set()).add((before[1] + dx, before[2] + dy))
+            return "blocked"
+        self.visit(after)
+        if after[0] != before[0] or abs(after[1] - before[1]) + abs(after[2] - before[2]) > 1:
+            self.warps[(before[0], before[1], before[2], d)] = after
+            return "warp"
+        if (after[1] - before[1], after[2] - before[2]) == (dx, dy):
+            self.blocked.pop((before[0], before[1], before[2], d), None)
+            return "moved"
+        return "off"
+
+    # ---- planning -------------------------------------------------------------------------------------
+    def _neighbours(self, t: Tile):
+        for d, (dx, dy) in DIRS.items():
+            if self.is_blocked(t, d):
+                continue
+            w = self.warps.get((t[0], t[1], t[2], d))
+            if w is not None:
+                if w[0] == t[0]:
+                    yield d, w            # a spinner or a hole within the map: a known jump
+                continue                  # a door to another map: not part of this map's paths
+            yield d, (t[0], t[1] + dx, t[2] + dy)
+
+    def bfs(self, start: Tile) -> dict[Tile, tuple[Tile | None, str | None, int]]:
+        """Paths over this map from start; unknown tiles are open. tile → (previous tile, direction in, distance)."""
+        seen: dict[Tile, tuple[Tile | None, str | None, int]] = {start: (None, None, 0)}
+        q = deque([start])
+        while q:
+            t = q.popleft()
+            dist = seen[t][2]
+            if dist >= self.radius:
+                continue
+            for d, n in self._neighbours(t):
+                if n in seen:
+                    continue
+                if abs(n[1] - start[1]) > self.radius or abs(n[2] - start[2]) > self.radius:
+                    continue
+                seen[n] = (t, d, dist + 1)
+                # an unvisited tile ends a path: it may be a wall, so plans never route through two unknowns
+                if (n[1], n[2]) in self.visited.get(n[0], set()):
+                    q.append(n)
+        return seen
+
+    @staticmethod
+    def path_to(tree, goal: Tile) -> list[str]:
+        out = []
+        t = goal
+        while tree.get(t) and tree[t][0] is not None:
+            out.append(tree[t][1])
+            t = tree[t][0]
+        return out[::-1]
+
+    def _door_chain(self, start_map: Any, target_map: Any) -> list[tuple]:
+        """Known doors leading from start_map to target_map, as a list of warp keys (BFS over the map graph)."""
+        by_map: dict[Any, list[tuple]] = {}
+        for k, w in self.warps.items():
+            if w[0] != k[0]:
+                by_map.setdefault(k[0], []).append(k)
+        prev: dict[Any, tuple | None] = {start_map: None}
+        q = deque([start_map])
+        while q:
+            m = q.popleft()
+            if m == target_map:
+                break
+            for k in by_map.get(m, []):
+                n = self.warps[k][0]
+                if n not in prev:
+                    prev[n] = k
+                    q.append(n)
+        if target_map not in prev:
+            return []
+        chain, m = [], target_map
+        while prev[m] is not None:
+            chain.append(prev[m])
+            m = prev[m][0]
+        return chain[::-1]
+
+    def options(self, here: Tile, goal: dict[str, Any] | None) -> tuple[dict[str, str], dict[str, list[str]]]:
+        tree = self.bfs(here)
+        opts: dict[str, str] = {}
+        plans: dict[str, list[str]] = {}
+        vis = self.visited.get(here[0], set())
+        # 1. the goal
+        if goal:
+            gm = goal.get("map", here[0])
+            tgt = None
+            why = goal.get("label") or "the goal"
+            if gm == here[0] and "x" in goal and "y" in goal:
+                tgt = (here[0], int(goal["x"]), int(goal["y"]))
+                if tgt == here:
+                    tgt = None
+                elif tgt not in tree:
+                    # not reachable over what is known: head for the reachable tile closest to it
+                    tgt = min(tree, key=lambda t: abs(t[1] - goal["x"]) + abs(t[2] - goal["y"]) + 0.01 * tree[t][2])
+                    if tgt == here:
+                        tgt = None
+            elif gm != here[0]:
+                chain = self._door_chain(here[0], gm)
+                if chain:
+                    k = chain[0]
+                    door = (k[0], k[1], k[2])
+                    if door in tree:
+                        p = self.path_to(tree, door) + [k[3]]
+                        plans["goal"] = p
+                        opts["goal"] = f"walk {len(p)} steps through the known door toward {why} ({len(chain)} door(s) away)"
+                elif goal.get("toward"):
+                    # a direction hint for a map not reached yet: explore that way
+                    goal = {**goal, "_toward": goal["toward"]}
+            if tgt is not None:
+                p = self.path_to(tree, tgt)[: self.max_steps * 2]
+                if p:
+                    plans["goal"] = p
+                    left = abs(tgt[1] - here[1]) + abs(tgt[2] - here[2])
+                    opts["goal"] = f"walk {len(p)} steps toward {why} ({left} tiles away as the crow flies)"
+        # 2. doors to maps not explored
+        k_door = 0
+        for k, w in sorted(self.warps.items(), key=lambda kv: str(kv[0])):
+            if k[0] != here[0] or w[0] == here[0] or w[0] in self.visited and len(self.visited[w[0]]) > 6:
+                continue
+            door = (k[0], k[1], k[2])
+            if door in tree and k_door < 2:
+                p = self.path_to(tree, door) + [k[3]]
+                lab = f"door_{k_door + 1}"
+                plans[lab] = p
+                opts[lab] = f"walk {len(p)} steps back through the door at ({k[1]},{k[2]}) to the little-explored map {w[0]}"
+                k_door += 1
+        # 3. explore, one option per direction
+        toward = (goal or {}).get("_toward")
+        explore = []
+        for d, (dx, dy) in DIRS.items():
+            best = None
+            for t, (_, _, dist) in tree.items():
+                if t == here or (t[1], t[2]) in vis or (t[1], t[2]) in self.walls_at.get(here[0], ()):
+                    continue
+                ox, oy = t[1] - here[1], t[2] - here[2]
+                along = ox * dx + oy * dy
+                if along <= 0 or along < abs(ox * dy + oy * dx):
+                    continue          # not mostly in this direction
+                if best is None or dist < best[1]:
+                    best = (t, dist)
+            if best is None:
+                continue
+            p = self.path_to(tree, best[0])
+            # and on in the same direction over unknown ground, up to max_steps in all
+            p = (p + [d] * self.max_steps)[: max(len(p), self.max_steps)]
+            plans[f"explore_{d}"] = p
+            explore.append((0 if d == toward else 1, best[1], d, len(p)))
+        for _, dist, d, n in sorted(explore):
+            hint = " (the goal's direction)" if d == toward else ""
+            opts[f"explore_{d}"] = f"explore {COMPASS[d]}{hint}: nearest unexplored tile {dist} step(s) away, up to {n} steps"
+        # 4. inspect blocked tiles not inspected yet, nearest first: people, signs and objects block the way as walls do,
+        # and the only general way to find the one a quest wants is to try them
+        cands = []
+        for k in self.blocked:
+            if k[0] != here[0] or k in self.inspected or not self.is_blocked((k[0], k[1], k[2]), k[3]):
+                continue
+            t = (k[0], k[1], k[2])
+            if t in tree:
+                # a blocked tile with open floor around it stands in the room (a person, a sign, an object); one in a
+                # line of other blocked tiles is a wall. Isolated ones first.
+                dx, dy = DIRS[k[3]]
+                bx, by = k[1] + dx, k[2] + dy
+                open_sides = sum(1 for ex, ey in DIRS.values() if (bx + ex, by + ey) in vis)
+                cands.append((-open_sides, tree[t][2], k, open_sides))
+        cands.sort(key=lambda c: (c[0], c[1], str(c[2])))
+        for i, (_, dist, k, open_sides) in enumerate(cands[: int(self.r.get("inspect_options", 2))]):
+            lab = f"inspect_{i + 1}"
+            plans[lab] = self.path_to(tree, (k[0], k[1], k[2])) + [f"face:{k[3]}", "interact"]
+            where = "next to you" if dist == 0 else f"{dist} step(s) away"
+            what = "open floor on %d sides: likely a person or an object" % open_sides if open_sides >= 2 else "probably a wall"
+            opts[lab] = f"walk to the blocked tile {COMPASS[k[3]]} of ({k[1]},{k[2]}), {where}, and press A at it ({what}; never inspected; {len(cands)} left on this map)"
+        if not opts:
+            # nothing new reachable: blocks seen once may have been people who moved; wander and look again
+            d = sorted(DIRS)[self.steps % 4]
+            plans["wander"] = [d] * 3
+            opts["wander"] = f"nothing unexplored or uninspected is reachable: wander {COMPASS[d]} 3 steps"
+        return opts, plans
+
+    # ---- the read -------------------------------------------------------------------------------------
+    def read(self, values: dict[str, Any], goal: dict[str, Any] | None = None) -> dict[str, Any] | None:
+        here = self.tile_of(values)
+        if here is None:
+            return None
+        self.here = here
+        self.visit(here)
+        self.goal_target = goal
+        opts, plans = self.options(here, goal)
+        self.plans = plans
+        self.macros = {k: [str(s) for s in v] for k, v in plans.items()}
+        maps = len(self.visited)
+        walls = sum(1 for k in self.blocked if k[0] == here[0])
+        return {"here": {"map": here[0], "x": here[1], "y": here[2]},
+                "explored": {"tiles_here": len(self.visited.get(here[0], ())), "maps": maps, "doors_known": len(self.warps), "walls_here": walls},
+                "blocked_around": [d for d in DIRS if self.is_blocked(here, d)],
+                "landings": opts}
+
+    def predict(self, label: str) -> None:
+        self.last_option = label
+
+    # ---- playing an option ----------------------------------------------------------------------------
+    def run(self, device, label: str, look: Callable[[], dict[str, Any]], hold: int | None = None, after: int | None = None) -> str:
+        """Walk the plan for `label` step by step. `look()` returns fresh read values without advancing the game.
+        Learns walls and doors as it goes and stops when a step does not go as planned or the game leaves the
+        situation `learn_when` names (a dialogue opened, a battle started)."""
+        plan = self.plans.get(label)
+        if not plan:
+            return f"{label}: no plan"
+        hold = int(self.r.get("step_hold", 16)) if hold is None else hold
+        after = int(self.r.get("after", 4)) if after is None else after
+        interact = self.r.get("interact", "a")
+        done = []
+        for step in plan:
+            v = look()
+            here = self.tile_of(v)
+            if here is None or not _cond(self.r.get("learn_when"), v):
+                done.append("stop: left the overworld")
+                break
+            if step.startswith("face:"):
+                d = step[5:]
+                self.inspected.add((here[0], here[1], here[2], d))
+                device.press(self.keys[d], hold=2, after=after)   # a tap turns the player without walking
+                done.append(f"face {d}")
+                continue
+            if step == "interact":
+                device.press(interact, hold=4, after=after)
+                done.append("A")
+                continue
+            device.press(self.keys[step], hold=hold, after=after)
+            v2 = look()
+            if not _cond(self.r.get("learn_when"), v2):
+                # the step opened a dialogue or a battle (a trainer saw us, a sign): the step itself happened
+                t2 = self.tile_of(v2)
+                if t2 is not None and t2 != here:
+                    self.learn(here, step, t2)
+                done.append(f"{step} → stop: left the overworld")
+                break
+            out = self.learn(here, step, self.tile_of(v2))
+            done.append(step if out == "moved" else f"{step} ({out})")
+            if out != "moved":
+                break
+        self.last_option = label
+        return f"{label}: " + " ".join(done)
+
+    # ---- persistence ----------------------------------------------------------------------------------
+    def dump(self) -> dict[str, Any]:
+        return {"visited": {json.dumps(m): sorted(v) for m, v in self.visited.items()},
+                "blocked": [[list(k), v] for k, v in self.blocked.items()],
+                "warps": [[list(k), list(w)] for k, w in self.warps.items()],
+                "inspected": [list(k) for k in self.inspected], "steps": self.steps,
+                "walls_at": {json.dumps(m): sorted(v) for m, v in self.walls_at.items()}}
+
+    def load(self, d: dict[str, Any]) -> None:
+        self.visited = {json.loads(m): {tuple(p) for p in v} for m, v in (d.get("visited") or {}).items()}
+        self.blocked = {tuple(k): list(v) for k, v in d.get("blocked") or []}
+        self.warps = {tuple(k): tuple(w) for k, w in d.get("warps") or []}
+        self.inspected = {tuple(k) for k in d.get("inspected") or []}
+        self.steps = int(d.get("steps", 0))
+        self.walls_at = {json.loads(m): {tuple(p) for p in v} for m, v in (d.get("walls_at") or {}).items()}
