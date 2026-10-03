@@ -851,7 +851,9 @@ class Agent:
         import numpy as _np
         dirs = list(r.get("keys") or ["down", "up", "left", "right"])
         buttons = list(r.get("buttons") or ["a", "start", "b"])
-        res = self.device.branch({"wait": [], **{k: [k] for k in buttons + dirs}}, frames=int(r.get("frames", 48)))
+        # directions are held long enough to walk a step: a tap only turns the player in some games (Pokemon)
+        hold = int(r.get("hold", 16))
+        res = self.device.branch({"wait": [], **{k: [k] for k in buttons}, **{k: [f"{k}:{hold}"] for k in dirs}}, frames=int(r.get("frames", 48)))
         disc = getattr(self.device, "discoverer", None)
         if disc is not None and res["wait"].get("ram") is not None:
             # each direction against waiting, from the same moment: what the press changed and nothing else, which is
