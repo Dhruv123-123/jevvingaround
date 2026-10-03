@@ -1,4 +1,36 @@
-# Go round two: playout results for Jev's candidate moves (2026-10-03)
+# Go rounds two and three: playout results for Jev's candidate moves (2026-10-03)
+
+## Round three: a fixed white and focused playouts (the current pack)
+
+- White can now play a fixed number of playouts a move (`go.html?ai=mc&playouts=400`) instead of 500 ms of
+  thinking, so it plays the same on any machine and the same seed replays the same game for the same black moves.
+  400 is what 500 ms buys on this machine (measured 366 to 431 a move); yesterday's ~300 was a weaker white.
+- Playouts are concentrated: every candidate gets 32 games, the three leaders by that first pass go on to 160
+  (`playouts: 32, playouts_top: 3, playouts_top_n: 160`), and each result carries `n`. The pack says a 0.06 gap
+  between two 160-game moves is real. About 370 ms per new board: perception on Jev's turns went from 427 ms to 718 ms p50 (Go has no clock).
+  Jev's own latency 329 ms p50.
+
+16 seeds, `web://games/go.html?seed={seed}&ai=mc&playouts=400`:
+
+| Pack | Decider | Won | Lost | Mean final lead | Median | Cost |
+|---|---|---|---|---|---|---|
+| v3 (no playouts) | Jev | 3 | 13 | −6.5 | −5.5 | $0.064 |
+| **v5 (focused playouts)** | **Jev** | **8** | **8** | **+12.5** | **+0.5** | $0.077 |
+| v5 | random | 0 | 16 | −17.5 | −13.5 | $0 |
+
+8 of 16 against 3 of 16 is the first Go result here that 16 games can call (one-sided Fisher p ≈ 0.07), and the mean
+lead moved by 19 points. Random under the same rules still loses every game, so the compiler alone does not win.
+
+Jev vs the rankings (`scripts/go_agree.py`, 512-playout recheck): v3 took the `worth` top on 603 of 606 free choices.
+v5 left it on 111 of 628 (18%), 104 of those for the playout top. Of the 111: **64 better, 5 worse, 42 even**
+(mean +0.04 win rate). Its clearest calls passed up a `worth` 1 to 6 points higher for a much better win rate: seed
+1 tick 61 (0.94 vs 0.73), seed 3 tick 49 (0.89 vs 0.69), seeds 2 and 12 (+0.16 each). The worst was seed 10 tick 7
+(0.43 vs 0.50). It still stays with `worth` more than the playouts justify: where the two tops differ (432), the
+playout top was better 155 times, worse 33.
+
+Logs: `/mnt/project-files/anygame/go-run-logs/v5-fixed-white/` (v3-baseline, v5-focused, random, jev-vs-rankings.txt).
+
+## Round two: 64 playouts for every candidate (time-bounded white)
 
 Branch `claude/anygame-go-playouts` (on `claude/anygame-go-554rhu`). Follows [go-run-jev.md](go-run-jev.md).
 

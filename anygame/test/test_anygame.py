@@ -706,3 +706,10 @@ def test_go_playouts_score_the_candidates_the_same_way_every_time():
     assert po["c6r5"]["win"] >= 0.9 and all(0 <= x["win"] <= 1 for x in po.values())
     go._PLAYOUT_CACHE.clear()
     assert go.read(board, {"komi": 6.5, "playouts": 32})["playouts"] == po    # seeded from the board
+
+
+def test_go_playouts_spend_more_games_on_the_leaders():
+    from anygame.perceive import go
+    v = go.read(["........."] * 9, {"komi": 6.5, "playouts": 8, "playouts_top": 2, "playouts_top_n": 24})
+    ns = sorted(x["n"] for x in v["playouts"].values())
+    assert ns[-2:] == [24, 24] and set(ns[:-2]) == {8}
