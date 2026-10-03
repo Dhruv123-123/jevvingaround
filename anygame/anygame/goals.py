@@ -230,8 +230,10 @@ class GoalBook:
             self.latency_ms.append(ms)
             entry.update({"ms": ms, "answer": text[:600], "tokens": usage.get("total_tokens")})
             a = _json(text)
-            if a.get("keep") and self.current is not None:
-                entry["result"] = "kept"
+            same = self.current is not None and (a.get("goal") or {}).get("done") == self.current["done"] and \
+                (a.get("goal") or {}).get("target") == self.current.get("target")
+            if (a.get("keep") or same) and self.current is not None:
+                entry["result"] = "kept"           # the same goal again keeps its start (what counts as new is unchanged)
                 return
             goal = a.get("goal") or {}
             err = None if goal.get("instruction") else "no instruction"

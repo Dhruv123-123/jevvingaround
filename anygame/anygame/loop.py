@@ -459,10 +459,11 @@ class Agent:
         if self.memory is not None and pack is self.base:
             w = next((t for t in self.worlds.values() if hasattr(t, "tile_of")), None)
             t = w.tile_of(values) if w is not None else None
-            self.memory.observe(self.tick, getattr(self.device, "frames", None), values,
+            placed = {**values, "map": t[0]} if t else values      # the place as the world memory names it
+            self.memory.observe(self.tick, getattr(self.device, "frames", None), placed,
                                 values.get(self.base.raw.get("dialogue_read", "text")), (t[1], t[2]) if t else None)
             if self.goalbook is not None:
-                self.quest = self.goalbook.update(self.tick, values, w)
+                self.quest = self.goalbook.update(self.tick, placed, w)
         for rid, r in pack.reads.items():
             if r.get("kind") == "menu":
                 if rid not in self.worlds:
@@ -470,6 +471,7 @@ class Agent:
                     self.worlds[rid] = MenuTracker(r)
                 self.trackers[rid] = self.worlds[rid]
                 if r.get("when") and not self._task_ok(r["when"], values):
+                    self.worlds[rid].see(self.device.screen(), values.get("text"))   # where a choice may lead back to
                     values[rid] = None
                     continue
                 pos = [str(x) for x in (r.get("pos") or [])]

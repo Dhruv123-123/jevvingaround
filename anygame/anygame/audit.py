@@ -55,6 +55,7 @@ class Auditor:
         self.max_audits = max_audits
         self.min_gap = min_gap
         self.records: list[dict[str, Any]] = []
+        self.seen: dict[tuple, str] = {}       # a disagreement already played out → its verdict
         self.busy = False
 
     def top_answers(self, qs: dict) -> dict:
@@ -85,6 +86,14 @@ class Auditor:
             rec["verdict"] = "agree"
             self.records.append(rec)
             return rec
+        key = (str(values.get("map")), values.get("x"), values.get("y"), values.get("screen"), rec["jev"], rec["top"],
+               str((values.get("menu") or {}).get("text")))
+        if key in self.seen:
+            # the same disagreement in the same place: the branches would replay the same game, so the verdict stands
+            rec["verdict"] = self.seen[key]
+            rec["repeat"] = True
+            self.records.append(rec)
+            return rec
         if self.max_audits is not None and sum(1 for r in self.records if "jev_score" in r) >= self.max_audits:
             rec["verdict"] = "differs (not played out: audit cap)"
             self.records.append(rec)
@@ -103,6 +112,7 @@ class Auditor:
             rec["verdict"] = "same"
         else:
             rec["verdict"] = "jev better" if sj["novelty"] > st["novelty"] else "top better"
+        self.seen[key] = rec["verdict"]
         self.records.append(rec)
         return rec
 
@@ -159,6 +169,7 @@ class Auditor:
         for r in self.records:
             by[r["verdict"]] = by.get(r["verdict"], 0) + 1
         played = [r for r in self.records if "jev_score" in r]
+        repeats = sum(1 for r in self.records if r.get("repeat"))
         by_screen: dict[str, dict[str, int]] = {}
         for r in self.records:
             d = by_screen.setdefault(str(r.get("screen")), {})
@@ -167,7 +178,7 @@ class Auditor:
                 "agree_share": round(by.get("agree", 0) / n, 3) if n else None,
                 "jev_helped_share": round(by.get("jev better", 0) / n, 3) if n else None,
                 "jev_hurt_share": round(by.get("top better", 0) / n, 3) if n else None,
-                "played_out": len(played), "horizon": self.horizon,
+                "played_out": len(played), "repeats_of_a_played_verdict": repeats, "horizon": self.horizon,
                 "audit_seconds": round(sum(r.get("ms", 0) for r in played) / 1000, 1)}
 
     def dump(self) -> dict[str, Any]:

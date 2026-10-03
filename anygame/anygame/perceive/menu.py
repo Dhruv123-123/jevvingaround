@@ -18,7 +18,7 @@ The decider gets one choice among `pick_<k>` with each entry's label and consequ
 same menu before. Nothing is known about the game: Aevilia's character select, Pokemon's battle menu and a shop are
 the same read. `macro` actions play the pick with run(): the key sequence, then A.
 
-    menu: { kind: menu, when: { read: screen, equals: choice }, depth: 5, settle: 60, pos: [found.x, found.y] }
+    menu: { kind: menu, when: { read: screen, equals: choice }, depth: 5, settle: 90, pos: [found.x, found.y] }
 """
 from __future__ import annotations
 import hashlib
@@ -80,8 +80,8 @@ def _ocr_boxes(img: np.ndarray) -> list[tuple[float, float, float, float, str]]:
     """(x0, y0, x1, y1, text) for every text box on screen."""
     from .ocr import engine
     import cv2
-    up = 1.5
-    big = cv2.resize(img, None, fx=up, fy=up, interpolation=cv2.INTER_CUBIC)
+    up = 0.67                 # 2x the Game Boy's own pixels: its 8 px font reads far better there than larger
+    big = cv2.resize(img, None, fx=up, fy=up, interpolation=cv2.INTER_AREA)
     res, _ = engine()(big)
     out = []
     for box, text, _conf in res or []:
@@ -114,7 +114,7 @@ class MenuTracker:
         self.depth = int(r.get("depth", 5))
         self.hold = int(r.get("hold", 4))
         self.gap = int(r.get("gap", 10))          # frames after each cursor press
-        self.settle = int(r.get("settle", 60))     # frames after A or B before reading the result
+        self.settle = int(r.get("settle", 90))     # frames after A or B before reading the result
         self.cache: dict[str, dict[str, Any]] = {}   # screen key → the read
         self.history: dict[str, list[str]] = {}      # screen key → labels picked on it before, with what came of it
         self.plans: dict[str, list[str]] = {}
@@ -123,6 +123,26 @@ class MenuTracker:
         self.last_landings: dict[str, str] = {}
         self.branches = 0
         self.reads = 0
+        self.seen: dict[str, tuple[np.ndarray, str]] = {}   # screens the run has shown: small image, its text
+
+    def see(self, screen: np.ndarray, text: str | None = None) -> None:
+        """A screen the run passed through (any tick): an outcome that looks like one of these leads back to it."""
+        k = _key(screen)
+        if k not in self.seen:
+            self.seen[k] = (_small(screen), (text or "")[:60])
+            if len(self.seen) > 300:
+                self.seen.pop(next(iter(self.seen)))
+
+    def _like_seen(self, img: np.ndarray, exclude: np.ndarray | None = None) -> str | None:
+        g = _small(img)
+        best, bd = None, float(self.r.get("seen_within", 4.0))
+        for sm, txt in self.seen.values():
+            if sm.shape != g.shape or (exclude is not None and float(np.abs(sm - exclude).mean()) < 1.0):
+                continue
+            d = float(np.abs(sm - g).mean())
+            if d < bd:
+                best, bd = txt or "(no text)", d
+        return best
 
     # ---- reading the menu by trying -------------------------------------------------------------------
     def _play(self, device, keys: list[str], total: int) -> np.ndarray:
@@ -182,15 +202,18 @@ class MenuTracker:
     def _outcome(self, device, keys: list[str], total: int, ref: np.ndarray, pos) -> dict[str, Any]:
         img = self._play(device, keys, total + self.settle)
         from .ocr import _text
-        txt = _text(img, 1.5)
+        txt = _text(img, 0.67)
         p = pos() if pos else None
-        change = float(np.abs(_small(img) - _small(ref)).mean())
-        return {"_text": txt, "change": round(change, 1), "walking": p is not None and None not in p, "same_screen": change < 1.0}
+        g = _small(img)
+        change = float(np.abs(g - _small(ref)).mean())
+        return {"_text": txt, "change": round(change, 1), "walking": p is not None and None not in p, "same_screen": change < 1.0,
+                "blank": float(g.std()) < 3.0, "back_to": self._like_seen(img, exclude=_small(ref))}
 
     # ---- the read ------------------------------------------------------------------------------------------
     def read(self, device, screen: np.ndarray, pos: Callable[[], tuple] | None = None) -> dict[str, Any]:
         k = _key(screen)
         self.last_key = k
+        self.see(screen)
         m = self.cache.get(k)
         if m is None:
             m = self.explore(device, pos)
@@ -212,11 +235,16 @@ class MenuTracker:
         times = {lab: sum(1 for h in before if h.startswith(lab + ":")) for lab in landings}
         for lab, t in times.items():
             if t:
-                landings[lab] += f" [chosen here {t}x before]"
+                landings[lab] += " [chosen here before]"      # not a count: a stable read lets "did nothing" be noticed
         # best first, for a decider that takes the top: entries that do something and were not tried here yet, in
         # cursor order; then ones tried before (fewest first); entries that change nothing last
         idle = {lab for lab in landings if lab.startswith("pick_") and m["entries"][int(lab[5:]) - 1]["same_screen"]}
-        order = sorted(landings, key=lambda lab: (lab in idle, lab == "back_out", times[lab], list(landings).index(lab)))
+        back = {lab for lab in landings if lab.startswith("pick_") and m["entries"][int(lab[5:]) - 1].get("back_to") is not None}
+        if len(idle) < sum(1 for lab in landings if lab.startswith("pick_")):
+            for lab in idle:                 # an entry that does nothing is not a choice while others do something
+                landings.pop(lab)
+                plans.pop(lab, None)
+        order = sorted(landings, key=lambda lab: (lab in idle, lab == "back_out", lab in back, times[lab], list(landings).index(lab)))
         landings = {lab: landings[lab] for lab in order}
         self.plans = plans
         self.macros = {kk: list(v) for kk, v in plans.items()}
@@ -230,7 +258,14 @@ class MenuTracker:
         bits = []
         if e["walking"]:
             bits.append("you can walk after it")
-        bits.append(f"new text: '{e['new_text']}'" if e["new_text"] else "the screen changes, no new text")
+        if e.get("back_to") is not None:
+            bits.append(f"goes back to a screen seen before ('{e['back_to']}')")
+        elif e.get("blank"):
+            bits.append("the screen goes blank: a new scene loads")
+        if e["new_text"]:
+            bits.append(f"new text: '{e['new_text']}'")
+        elif not bits:
+            bits.append("the screen changes, no new text")
         return "; ".join(bits)
 
     def predict(self, label: str) -> None:

@@ -17,7 +17,7 @@ read:
   screen: { kind: probe, pos: [found.x, found.y] }
   text: { kind: ocr, rect_px: [0, 0, 480, 432], when: { read: screen, in: [text, choice] }, otherwise: "" }
   # a choice on screen: its entries and what choosing each does, found by trying them from a save state
-  menu: { kind: menu, when: { read: screen, equals: choice }, pos: [found.x, found.y], depth: 5, settle: 60 }
+  menu: { kind: menu, when: { read: screen, equals: choice }, pos: [found.x, found.y], depth: 5, settle: 90 }
   world: { kind: world, map: map, x: x, y: y, cell: cell, step_hold: 16, after: 6, max_steps: 8, radius: 40,
            learn_when: { read: x, not: null } }
 remember: [text]

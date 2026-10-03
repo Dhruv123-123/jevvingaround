@@ -143,10 +143,8 @@ def test_menu_entries_found_by_trying_and_ranked(monkeypatch):
     assert v["entries"] == 3
     assert g.s == {"cur": 0, "open": True, "text": None} and g.real_presses[-1] in ("a", "b", "down", "up")   # put back
     lands = list(v["landings"])
-    assert "nothing changes" in v["landings"][lands[-1]]          # the idle entry is ranked last
-    assert set(lands) == {"pick_1", "pick_2", "pick_3", "back_out"}
-    idle = lands[-1]
-    assert t.plans[idle][-1] == "a" and len(t.plans[idle]) in (2, 3)
+    assert lands == ["pick_1", "pick_2", "back_out"]               # entry 3 does nothing: not offered while others do
+    assert t.plans["pick_2"] == ["down", "a"]
     g.real_presses.clear()
     t.run(g, "pick_2", lambda: {})
     assert g.real_presses == t.plans["pick_2"] and g.s["text"] is not None
