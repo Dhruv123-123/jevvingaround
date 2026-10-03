@@ -291,14 +291,24 @@ done when two runs in a row reach its last milestone from the previous phase's s
 
 ## Where a second thread can split off
 
-The work splits cleanly at the device boundary:
+Aligned with the roadmap's seams (G1 discovered state, G2 branching, G3 options; G4 place memory, G5 goals):
 
-- **Thread A, platform and state:** `device/pyboy.py` (clock, save states, branching), `discover.py` (position, map
-  signature; next: menu cursor, HP, money, text from tiles), the `probe` read, graders. Measured by agreement of the
-  discovered state with the grader's RAM truth on both ROMs.
-- **Thread B, long-horizon play:** `perceive/world.py` (memory, navigator, inspect, stall rules), the dialogue log, goals
-  from what the game says (roadmap G5), battle and menu options with branching, the Jev audit. Measured by milestones
-  on both ROMs.
+- **This thread: G1–G3.** `device/pyboy.py` (clock, save states, `branch`), `discover.py`, the `probe` read, options
+  that run until done or interrupted (today the `macro` action with a tracker's `run()`), graders.
+- **Second thread: G4–G5.** `perceive/world.py` grows into the roadmap's `anygame/world.py` (place memory, dialogue log
+  with where and when, saved with the run), and `anygame/goals.py`: the Azure chat model writes the next goal as an
+  outcome-level condition over discovered reads, validated by `pack.check_tasks`, and never presses a button.
 
-The contract between them is the device's `state()["found"]` (x, y, map, cell) plus `branch()` and the `probe`
-categories. Thread B never reads raw RAM.
+The interface between them, stable from this commit:
+
+| piece | shape |
+|---|---|
+| discovered state | `device.state()["found"]` = `{x, y, map, cell}` (map is a signature int, not the game's id) |
+| screen kind | the `probe` read: `walk`, `choice`, `text`, `button`, `none` |
+| options | a tracker with `read(values, goal) → {landings: {label: description}}`, `plans`, and `run(device, label, look, classify) → str`; the agent asks the decider among `landings` and plays the pick with `run` |
+| goal in | `Agent.quest` = `{id, instruction, done, target?}`; `target` may name a discovered map signature and tile, or `toward` a direction |
+| text in | `state["recent_<read>"]` from `remember:`; the full log is the second thread's to keep |
+
+Disagreement with the roadmap, one: it puts options (G3) after state and branching. Here a minimal option layer
+already exists (walking a planned path, stopping on interruption), because without it no measured run on either ROM
+was possible. It is replaced, not paralleled, when G3's `kind: option` lands.
