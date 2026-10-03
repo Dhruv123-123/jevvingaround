@@ -321,3 +321,22 @@ test("the dino pack streams its frames and a jump is not pressed again within ag
   await ag.run();
   assert.equal(streamed, 1);
 });
+
+test("a jump with lock_ms keeps other keys up for that long (the dino pack from the frame-rate round)", async () => {
+  // test/fixtures/web-dino-lock.yaml: packs/web-dino from claude/anygame-dino-framerate (PR #7), jump lock_ms: 100.
+  // A late answer ranking duck, landing on the frame after a jump, must not press ArrowDown: on the page that is a
+  // fast drop out of the jump. Mirrors test_dino_jumps_on_the_frame_and_asks_jev_beside_the_loop
+  const pack = loadPack(readFileSync(join(process.cwd(), "test", "fixtures", "web-dino-lock.yaml"), "utf8"), "web-dino");
+  const jump = pack.actions.find((a) => a.id === "jump"), duck = pack.actions.find((a) => a.id === "duck");
+  assert.equal(Number(jump.params.lock_ms), 100);
+  const keys = [];
+  const dev = { size: () => pack.size, frame: async () => ({ width: 1, height: 1, data: new Uint8ClampedArray(4) }), tap: async () => {}, swipe: async () => {},
+    key: async (...a) => { keys.push(a); }, close: async () => {} };
+  const ag = new Agent(pack, dev, null, 1);
+  assert.match(await ag.act(jump, {}), /^key Space down/);
+  assert.match(await ag.act(duck, {}), /^wait: jump locks keys for \d+ ms/);
+  assert.equal(keys.length, 1);
+  ag.locked = ["jump", performance.now() - 1];
+  assert.match(await ag.act(duck, {}), /^key ArrowDown/);
+  assert.equal(keys.at(-1)[0], "ArrowDown");
+});

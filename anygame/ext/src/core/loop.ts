@@ -89,6 +89,7 @@ export class Agent {
   skippedReflex = 0;
   inflight: Inflight | null = null;    // ask: async — the decider call running beside the loop, if any
   pressedAt: Record<string, number> = {};     // action id → when its key last went down (for again_ms)
+  locked: [string, number] | null = null;     // [action id, until]: no other key before then (lock_ms)
   askedAsync = 0;          // calls started that way, over the run       // ticks the pack's reflex condition acted on the last answers without the decider
   accepted: Values | null = null;   // the last reading that passed the pack's plausibility checks
   implausibleTicks = 0;    // consecutive ticks whose reads broke a check even after re-reading
@@ -411,12 +412,21 @@ export class Agent {
     const [w, h] = this.device.size();
     const p = a.params;
     if (a.kind === "wait") return "wait";
-    if (a.kind === "key" && p.again_ms) {
-      // not pressed again this soon: at a high frame rate the screen may not show the last press yet (a dino still
-      // on the ground one frame after its jump key), and a second press would cut the first short
-      const now = performance.now(), last = this.pressedAt[a.id];
-      if (last !== undefined && now - last < Number(p.again_ms)) return `wait: ${a.id} pressed ${Math.round(now - last)} ms ago`;
-      this.pressedAt[a.id] = now;
+    if (a.kind === "key") {
+      const now = performance.now();
+      if (this.locked && this.locked[0] !== a.id && now < this.locked[1]) {
+        // another key went down a moment ago and the screen may not show it yet: a dino one frame after its jump key
+        // still reads as on the ground, and a duck pressed then is a fast drop out of the jump
+        return `wait: ${this.locked[0]} locks keys for ${Math.round(this.locked[1] - now)} ms`;
+      }
+      if (p.again_ms) {
+        // not pressed again this soon: at a high frame rate the screen may not show the last press yet (a dino still
+        // on the ground one frame after its jump key), and a second press would cut the first short
+        const last = this.pressedAt[a.id];
+        if (last !== undefined && now - last < Number(p.again_ms)) return `wait: ${a.id} pressed ${Math.round(now - last)} ms ago`;
+        this.pressedAt[a.id] = now;
+      }
+      if (p.lock_ms) this.locked = [a.id, now + Number(p.lock_ms)];
     }
     if (a.kind === "key" && Number(p.hold_ms ?? 0) && p.release === "later") {
       // held without stopping the loop: let go on the first frame after hold_ms
