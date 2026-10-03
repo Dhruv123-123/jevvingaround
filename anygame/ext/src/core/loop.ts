@@ -109,7 +109,7 @@ export class Agent {
   swapPack(pack: Pack) {
     this.base = pack;
     this.pack = this.mode !== "main" && pack.modes[this.mode] ? pack.modes[this.mode] : pack;
-    this.trackers = {};
+    this.trackers = {}; this.heads = {};
     this.lastAnswers = null;
     this.loadFingerprints();
   }
@@ -313,17 +313,40 @@ export class Agent {
     return out;
   }
 
+  heads: Record<string, { cells: Set<string>; head: [number, number] | null }> = {};
+  headOf(rid: string, grid: any, sym: string): string | null {
+    if (!grid || typeof grid !== "object" || Array.isArray(grid)) return null;
+    const cells = new Set<string>();
+    for (const [k, v] of Object.entries(grid)) { const m = /^c(\d+)r(\d+)$/.exec(k); if (m && String(v) === sym) cells.add(`${m[1]},${m[2]}`); }
+    const prev = this.heads[rid];
+    let head = prev?.head ?? null;
+    if (prev) {
+      const fresh = [...cells].filter((c) => !prev.cells.has(c)).map((c) => c.split(",").map(Number) as [number, number]);
+      const ends = fresh.filter(([c, r]) => [[1, 0], [-1, 0], [0, 1], [0, -1]].filter(([dc, dr]) => cells.has(`${c + dc},${r + dr}`)).length <= 1);
+      if (ends.length === 1) head = ends[0];
+      else if (fresh.length === 1) head = fresh[0];
+      else if (ends.length > 1 && prev.head) { const ph = prev.head; head = ends.reduce((a, b) => (Math.abs(b[0] - ph[0]) + Math.abs(b[1] - ph[1]) > Math.abs(a[0] - ph[0]) + Math.abs(a[1] - ph[1]) ? b : a)); }
+    }
+    if (head && !cells.has(`${head[0]},${head[1]}`)) head = null;
+    this.heads[rid] = { cells, head };
+    return head ? `c${head[0]}r${head[1]}` : null;
+  }
+
   lastState: any = undefined;
   observe(frame: Frame, pack: Pack = this.pack, state: any = this.lastState): { values: Values; timings: Record<string, number>; conf: Record<string, number> } {
     const { values: raw, timings, conf } = readAll(pack, frame, undefined, state);
     const values = this.present(raw, pack);
+    for (const [rid, r] of Object.entries(pack.reads)) {
+      // the moving end of a body drawn in one colour: the cell that newly took the symbol (as perceive's _head)
+      if (r.kind === "head") values[rid] = this.headOf(rid, raw[r.in], String(r.symbol ?? "s"));
+    }
     for (const [rid, r] of Object.entries(pack.reads)) {
       if (!r.history) continue;
       const cur = values[rid];
       if (this.lastValues && rid in this.lastValues && stableHash(this.lastValues[rid]) !== stableHash(cur)) this.prevDistinct[rid] = this.lastValues[rid];
       if (rid in this.prevDistinct) {
         values[`${rid}_prev`] = this.prevDistinct[rid];
-        if (r.kind === "locate" && typeof cur === "string" && typeof this.prevDistinct[rid] === "string") {
+        if ((r.kind === "locate" || r.kind === "head") && typeof cur === "string" && typeof this.prevDistinct[rid] === "string") {
           values[`${rid}_moving`] = direction(this.prevDistinct[rid], cur);
           values[`${rid}_reverse`] = REVERSE[values[`${rid}_moving`]] ?? "none";
         }
@@ -453,7 +476,7 @@ export class Agent {
     // classify on the base pack's reads, then observe with the active mode's pack
     let obs = this.observe(frame, this.base);
     const cls = this.classify(obs.values, fp);
-    if (cls.mode !== this.mode) { this.mode = cls.mode; this.trackers = {}; this.lastAnswers = null; this.noops = []; }
+    if (cls.mode !== this.mode) { this.mode = cls.mode; this.trackers = {}; this.heads = {}; this.lastAnswers = null; this.noops = []; }
     this.pack = this.mode === "main" ? this.base : this.base.modes[this.mode];
     if (this.mode !== "main") obs = this.observe(frame, this.pack);
     const { values, timings } = obs;

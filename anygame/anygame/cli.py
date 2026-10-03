@@ -107,7 +107,7 @@ def cmd_eval(a):
         frame = cv2.imread(str(pack.path.parent / t["frame"])) if t.get("frame") else np.zeros((pack.size[1], pack.size[0], 3), np.uint8)
         state = json.loads((pack.path.parent / t["state"]).read_text()) if t.get("state") else None
         t0 = time.perf_counter()
-        values, _, timings = Agent(pack, device=_Dummy(pack.size), jev=None).observe(frame, state=state, wait=True)
+        values, _, timings = Agent(pack, device=_Dummy(pack.size), jev=None, background=False).observe(frame, state=state)
         ms = (time.perf_counter() - t0) * 1000
         misses = {k: (v, values.get(k)) for k, v in t["expect"].items() if not _match(v, values.get(k))}
         ok = not misses
@@ -119,7 +119,7 @@ def cmd_eval(a):
                 line += "  (action check skipped: no sensor)"
             else:
                 ag = Agent(pack, device=_Dummy(pack.size), jev=jev)
-                vals, _, _ = ag.observe(frame, state=state, wait=True)
+                vals, _, _ = ag.observe(frame, state=state)
                 res = jev.ask({"game": pack.name, "how_to_play": pack.play, "screen": vals, "recent_actions": []}, ag.questions(vals))
                 choice = res["answers"]["action"]["choice"]
                 ea = t["expect_action"]
@@ -328,7 +328,7 @@ def cmd_author(a):
     size = tuple(int(v) for v in a.size.split("x"))
     ok, out = author(a.device, a.game, Path(a.out), play=a.play, rounds=a.rounds, model=a.model, frames_n=a.frames, size=size,
                      play_ticks=a.play_ticks, tune=a.tune, sensor=a.sensor, score_read=a.score_read, log=lambda m: print(m, file=sys.stderr),
-                     demo=Path(a.demo) if a.demo else None)
+                     demo=Path(a.demo) if a.demo else None, resume=a.resume)
     print(json.dumps({"pack": str(out / "pack.yaml"), "passes_eval": ok}))
     sys.exit(0 if ok else 1)
 
@@ -853,6 +853,7 @@ def main(argv=None):
     au.add_argument("--tune", type=int, default=0, help="rounds of play → digest → revised paragraph/questions/rules (needs --play-ticks)")
     au.add_argument("--sensor", default="jev", help="sensor used for the play rounds: jev | random | llm:<model>")
     au.add_argument("--score-read", default=None, help="read id that measures progress, for keeping the best pack")
+    au.add_argument("--resume", action="store_true", help="start from the pack and probe frames already in --out (revise it instead of probing and writing anew)")
     au.add_argument("--demo", default=None, help="a demonstration directory (from `anygame explore` or the extension) to author from instead of probing"); au.set_defaults(fn=cmd_author)
     ex = sub.add_parser("explore", help="let the vision model play for a while and write a demonstration for the author")
     ex.add_argument("--device", required=True); ex.add_argument("--out", required=True); ex.add_argument("--seconds", type=int, default=90)
