@@ -93,10 +93,10 @@ def snake_start(dev):
 # ---------------------------------------------------------------- dino: chromedino.com
 DINO_JS = """(() => { const r = Runner.instance_; return {crashed: r.crashed, playing: r.playing, speed: +r.currentSpeed.toFixed(2),
   dist: Math.round(r.distanceRan), score: r.distanceMeter.getActualDistance(r.distanceRan), y: r.tRex.yPos, jumping: r.tRex.jumping,
-  obs: r.horizon.obstacles.map(o => [o.typeConfig.type, Math.round(o.xPos), Math.round(o.yPos), o.width])}; })()"""
+  scroll: window.scrollY, obs: r.horizon.obstacles.map(o => [o.typeConfig.type, Math.round(o.xPos), Math.round(o.yPos), o.width])}; })()"""
 
 
-def dino_truth_next(truth, x0=96, x1=540):
+def dino_truth_next(truth, x0=114, x1=540):
     """The page's nearest obstacle in front of the dino's nose: (gap px, width px, type, y) or None."""
     obs = [o for o in truth.get("obs", []) if o[1] + o[3] > x0 and o[1] < x1]
     if not obs:
@@ -125,7 +125,7 @@ def dino_compare(values, truth):
     if t is None and t0 is None:
         if nxt.get("rows") not in (None, "none"):
             wrong["next"] = {"read": nxt, "page": "clear"}
-    elif t is None or t0 is None or t[2] != t0[2]:
+    elif t is None or t0 is None or t[2] != t0[2] or t[0] > t0[0]:
         pass        # an obstacle entered or left the road between the two page reads: either read is right
     elif t[2] == "PTERODACTYL" and t[3] < 60:
         pass        # a high bird the dino runs under: the road may read it or not, both are safe
@@ -139,8 +139,18 @@ def dino_start(dev):
     dev.reload()
     page = dev._page
     page.wait_for_timeout(1500)
+    # ArrowDown (duck, fast drop) scrolls this page when the game lets the key through (after a crash), and the
+    # browser keeps the scroll across a reload: the canvas then sits ~100 px higher and every zone reads the wrong strip
+    page.evaluate("window.scrollTo(0, 0)")
     page.keyboard.press("Space")
     page.wait_for_function("Runner.instance_ && Runner.instance_.activated && !Runner.instance_.crashed && Runner.instance_.tRex.yPos >= 90", timeout=15000)
+    # the page's layout varies between visits (a banner above the game, sometimes): scroll so the game sits where
+    # the pack's zones expect it, 137 px from the top
+    y = page.evaluate("window.scrollTo(0, 0); document.querySelector('canvas').getBoundingClientRect().y")
+    if round(y) != 137:
+        page.evaluate(f"window.scrollTo(0, {y - 137})")
+    y = page.evaluate("document.querySelector('canvas').getBoundingClientRect().y")
+    assert round(y) == 137, f"the game sits at y={y:.0f} on the page: the pack's zones would be off"
 
 
 GAMES = {

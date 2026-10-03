@@ -741,4 +741,4 @@ def test_dino_jumps_on_the_frame_and_asks_jev_beside_the_loop():
     i, name, hold, block = dev.keys[0]
     jumped = recs[-1]
     assert name == "Space" and hold == 250 and block is False and jumped["choice"] == "long_jump"
-    assert jumped["screen"]["next"]["ttc_ms"] <= 250 and all(r["choice"] == "keep" for r in recs[:-1] if "choice" in r)
+    assert jumped["screen"]["next"]["ttc_ms"] <= 205 and all(r["choice"] == "keep" for r in recs[:-1] if "choice" in r)
