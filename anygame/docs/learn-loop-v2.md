@@ -4,16 +4,19 @@
 with Jev deciding and Azure `gpt-5.6-luna` diagnosing and rewriting, on three games where a fix was found by hand
 this week, with that fix taken out.
 
-**Verdict: yes on two of three.** On tic-tac-toe the loop found the known fix (a turn read and gate) on its first
+**Verdict: yes on all three.** On tic-tac-toe the loop found the known fix (a turn read and gate) on its first
 rewrite. On Tetris it found the known fix (lookahead on, and "take the top landing") on its second run, after it
-first fixated on a smaller real bug. On Snake it diagnosed the right kind of problem (latency) but never found the
-`reflex:` line; both of its timing rewrites played worse and were reverted.
+first fixated on a smaller real bug. On Snake it first diagnosed the right kind of problem (latency) but never reached
+for `reflex:`; after a catalog that maps each kind of fault to the feature that fixes it was added, it found a reflex
+and kept it: 5 of 5 trial games alive at the cap (median score 190) against 1 of 4 for the pack without it (median 140).
+See "Snake, second attempt" below.
 
 | game | known fix removed | before | after | found |
 |---|---|---|---|---|
 | tic-tac-toe, playtictactoe.org | turn gate (none existed) | 9 won / 22 tied / 4 lost of 35 (first loop, pack unchanged) | **5 won / 7 tied / 0 lost of 12** | **the known fix**: `count` read X minus O, `act_when` turn = 0 |
 | Tetris, seed 1, 400 ticks | lookahead and the "take `a`" paragraph | game over at 13–15 lines, 8 of 8 games | **156, 159, 158 lines, alive at the cap** (3 games) | **the known fix**: `lookahead: true` plus a paragraph saying take the top-ranked landing |
-| Snake, seed 2, 400 ticks | the `reflex:` line | 2 of 5 games dead | no change kept | **nothing**: two timing rewrites, both reverted |
+| Snake, seed 2, 400 ticks (first attempt) | the `reflex:` line | 2 of 5 games dead | no change kept | **nothing**: two timing rewrites, both reverted |
+| Snake, seed 2, 400 ticks (with the fault catalog) | the `reflex:` line | 3 of 4 dead, median score 140 | **0 of 5 dead, median score 190** | **a reflex**: `ahead in [s, wall]`, one step later than the hand fix's `ahead_free ≤ 1` |
 
 Jev cost for the whole thread: **$0.17** (tic-tac-toe $0.002, Tetris $0.12 including two aborted runs, Snake $0.05
 including aborted runs). Azure: about 35 calls; 5 revision calls failed with a gateway 502 (all on Tetris before the
@@ -117,6 +120,43 @@ Two more loop faults found here and fixed: re-asking Jev to judge a timing-only 
 version number was reused after a revert, overwriting the reverted pack on disk, and the last trial game of a
 reverted pack was booked under the old version.
 
+## Snake, second attempt: a catalog of faults and the features that fix them
+
+The first attempt showed the loop knew the features existed but not which fault each one answers: it diagnosed slow
+reactions and then slowed the loop down. Three changes, then the same test again (seed 2, reflex removed, fresh bank):
+
+1. **A fault catalog** (`FAULTS` in `diagnose.py`): eight fault kinds, each with what it looks like in the record and
+   the feature that fixes it. `late_move` (the right move was known but the decider's answer landed after the game
+   moved on) → `reflex` plus `unless`, "never slow the loop for this"; `out_of_turn` → a count read and an `act_when`
+   gate; `stale_frame` → settle or a gate; `short_sighted` → lookahead; `unsure_ranking` → playouts;
+   `contradicting_text` → the paragraph; `misread` → the read; `bad_choice` → a rule. The diagnosis must name one,
+   and a rewrite must make a change of the matching kind (a late move is refused anything but a reflex).
+   The recorded-frame check now covers a reflex too: it must fire at the evidence ticks, and on no more than half
+   of all recorded frames.
+2. **Longer trials for anything only play can judge.** A rewrite that touches timing or the reflex plays at least 5
+   trial games and is judged on the game's own median score first.
+3. **The game's own score.** The snake score is read by OCR, which doubles digits (160 read as 1660, and stuck there
+   on the final frame), so the first try at this run judged misreads and was stopped. Where the page reports its own
+   state (`ANYGAME_LOG_TRUTH`), the score now comes from it.
+
+**Run A** (stopped): the first diagnosis was `late_move`, and the first rewrite added exactly the hand fix,
+`reflex: { read: head_around.ahead_free, lte: 1 }`, plus a near-duplicate rule. Because it also changed a rule it got
+the old 2-game trial and was reverted on 170 vs 180, which is noise. After this, any change that touches the reflex
+gets the long trial, and the run was restarted.
+
+**Run B** (14 games, kept): the base pack died in 3 of 4 games (scores 190 alive, 110, 140, 120).
+- Diagnosis 1, `late_move`: a reflex keyed to a question's answer was refused (it does not fire at the evidence
+  ticks); the repair round was refused by the held-out drift check.
+- Diagnosis 2, `stale_frame`: `settle_ticks` played 5 trial games, 3 dead, median 110 against 140; reverted.
+- Diagnosis 3, `late_move` (*"the only safe escape, right, was chosen correctly at tick 246 but landed after the
+  snake advanced into its body"*): `reflex: { read: head_around.ahead, in: [s, wall] }`. It fires at tick 246 on the
+  recorded frames. Trial: 5 of 5 alive at the 400-tick cap, scores 200, 180, 160, 190, 190; kept.
+
+The kept reflex fires one step later than the hand fix (when the cell ahead is already fatal, not when one free cell
+is left). It held on seed 2 here; the hand-fix thread found that trigger too late at a slower decider, so the hand
+fix stays the better line. Pack: `docs/learn-loop-v2/snake-learned`. Jev for the second attempt: $0.14 (run B $0.09,
+run A $0.02, the stopped OCR run $0.03). Azure: 6 diagnoses and about 8 rewrite calls.
+
 ## What the loop still lacks
 
 - **Timing changes are judged only by play.** Replay cannot show what a faster or slower loop would have seen. A
@@ -126,15 +166,21 @@ reverted pack was booked under the old version.
   live under v2.
 - **The diagnosis can fixate.** Seven identical diagnoses in Tetris run 1 before the "name the next one" rule.
 - **Azure gateway timeouts** on long rewrite answers (fixed by hiding fingerprints, which the model must not edit).
-- **`reflex` was never chosen.** Perhaps the description in the feature list is too abstract; the loop did not
-  connect "the answer lands too late" with "act on the last answer".
+- **`reflex` was never chosen on the first attempt.** The fault catalog fixed that; two of three `late_move`
+  diagnoses produced a reflex that passed the checks.
+- **The held-out drift check measures Jev's noise.** It refused a reflex-plus-read rewrite because Jev changed 81% of
+  answers on ordinary ticks under it; Jev flips most snake answers when asked twice under the same pack. It should
+  compare against Jev re-asked under the incumbent.
+- **Five-game trials on one seed** are still small; the long trial reverted a stale-frame rewrite and kept the reflex
+  by clear margins, but a closer call would need more games.
 
 ## Files
 
 - Logs: `/mnt/project-files/anygame/learn-loop-v2/` (`ttt/`, `tetris/` with `run1-learn-stderr.log`, the run-2 log
-  and two aborted runs, `snake/` with an aborted run). Each `bank/` holds `diagnoses.jsonl`, every pack version,
+  and two aborted runs, `snake/` with an aborted run, `snake-run2/` for the second attempt with `run-a-two-game-trial/`
+  and `aborted-ocr-score/`). Each `bank/` holds `diagnoses.jsonl`, every pack version,
   rejected rewrites and the episode logs.
-- Packs: `docs/learn-loop-v2/ttt-learned`, `tetris-old`, `tetris-learned`, `snake-noreflex`.
+- Packs: `docs/learn-loop-v2/ttt-learned`, `tetris-old`, `tetris-learned`, `snake-noreflex`, `snake-learned`.
 - Code: `anygame/diagnose.py`, `learn.py` (`verify_v2`, `improve_v2`, `trial_verdict`), `cli.py` (`--trial`,
   `--revise-first`, `--legacy` for the first loop), tests in `test/test_learn_v2.py`.
 

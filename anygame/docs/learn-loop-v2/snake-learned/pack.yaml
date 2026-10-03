@@ -1,0 +1,241 @@
+game: snake
+screen:
+  orientation: portrait
+  size:
+  - 540
+  - 560
+zones:
+  board:
+    rect:
+    - 0.0352
+    - 0.0857
+    - 0.9648
+    - 0.9821
+    grid:
+    - 12
+    - 12
+  status:
+    rect:
+    - 0.752
+    - 0.0125
+    - 0.974
+    - 0.059
+  score:
+    rect:
+    - 0.17
+    - 0.01
+    - 0.4
+    - 0.06
+read:
+  cells:
+    kind: color
+    zone: board
+    inset: 0.25
+    max_dist: 60
+    otherwise: .
+    as: matrix
+    options:
+      .: '#1f2937'
+      s: '#4ade80'
+      H: '#16a34a'
+      F: '#ef4444'
+  head:
+    kind: locate
+    in: cells
+    symbol: H
+    history: 1
+  food:
+    kind: locate
+    in: cells
+    symbol: F
+  head_around:
+    kind: around
+    of: head
+    in: cells
+    free:
+    - .
+    - F
+  status:
+    kind: color
+    zone: status
+    options:
+      playing: '#3b82f6'
+      dead: '#ef4444'
+      won: '#22c55e'
+    max_dist: 90
+    otherwise: playing
+  score:
+    kind: ocr
+    zone: score
+    parse: int
+    every: 4
+act:
+- id: up
+  kind: swipe
+  zone: board
+  dir: up
+  ms: 60
+  description: turn the snake to move up
+- id: down
+  kind: swipe
+  zone: board
+  dir: down
+  ms: 60
+  description: turn to move down
+- id: left
+  kind: swipe
+  zone: board
+  dir: left
+  ms: 60
+  description: turn the snake to move left
+- id: right
+  kind: swipe
+  zone: board
+  dir: right
+  ms: 60
+  description: turn the snake to move right
+- id: keep
+  kind: wait
+  description: keep going straight
+tick_hz: 6
+sensor_timeout_s: 0.8
+settle: screen_change
+reflex:
+  read: head_around.ahead
+  in:
+  - s
+  - wall
+stop_when:
+  read: status
+  equals: dead
+play: 'Snake on a 12x12 grid, cells c1..c12 (columns, left to right) by r1..r12 (rows, top to bottom). In `cells`, ''.'' is
+  empty, ''H'' the head, ''s'' the body, ''F'' the food. `head` and `food` give their cells; `head_moving` is the current
+  direction (if missing, assume right). `head_around` says what is next to the head in each direction and straight `ahead`
+  (''.'' or ''F'' is safe, ''s'' or wall is death), and `<direction>_free` counts the open cells that way and `<direction>_space`
+  how many cells are reachable that way; prefer larger counts, and never enter a direction whose space is smaller than the
+  snake. The snake moves one cell per game tick and cannot reverse (the opposite direction is ignored). Pick a safe direction
+  that brings the head closer to the food: match the food''s column first, then its row. ''keep'' only when `ahead` is safe
+  and the current direction is toward the food. Prefer directions with more open cells beyond them, so you do not trap yourself
+  between the body and a wall.
+
+  '
+questions:
+- id: head_will_hit_something_if_straight
+  type: noul
+  instructions: Is head_around.ahead 's' or wall, or is the cell after it (2 cells ahead in head_moving) 's' or past the edge?
+  criteria:
+    true: Death within 2 cells straight ahead.
+    false: At least 2 free cells ahead.
+- id: food_reachable_safely
+  type: noul
+  instructions: Is there a clear path from the head to the food without passing through the body?
+  criteria:
+    true: Open cells connect head and food.
+    false: The body or walls block every route.
+rules:
+- if:
+    read: head_around.up
+    in:
+    - s
+    - wall
+  exclude:
+  - up
+- if:
+    read: head_around.down
+    in:
+    - s
+    - wall
+  exclude:
+  - down
+- if:
+    read: head_around.left
+    in:
+    - s
+    - wall
+  exclude:
+  - left
+- if:
+    read: head_around.right
+    in:
+    - s
+    - wall
+  exclude:
+  - right
+- if:
+    read: head_around.ahead
+    in:
+    - s
+    - wall
+  exclude:
+  - keep
+- if:
+    read: head_around.ahead_free
+    lte: 1
+  unless:
+    read: head_around.ahead
+    equals: F
+  exclude:
+  - keep
+  - $head_moving
+- if:
+    read: head_around.up_space
+    lte: 6
+  exclude:
+  - up
+- if:
+    read: head_around.down_space
+    lte: 6
+  exclude:
+  - down
+- if:
+    read: head_around.left_space
+    lte: 6
+  exclude:
+  - left
+- if:
+    read: head_around.right_space
+    lte: 6
+  exclude:
+  - right
+- if:
+    read: head_moving
+    in:
+    - up
+    - down
+    - left
+    - right
+  exclude:
+  - $head_reverse
+tasks:
+- id: first_food
+  instruction: 'Eat one food: reach score 10 (each food is 10).'
+  done:
+    read: score
+    gte: 10
+  category: collect
+  limit_ticks: 60
+- id: five_food
+  instruction: 'Eat five food without dying: reach score 50.'
+  done:
+    read: score
+    gte: 50
+  category: score
+  limit_ticks: 220
+- id: survive_200
+  instruction: 'Stay alive for 200 ticks: keep away from the body and the walls, and never enter a pocket.'
+  done:
+    read: status
+    equals: playing
+  category: survive
+  hold_ticks: 200
+  limit_ticks: 220
+tests:
+- frame: fixtures/start.png
+  expect:
+    status: playing
+  expect_action:
+    not:
+    - left
+  requires_sensor: true
+fingerprints:
+  main:start: LoJzR4J1LoJ0IIRyFIRyFIRyFIRyFIRyFIRyFIRyFIRyFIRybY1NcY9LcY9LS4lbG4JzIYF0IoB1IYF0IYF0IYF0IYF0IoB1IoB1IYF0IYF0IYF0IYF0IoB1IYF0G4JzHINzJ4B1KIB2J4F1J4B1J4B1J4B1J4F1J4F1J4B1J4B1J4B1J4F1KIB2J4B1HINzHINzJ4B1KIB2J4F1J4B1J4B1J4B1J4F1J4F1J4B1J4B1KoR3OY9/KIB2J4B1HINzHINzJ4B1KIB2J4F1J4B1J4B1J4B1J4F1J4F1J4B1J4B1OY9/fLmgKIB2J4B1HINzHoF0KIB2KoB2KIB2KIB2KIB2KIB2KIF1KIF1KIB2KIB2KIB2KIB2KoB2KIB2HoF0HINzJ4B1KIB2J4F1J4B1J4B1J4B1J4F1J4F1J4B1J4B1J4B1J4F1KIB2J4B1HINzHINzJ4B1KIB2J4F1J4B1J4B1J4B1J4F1J4F1J4B1J4B1J4B1J4F1KIB2J4B1HINzHINzJ4B1KIB2J4F1W2qFa2SKZmSKVmSKJ4F1J4B1J4B1J4B1J4F1KIB2J4B1HINzHINzJ4B1KIB2J4F1fF6OllaVjlWWdFeXJ4F1J4B1J4B1J4B1J4F1KIB2J4B1HINzHINzJ4B1KIB2J4F1J4B1J4B1J4B1J4F1J4F1J4B1J4B1J4B1J4F1KIB2J4B1HINzHoF0KIB2KoB2KIB2KIB2KIB2KIB2KIF1KIF1KIB2KIB2KIB2KIB2KoB2KIB2HoF0HINzJ4B1KIB2J4F1J4B1J4B1J4B1J4F1J4F1J4B1J4B1J4B1J4F1KIB2J4B1HINzHINzJ4B1KIB2J4F1J4B1J4B1J4B1J4F1J4F1J4B1J4B1J4B1J4F1KIB2J4B1HINzHINzJ4B1KIB2J4F1J4B1J4B1J4B1J4F1J4F1J4B1J4B1J4B1J4F1KIB2J4B1HINzG4JzI4F0JIF1I4F0I4F0I4F0I4F0I4F0I4F0I4F0I4F0I4F0I4F0JIF1I4F0G4Jz
