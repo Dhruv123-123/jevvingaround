@@ -157,8 +157,10 @@ class GoalBook:
                 self._close(g, "reached", tick)
             elif tick - g["set_tick"] > int(g.get("ticks") or self.give_up):
                 self._close(g, "given up", tick)
-        walking = values.get("x") is not None and values.get("screen", "walk") == "walk"   # no screen read: a position is enough
-        if not walking:
+        # not in the middle of what the game is saying (a text, a cutscene): a goal is written between them. A menu
+        # or the world with the position not yet found counts, so a player who has not walked yet has a goal too
+        scr = values.get("screen", "walk" if values.get("x") is not None else None)
+        if scr not in ("walk", "choice", "button"):
             return self.quest()
         need = self.current is None
         news = self.memory.new_lines > 0 and tick - self.last_call >= self.min_gap
