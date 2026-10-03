@@ -2,9 +2,8 @@ game: web-dino
 site: chromedino.com
 # Hand-written for the real-web trial (2026-10-01); reflex version 2026-10-02. The game starts at ~360 px/s and
 # speeds up to ~780 px/s; a Jev call takes ~350 ms, during which an obstacle closes 120-270 px. So the rules time
-# every move on the frame (`reflex`, and the `rules`), including full or low jump, and Jev sets the policy for
-# birds: it is asked once about each new obstacle, beside the loop (`ask: async`), and its ranking (jump or duck)
-# is used when the obstacle arrives.
+# every move on the frame (`reflex`, and the `rules`), and Jev sets the policy for birds: it is asked once about
+# each new obstacle, beside the loop (`ask: async`), and its ranking (jump or duck) is used when it arrives.
 screen: { orientation: portrait, size: [540, 560] }
 zones:
   # the road in front of the dino, 6 px columns, from just past its nose when it ducks (a ducking dino reaches
@@ -24,9 +23,9 @@ read:
   status: { kind: color, zone: banner, stat: accent, min_share: 0.02, max_dist: 80, otherwise: running, options: { running: "#f7f7f7", over: "#535353" } }
 act:
   # Chrome ends a jump early when Space comes up after it has risen ~35 px: a 60 ms press is a low jump (~60 px,
-  # ~460 ms in the air), 250 ms the full one (~90 px, ~580 ms). A plain press comes up too early to count: full jump.
-  - { id: jump, kind: key, key: Space, hold_ms: 60, description: "a low, short jump (lands ~120 ms sooner): one or two small cacti, a low bird" }
-  - { id: long_jump, kind: key, key: Space, hold_ms: 250, release: later, description: "the full jump: a tall cactus or a wide group" }
+  # ~460 ms in the air), 250 ms the full one (~90 px, ~580 ms). The low jump is too low and too short to time
+  # reliably at 15 frames a second (tried for close pairs on 2026-10-03: worse), so both actions are full jumps.
+  - { id: jump, kind: key, key: Space, hold_ms: 250, release: later, description: "jump over a cactus or a low bird" }
   - { id: duck, kind: key, key: ArrowDown, hold_ms: 350, release: later, repeat: hold, description: "duck under a bird flying at chest height" }
   - { id: drop, kind: key, key: ArrowDown, hold_ms: 40, release: later, description: "in the air: fall fast, to land in time for the next obstacle" }
   - { id: keep, kind: wait, description: "keep running" }
@@ -42,24 +41,19 @@ play: >
   to duck under; `none`: the road is clear), `speed` the game's speed in px/s, `ttc_ms` the time until it reaches
   the dino, and `then_ms` how soon after it the following obstacle arrives (none in view: null). You are asked
   while it is still far away; your answer is used when it arrives, and the rules time it. Rank the move that
-  clears it first: a jump for a cactus or a low bird (the rules pick the full `long_jump` or the low `jump` from
-  `then_ms`), `duck` for a bird without `low`. `keep` only when the road is clear. `drop` is for the rules.
+  clears it first: `jump` for a cactus or a low bird, `duck` for a bird without `low`. `keep` only when the
+  road is clear. `drop` is for the rules.
 questions: []
 rules:
-  # timing is the rules' job: no move before the obstacle is close, then the full jump at 205 ms to contact from
-  # the road's start (about 250 ms from the dino's nose). When the next obstacle follows within 650 ms, the full
-  # jump would land too late for it: then the low jump, at the same moment, so it lands ~120 ms sooner.
-  - { if: { read: next.ttc_ms, gte: 206 }, exclude: [jump, long_jump, duck] }
-  - { if: { read: next.rows, equals: none }, exclude: [jump, long_jump, duck, drop] }
+  # timing is the rules' job: no move before the obstacle is close, then a jump at 205 ms to contact from the
+  # road's start (about 250 ms from the dino's nose)
+  - { if: { read: next.ttc_ms, gte: 206 }, exclude: [jump, duck] }
+  - { if: { read: next.rows, equals: none }, exclude: [jump, duck, drop] }
   - { if: [{ read: next.ttc_ms, lte: 205 }, { read: dino, equals: ground }, { read: above, equals: clear }], exclude: [keep, drop] }
-  - { if: { read: next.rows, not: none }, exclude: [jump], unless: { read: next.then_ms, lte: 650 } }
-  - { if: { read: next.then_ms, lte: 650 }, exclude: [long_jump], unless: { read: next.rows, contains: head } }
-  # a tall cactus needs the full jump, close behind or not
-  - { if: [{ read: next.rows, contains: head }, { read: next.rows, contains: low }], exclude: [jump] }
   # in the air a jump key does nothing useful, and letting go of Space cuts the jump short (Chrome ends a jump on
   # key up). A cactus under a jumping dino fills `feet`; then its body shows in `sky`
-  - { if: { read: dino, equals: air }, exclude: [jump, long_jump, duck] }
-  - { if: { read: above, equals: dino }, exclude: [jump, long_jump, duck] }
+  - { if: { read: dino, equals: air }, exclude: [jump, duck] }
+  - { if: { read: above, equals: dino }, exclude: [jump, duck] }
   # fall fast only in the air, with nothing under the dino, when the obstacle ahead is a new one (the one jumped
   # has just gone by) and close: the dino lands in time to jump again
   - { if: { read: dino, equals: ground }, exclude: [drop] }
@@ -70,7 +64,7 @@ rules:
   # a low obstacle cannot be ducked; a bird with nothing low is ducked or jumped, by Jev's ranking, and a bird
   # only at head height is never jumped into
   - { if: { read: next.rows, contains: low }, exclude: [duck] }
-  - { if: { read: next.rows, equals: head }, exclude: [jump, long_jump] }
+  - { if: { read: next.rows, equals: head }, exclude: [jump] }
 tests:
   - frame: fixtures/running.png
     expect: { status: running }

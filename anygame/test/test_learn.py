@@ -694,7 +694,7 @@ def test_gap_read_gives_distance_speed_and_time_to_contact():
 
 def test_dino_jumps_on_the_frame_and_asks_jev_beside_the_loop():
     # The web-dino pack: the rules time the jump from the time to contact on each frame; Jev is asked once per new
-    # obstacle without the loop waiting, and its ranking picks the kind of jump when the obstacle arrives.
+    # obstacle without the loop waiting, and its ranking, filtered by the rules, is used when the obstacle arrives.
     import time
     import numpy as np
     from anygame.loop import Agent
@@ -726,7 +726,7 @@ def test_dino_jumps_on_the_frame_and_asks_jev_beside_the_loop():
             self.calls += 1
             time.sleep(0.3)
             wide = (state["screen"].get("next") or {}).get("width_px", 0) >= 30
-            p = {"long_jump": 0.5, "jump": 0.3, "duck": 0.05, "drop": 0.05, "keep": 0.1} if wide else {"keep": 0.7, "jump": 0.2, "long_jump": 0.05, "duck": 0.03, "drop": 0.02}
+            p = {"duck": 0.5, "jump": 0.3, "drop": 0.1, "keep": 0.1} if wide else {"keep": 0.7, "jump": 0.2, "duck": 0.08, "drop": 0.02}
             return {"answers": {"action": {"type": "choice", "choice": max(p, key=p.get), "probabilities": {c: p.get(c, 0.0) for c in qs["action"]["criteria"]}}},
                     "latency_ms": 300, "input_tokens": 10, "cost_usd": 0.0}
 
@@ -743,5 +743,5 @@ def test_dino_jumps_on_the_frame_and_asks_jev_beside_the_loop():
     assert jev.calls == 2 and ag.asked_async == 1                   # the first frame (nothing to act on yet), then the obstacle once
     i, name, hold, block = dev.keys[0]
     jumped = recs[-1]
-    assert name == "Space" and hold == 250 and block is False and jumped["choice"] == "long_jump"
+    assert name == "Space" and hold == 250 and block is False and jumped["choice"] == "jump"      # duck ranked first, but a cactus cannot be ducked
     assert jumped["screen"]["next"]["ttc_ms"] <= 205 and all(r["choice"] == "keep" for r in recs[:-1] if "choice" in r)
