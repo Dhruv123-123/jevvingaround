@@ -18,7 +18,7 @@ Base: `claude/anygame-jev-scale-run-dubj38` (which already contains `scale-run`)
 | 7 | task-setter-limits-rahuj9 | none | |
 | 8 | author-real-games-qzqqin (PR #2, contains real-web-trial-7zpmin) | `pack.py`, `perceive/__init__.py`, `ext/src/core/pack.ts`, `ext/src/core/reads.ts`, `ext/test/eval.test.mjs` | Additive: read kinds `go`, `slide`, `head` all kept (Python and TS); the extension test imports both `goRead` and `isHollow` |
 | 9 | plausible-reads | `pack.py` | Additive: `MODE_KEYS` keeps `reflex` and `plausible`; `load_pack` keeps the rule shape checks and runs the plausible spec check after the rule loop |
-| 10 | go-playouts | `test/test_anygame.py` | Both tests kept |
+| 10 | go-playouts (merged again for round three, no conflicts) | `test/test_anygame.py` | Both tests kept |
 | 11 | dino-reflex | `pack.py`, `perceive/__init__.py` | Additive: read kinds add `gap`; `MODE_KEYS` keeps `reflex`, `plausible`, `ask`, `ask_when` |
 
 No conflict needed one side's behaviour dropped. The auto-merged question builder was checked by hand: 2048's
@@ -33,7 +33,7 @@ CLI-only; that is the extension-parity thread's work.
 
 ## Tests (final head)
 
-- Python: 84 passed, 1 failed. The failure is `test_nested_display_runs_the_game_in_a_sandbox_the_runtime_owns`, which
+- Python: 85 passed, 1 failed. The failure is `test_nested_display_runs_the_game_in_a_sandbox_the_runtime_owns`, which
   fails the same way on the base branch: this container has no X display for pynput. It needs the `desktop` extra and an X
   server, which CI provides.
 - Extension: `tsc --noEmit` clean, `npm test` 42/42.
