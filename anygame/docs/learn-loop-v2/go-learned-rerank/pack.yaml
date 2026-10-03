@@ -14,18 +14,33 @@ zones:
     grid:
     - 9
     - 9
+    rect:
+    - 0.03333333333333333
+    - 0.0912280701754386
+    - 0.9666666666666667
+    - 0.9754385964912281
   pass:
     rect_px:
     - 14
     - 8
     - 110
     - 36
+    rect:
+    - 0.025925925925925925
+    - 0.014035087719298246
+    - 0.2037037037037037
+    - 0.06315789473684211
   status:
     rect_px:
     - 376
     - 8
     - 526
     - 36
+    rect:
+    - 0.6962962962962963
+    - 0.014035087719298246
+    - 0.9740740740740741
+    - 0.06315789473684211
 read:
   board:
     kind: color
@@ -86,17 +101,14 @@ play: 'Go on a 9x9 board. We are B (black), the page is W (white); komi 6.5, are
   lists the good moves rated highest and `worth` their rating: area gained one move deep, plus ataris read out to the end
   (ladders, chases): `danger` lists our stones white can chase down if it moves first, `doomed` moves that white could then
   chase down (rated far down), and an atari white cannot escape counts double; `estimate.lead` is black''s rough lead after
-  komi, `score.lead` the exact area count once the board is settled. `playouts` gives each `best` move (and each
-  capture or save) the result of games played out from it to the end by random moves on both sides: `win` is black''s
-  win rate (0 to 1), `margin` black''s mean final lead after komi, `n` the games played. Every candidate gets 32 games;
-  the three leading ones get 160, so their `win` is about twice as exact (a gap of 0.06 between two of them is real,
-  a gap on 32 games is rough). It sees the whole board to the end, which `worth` does not; `worth` reads ladders and chases exactly, which random
-  games do not. `best` already applies the rule
-  that settles the two: when the 160-game move with the highest `win` beats the `worth` top''s `win` by 0.06 or more,
-  it is listed first, even if its `worth` is lower (`reranked` names the move it passed and the gap); below 0.06 the
-  two are a coin flip and `best` stays in `worth` order. Priorities: capture the most stones; else save our chains
-  in atari; else play the first `best` move. Never pass
-  while `good` lists a move.
+  komi, `score.lead` the exact area count once the board is settled. `playouts` gives each `best` move (and each capture or
+  save) the result of games played out from it to the end by random moves on both sides: `win` is black''s win rate (0 to
+  1), `margin` black''s mean final lead after komi, `n` the games played. Every candidate gets 32 games; the three leading
+  ones get 160, so their `win` is about twice as exact (a gap of 0.06 between two of them is real, a gap on 32 games is rough).
+  It sees the whole board to the end, which `worth` does not; `worth` reads ladders and chases exactly, which random games
+  do not. Rule: when the move with the highest `win` beats the first `best` move''s `win` by 0.06 or more, play it, even if
+  its `worth` is lower; below 0.06 the two are a coin flip, so keep the first `best` move. Priorities: capture the most stones;
+  else save our chains in atari; else play the `best` move the rule above picks. Never pass while `good` lists a move.
 
   '
 rules:

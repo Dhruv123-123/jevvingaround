@@ -22,6 +22,10 @@ both sides moving at random (never filling an own eye, never suicide, the same p
 and gets our win rate, mean final margin after komi and the games played (`n`). `playouts_top: k` with
 `playouts_top_n: m` plays the k best of that first pass on to m games each. Seeded from the board, so the same board
 reads the same.
+`rerank: playouts` (with playouts; `rerank_margin`, default 0.06): when the best-measured playout leader's `win` beats
+the first `best` move's by the margin or more, the leader moves to the front of `best` (with its `worth`) and
+`reranked` says {from, to, gap}; below the margin `best` stays in `worth` order. Only `good` moves can lead, and only
+those with the most games played (the `playouts_top` leaders), so a lucky 32-game result never jumps the queue.
 Cells are c<col>r<row> as in every grid read; r1 is the top row."""
 from __future__ import annotations
 import re
@@ -304,6 +308,28 @@ def playouts(b: dict[Pt, str], cands: list[Pt], us: str, them: str, w: int, h: i
     return {cell(p): summary(cell(p)) for p in done}
 
 
+def rerank(best: list[str], po: dict[str, dict[str, float]], good: set[str], margin: float,
+           extra: dict[str, Any]) -> list[str]:
+    """The playout leader goes first when its win rate beats the first `best` move's by `margin` or more. The leader
+    is picked among the good moves with the most games, so it is compared on the exact results, not a 32-game guess;
+    a tie on win goes to the higher margin, then to the `best` order."""
+    top = best[0]
+    if top not in po:
+        return best
+    ranked = [k for k in po if k in good]
+    most = max((po[k]["n"] for k in ranked), default=0)
+    pool = [k for k in ranked if po[k]["n"] == most]
+    if not pool:
+        return best
+    order = {k: i for i, k in enumerate(best)}
+    lead = min(pool, key=lambda k: (-po[k]["win"], -po[k]["margin"], order.get(k, len(order))))
+    gap = round(po[lead]["win"] - po[top]["win"], 2)
+    if lead == top or gap < margin - 1e-9:
+        return best
+    extra["reranked"] = {"from": top, "to": lead, "gap": gap}
+    return [lead] + [k for k in best if k != lead]
+
+
 def cell(p: Pt) -> str:
     return f"c{p[0]}r{p[1]}"
 
@@ -402,6 +428,8 @@ def read(src: Any, r: dict[str, Any]) -> dict[str, Any] | None:
         cands = list(dict.fromkeys(best + captures + saves))
         extra["playouts"] = playouts(b, [pts[c] for c in cands], us, them, w, h, empty, komi, n_po,
                                      int(r.get("playouts_top", 0)), int(r.get("playouts_top_n", 0)))
+        if r.get("rerank") == "playouts" and best:
+            best = rerank(best, extra["playouts"], set(good), float(r.get("rerank_margin", 0.06)), extra)
     return {
         **extra,
         "legal": legal, "good": good, "captures": captures, "saves": saves, "self_atari": self_atari, "eyes": eyes,

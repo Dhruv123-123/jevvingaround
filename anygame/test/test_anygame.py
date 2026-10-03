@@ -719,8 +719,65 @@ def test_go_playouts_score_the_candidates_the_same_way_every_time():
     assert go.read(board, {"komi": 6.5, "playouts": 32})["playouts"] == po    # seeded from the board
 
 
+def test_go_rerank_puts_the_playout_leader_first_past_the_margin():
+    from anygame.perceive import go
+    po = {"a": {"win": 0.50, "margin": 1.0, "n": 160}, "b": {"win": 0.55, "margin": 2.0, "n": 160},
+          "c": {"win": 0.58, "margin": 3.0, "n": 160}, "d": {"win": 0.90, "margin": 9.0, "n": 32}}
+    good = {"a", "b", "c", "d"}
+    extra: dict = {}
+    # c beats the worth top a by 0.08: it goes first; d's 32-game 0.90 is a guess and never leads
+    assert go.rerank(["a", "b", "c", "d"], po, good, 0.06, extra) == ["c", "a", "b", "d"]
+    assert extra["reranked"] == {"from": "a", "to": "c", "gap": 0.08}
+    # below the margin, best stays in worth order and says nothing
+    extra = {}
+    assert go.rerank(["a", "b", "c", "d"], po, good, 0.10, extra) == ["a", "b", "c", "d"] and "reranked" not in extra
+    # a move that is not good (an own eye, a self-atari) never leads; a capture outside best can
+    extra = {}
+    assert go.rerank(["a", "b"], po, {"a", "b", "d"}, 0.04, extra) == ["b", "a"]
+    po["e"] = {"win": 0.70, "margin": 5.0, "n": 160}
+    assert go.rerank(["a", "b"], po, {"a", "b", "e"}, 0.06, {}) == ["e", "a", "b"]
+    # the worth top already leads, or has no playouts: unchanged
+    assert go.rerank(["e", "a"], po, good | {"e"}, 0.06, {}) == ["e", "a"]
+    assert go.rerank(["z", "a"], po, good, 0.06, {}) == ["z", "a"]
+
+
+def test_go_read_reranks_best_only_when_asked(monkeypatch):
+    from anygame.perceive import go
+    board = ["........."] * 9
+    plain = go.read(board, {"komi": 6.5, "playouts": 8})
+    top, low = plain["best"][0], plain["best"][-1]
+    fake = {k: {"win": 0.5, "margin": 0.0, "n": 160} for k in plain["best"]}
+    fake[low] = {"win": 0.7, "margin": 4.0, "n": 160}
+    monkeypatch.setattr(go, "playouts", lambda *a, **k: dict(fake))
+    assert go.read(board, {"komi": 6.5, "playouts": 8})["best"] == plain["best"]           # opt-in
+    v = go.read(board, {"komi": 6.5, "playouts": 8, "rerank": "playouts"})
+    assert v["best"][0] == low and v["reranked"] == {"from": top, "to": low, "gap": 0.2}
+    assert list(v["worth"]) == v["best"] and sorted(v["best"]) == sorted(plain["best"])
+    assert go.read(board, {"komi": 6.5, "playouts": 8, "rerank": "playouts", "rerank_margin": 0.25})["best"] == plain["best"]
+
+
+def test_go_pack_turns_the_rerank_on():
+    import yaml
+    r = yaml.safe_load(open(os.path.join(ROOT, "packs", "go", "pack.yaml")))["read"]["go"]
+    assert r["rerank"] == "playouts" and r["rerank_margin"] == 0.06 and r["playouts_top_n"] == 160
+
+
 def test_go_playouts_spend_more_games_on_the_leaders():
     from anygame.perceive import go
     v = go.read(["........."] * 9, {"komi": 6.5, "playouts": 8, "playouts_top": 2, "playouts_top_n": 24})
     ns = sorted(x["n"] for x in v["playouts"].values())
     assert ns[-2:] == [24, 24] and set(ns[:-2]) == {8}
+
+
+def test_clm_stub_takes_the_top_of_a_ranked_read_when_told(monkeypatch):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("clm_stub", os.path.join(ROOT, "test", "clm_stub.py"))
+    stub = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(stub)
+    state = {"screen": {"go": {"best": ["c5r5", "c3r3", "c7r7"]}}}
+    q = {"place__cell": {"type": "choice", "criteria": {"c3r3": None, "c5r5": None, "c7r7": None}}}
+    assert stub.answer(state, q)["place__cell"]["choice"] == "c3r3"          # board order: top-left first
+    monkeypatch.setattr(stub, "RANK", "screen.go.best")
+    assert stub.answer(state, q)["place__cell"]["choice"] == "c5r5"          # the compiler's top pick
+    q2 = {"place__cell": {"type": "choice", "criteria": {"c3r3": None, "c7r7": None}}}
+    assert stub.answer(state, q2)["place__cell"]["choice"] == "c3r3"         # the top was not offered: next ranked

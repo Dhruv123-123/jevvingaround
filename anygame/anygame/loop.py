@@ -591,9 +591,11 @@ class Agent:
             self._emit(rec, frame, dets, None)
             return rec
         gate = self.pack.raw.get("act_when")
-        if gate and not self._cond(gate, values):
+        shut = next((c for c in (gate if isinstance(gate, list) else [gate]) if not self._cond(c, values)), None) if gate else None
+        if shut:
+            # act_when: one condition or a list that must all hold (a menu check and a turn check, say)
             rec["action"] = "wait"
-            rec["reason"] = f"{gate['read']} is {_get(values, gate['read'])}"
+            rec["reason"] = f"{shut['read']} is {_get(values, shut['read'])}"
             self.last_hash = h
             self._emit(rec, frame, dets, None)
             return rec

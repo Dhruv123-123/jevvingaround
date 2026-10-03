@@ -528,8 +528,10 @@ export class Agent {
     const stops = this.pack.raw.stop_when;
     const stop = (Array.isArray(stops) ? stops : stops ? [stops] : []).find((c: any) => c && this.cond(c, values));
     if (stop) { rec.action = "stop"; rec.reason = `${stop.read} is ${get(values, stop.read)}`; return done(rec); }
+    // act_when: one condition or a list that must all hold (a menu check and a turn check, say)
     const gate = this.pack.raw.act_when;
-    if (gate && !this.cond(gate, values)) { rec.action = "wait"; rec.reason = `${gate.read} is ${get(values, gate.read)}`; return done(rec); }
+    const shut = (Array.isArray(gate) ? gate : gate ? [gate] : []).find((c: any) => c && !this.cond(c, values));
+    if (shut) { rec.action = "wait"; rec.reason = `${shut.read} is ${get(values, shut.read)}`; return done(rec); }
     const last = this.history[this.history.length - 1];
     if (this.pack.raw.settle && !changed && last && !["wait", "keep"].includes(last.action) && this.settling < Number(this.pack.raw.settle_ticks ?? 3)) {
       this.settling++; rec.action = "wait"; rec.reason = `settling (${last.action})`; return done(rec);

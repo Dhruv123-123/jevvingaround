@@ -7,7 +7,7 @@ from typing import Any
 import yaml
 from .geometry import Rect, Zone
 
-READ_KINDS = {"bar", "templates", "ocr", "vocab", "blobs", "color", "locate", "runs", "around", "tetris", "json", "json_grid", "predict", "margin", "go", "slide", "head", "gap"}
+READ_KINDS = {"bar", "templates", "ocr", "vocab", "blobs", "color", "locate", "runs", "around", "tetris", "json", "json_grid", "predict", "margin", "go", "slide", "head", "gap", "count"}
 QUESTION_TYPES = {"noul", "choice", "score"}
 
 
@@ -242,6 +242,9 @@ def load_pack(path: str | os.PathLike, _allow_no_tests: bool = False) -> Pack:
         elif r.get("kind") == "runs":
             if r.get("in") not in reads or "symbol" not in r:
                 raise PackError(f"{p}: read '{rid}': runs needs 'in' (a grid read id), 'symbol' and optionally length/empty/gravity")
+        elif r.get("kind") == "count":
+            if r.get("in") not in reads or "symbol" not in r:
+                raise PackError(f"{p}: read '{rid}': count needs 'in' (a grid read id) and 'symbol', optionally 'minus' (a symbol subtracted)")
         elif r.get("kind") == "go":
             if r.get("in") not in reads:
                 raise PackError(f"{p}: read '{rid}': go needs 'in' (the board grid read), optionally us/them/empty/komi")

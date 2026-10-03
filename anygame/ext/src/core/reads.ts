@@ -88,6 +88,13 @@ function parseCells(src: any): Map<string, string> {
 const key = (c: number, r: number) => `c${c}r${r}`;
 
 /** Empty cells that would complete `length` of `symbol` in a line; gravity: down keeps landing cells; mode: hands finds poisoned drops. */
+/** How many cells of a grid read hold `symbol`, less how many hold `minus` when given (a turn count). */
+export function countOf(src: any, r: ReadDef): number {
+  const vals: string[] = Array.isArray(src) ? src.flatMap((row: any) => [...String(row)]) : src && typeof src === "object" ? Object.values(src).map(String) : [];
+  const n = vals.filter((v) => v === String(r.symbol)).length;
+  return r.minus !== undefined ? n - vals.filter((v) => v === String(r.minus)).length : n;
+}
+
 export function runsOf(src: any, r: ReadDef): string[] {
   const cells = parseCells(src);
   if (!cells.size) return [];
@@ -216,6 +223,7 @@ export function readAll(pack: Pack, frame: Frame, only?: Set<string>, state?: an
       case "bar": values[rid] = readBar(frame, pack, r); conf[rid] = 1; break;
       case "locate": values[rid] = locate(values[r.in], r); if (!r.many) conf[rid] = values[rid] ? 1 : 0; break;
       case "runs": values[rid] = runsOf(values[r.in], r); break;
+      case "count": values[rid] = countOf(values[r.in], r); break;
       case "go": values[rid] = goRead(values[r.in], r); break;
       case "around": case "tetris": case "predict": case "margin": case "slide": case "head": continue;
       default: values[rid] = null;   // ocr, templates, blobs, vocab, gap: not in the extension
