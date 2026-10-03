@@ -7,6 +7,7 @@ from .base import Device
 
 
 class ReplayDevice(Device):
+    rereadable = False          # every frame() is the next recorded frame: looking again would skip one
     def __init__(self, folder: str):
         self.files = sorted(glob.glob(os.path.join(folder, "*.png")) + glob.glob(os.path.join(folder, "*.jpg")))
         if not self.files:

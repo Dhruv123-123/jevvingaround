@@ -13,6 +13,7 @@ from .pack import Action, Pack
 from .perceive import read_all, around_of, margin_of, margin_num
 from .fingerprint import Index as FpIndex, fingerprint, to_b64
 from .pack import dump_pack, load_pack_text
+from .plausible import violations
 
 
 def copy_answers(answers: dict[str, Any]) -> dict[str, Any]:
@@ -119,6 +120,10 @@ class Agent:
         self.last_values: dict[str, Any] | None = None
         self.noops: list[str] = []           # executed actions ("drop→c4", "up") that changed nothing since the last change
         self.prev_distinct: dict[str, Any] = {}   # last value of each history read that differed from the current one
+        self.accepted: dict[str, Any] | None = None   # the last reading that passed the pack's plausibility checks
+        self.implausible_ticks = 0           # consecutive ticks whose reads broke a check even after re-reading
+        self.implausible_total = 0
+        self.rereads = 0                     # fresh frames taken because a reading broke a check
 
     # ---- questions -------------------------------------------------------------------------------
     def questions(self, values: dict[str, Any]) -> dict[str, dict]:
@@ -513,6 +518,43 @@ class Agent:
                 self.last_hash = h
                 self._emit(rec, frame, dets, None)
                 return rec
+        spec = self.pack.raw.get("plausible")
+        if spec:
+            # a reading that cannot follow the last accepted one is a wrong read, not a move: look again, and if it
+            # still does not add up, do nothing on it; if it persists, end the episode with the broken check as the reason
+            bad = violations(spec, values, self.accepted, self.pack.reads)
+            tries = 0
+            while bad and tries < int(self.pack.raw.get("plausible_retries", 2)) and getattr(self.device, "rereadable", True):
+                tries += 1
+                frame = self.device.frame()
+                dstate = self.device.state() if hasattr(self.device, "state") else None
+                self.last_state = dstate
+                values, dets, timings = self.observe(frame, self.pack, state=dstate)
+                bad = violations(spec, values, self.accepted, self.pack.reads)
+            if tries:
+                self.rereads += tries
+                rec["reread"] = tries
+                h = stable_hash({k: v for k, v in values.items() if not k.endswith("_prev")})
+                changed = h != self.last_hash
+                rec["screen"], rec["hash"], state["screen"] = values, h, values
+                state["last_action_changed_screen"] = changed if self.history else None
+                self.last_values = values
+            if bad:
+                self.implausible_ticks += 1
+                self.implausible_total += 1
+                rec["implausible"] = bad
+                limit = int(self.pack.raw.get("plausible_ticks", 6))
+                if self.implausible_ticks >= limit:
+                    rec["action"] = "stop"
+                    rec["reason"] = f"stalled: implausible read for {self.implausible_ticks} ticks: {bad[0]}"
+                else:
+                    rec["action"] = "wait"
+                    rec["reason"] = f"implausible read: {bad[0]}"
+                self.last_hash = h
+                self._emit(rec, frame, dets, None)
+                return rec
+            self.implausible_ticks = 0
+            self.accepted = values
         stop = self.pack.raw.get("stop_when")
         if stop and self._cond(stop, values):
             rec["action"] = "stop"

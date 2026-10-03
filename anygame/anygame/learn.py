@@ -631,6 +631,10 @@ def incident_digest(inc: Incident, episodes: list[dict[str, Any]] | None = None)
                 f"(last reason: {r.get('reason')}). Its reads returned screen={_trim(r.get('screen'))}. Look at the frame: if the game is waiting "
                 f"for us, a read behind act_when or a colour option is wrong (measure the real colours), or every action is excluded by a rule.")
     lines = [f"LOSS: {inc.reason} at tick {inc.tick}. The last {len(inc.decisions)} decisions before it, oldest first; the LAST one is the fatal decision:"]
+    if "implausible read" in str(inc.reason):
+        lines.insert(0, "The episode ended on an IMPLAUSIBLE READ: the reads broke a `plausible` check tick after tick, so a read "
+                        "is wrong on that screen (a colour option missing or mis-measured, a state with no label). Fix the read; "
+                        "do not loosen the check unless the game really allows that state.")
     for k, d in enumerate(inc.decisions):
         r = d.rec
         lines.append(f"{'FATAL ' if k == len(inc.decisions) - 1 else ''}tick {r.get('tick')}: screen={_trim(r.get('screen'))} → {r.get('action')} probs={_trim(r.get('action_probs'))} beliefs={_trim(r.get('nouls'))} rules={_trim(r.get('rules'))}")
@@ -691,6 +695,7 @@ PACK_SCHEMA_HINT = (
     "- history: put `history: 1` on a read → <id>_prev; on a locate also <id>_moving and <id>_reverse\n"
     "- rule: { if: { read: <id or id.path>, equals|in|not|gte|lte: v }, exclude: [<action id or $read>] } or { if: { noul: <question id>, gte|lte: p }, set: { <action>__cell: <choice question id> } }; avoid/only: { <action>__cell: <read id> }\n"
     "- question: { id, type: noul|choice|score, instructions, criteria: { <option>: <meaning> } }\n"
+    "- plausible (top level, a list): { read: <grid read>, sticky: [<char>, …] } | { read: <grid read>, max_changes: N } | { read: <grid read>, count: [A, B], diff: [lo, hi] } | { require: <condition> }; each may carry when: <condition>; a condition is { read, equals|in|not|gte|lte } or { line: <grid read>, symbols: [<char>, …], length: N }\n"
     "No other keys. YAML with a duplicated key does not load.")
 
 

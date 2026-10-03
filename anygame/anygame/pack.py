@@ -56,7 +56,7 @@ class Pack:
         raise PackError(f"{self.path}: unknown action '{id}'")
 
 
-MODE_KEYS = ("zones", "read", "act", "play", "questions", "rules", "act_when", "stop_when", "settle", "tick_hz", "reflex")
+MODE_KEYS = ("zones", "read", "act", "play", "questions", "rules", "act_when", "stop_when", "settle", "tick_hz", "reflex", "plausible")
 TASK_CATEGORIES = ("navigate", "collect", "score", "survive", "clear", "build", "avoid", "other")
 
 
@@ -314,6 +314,10 @@ def load_pack(path: str | os.PathLike, _allow_no_tests: bool = False) -> Pack:
                                 + ("; to allow only some actions, exclude the others with exclude: [actions]" if k == "only" else ""))
         if "exclude" in rl and not isinstance(rl["exclude"], list):
             raise PackError(f"{p}: rule exclude: must be a list of action ids, got {rl['exclude']!r}")
+    from .plausible import check_spec
+    bad = check_spec(raw.get("plausible"), reads)
+    if bad:
+        raise PackError(f"{p}: {bad}")
     tests = raw.get("tests") or []
     if not tests and not _allow_no_tests:
         raise PackError(f"{p}: a pack without tests is refused; add at least one frame under 'tests'")
