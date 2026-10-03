@@ -37,8 +37,8 @@ for r in off:
     R = ref(r, [r["jev"], r["w_top"]])
     d = R[r["jev"]]["win"] - R[r["w_top"]]["win"]
     ds.append(d)
-    print(f"  g{r['game']} {r['end']} t{r['tick']}: jev {r['jev']} (worth {r['worth'].get(r['jev'])}, po64 {r['po'][r['jev']]['win']}) vs worth top {r['w_top']} "
-          f"(worth {r['worth'][r['w_top']]}, po64 {r['po'][r['w_top']]['win']}) | ref{REF} {R[r['jev']]['win']} vs {R[r['w_top']]['win']} d {d:+.2f}")
+    print(f"  g{r['game']} {r['end']} t{r['tick']}: jev {r['jev']} (worth {r['worth'].get(r['jev'])}, po {r['po'][r['jev']]['win']}) vs worth top {r['w_top']} "
+          f"(worth {r['worth'][r['w_top']]}, po {r['po'][r['w_top']]['win']}) | ref{REF} {R[r['jev']]['win']} vs {R[r['w_top']]['win']} d {d:+.2f}")
 if ds:
     print(f"  Jev right (+>0.03) {sum(d > 0.03 for d in ds)}, wrong (<-0.03) {sum(d < -0.03 for d in ds)}, even {sum(abs(d) <= 0.03 for d in ds)}, mean {st.mean(ds):+.3f}")
 # would always taking the 64-playout top have beaten the worth top?
