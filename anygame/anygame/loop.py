@@ -123,6 +123,11 @@ class Agent:
         qs: dict[str, dict] = {}
         for q in self.pack.questions:
             qs[q["id"]] = {"type": q["type"], "instructions": q["instructions"], "criteria": q["criteria"]}
+            # `criteria_from: <read>`: a compiled read that ranks and annotates the options replaces the fixed ones
+            # (2048's swipes, best first, each with its consequences; a swipe that would not move is not offered)
+            ranked = _get(values, q["criteria_from"]) if q.get("criteria_from") else None
+            if isinstance(ranked, dict) and ranked:
+                qs[q["id"]]["criteria"] = dict(ranked)
         if "action" not in qs:
             qs["action"] = {"type": "choice", "instructions": "Which action now? Follow the play notes in the state.",
                             "criteria": {a.id: (a.params.get("description") or None) for a in self.pack.actions}}
@@ -378,6 +383,9 @@ class Agent:
                     from .perceive.tetris import TetrisTracker
                     self.trackers[rid] = TetrisTracker(r)
                 values[rid] = self.trackers[rid].read(raw_values.get(r["in"]), raw_values.get(r["next_in"]) if r.get("next_in") else None)
+            elif r.get("kind") == "slide":
+                from .perceive.slide import slide_of
+                values[rid] = slide_of(raw_values.get(r["in"]), r)
         return values, dets, timings
 
     # ---- one tick --------------------------------------------------------------------------------

@@ -4,6 +4,7 @@ export * from "./pack.js";
 export * from "./reads.js";
 export * from "./go.js";
 export * from "./tetris.js";
+export { slideOf, rank as rankSwipes } from "./slide.js";
 export * from "./loop.js";
 export * from "./sensors.js";
 export * from "./chat.js";

@@ -4,6 +4,7 @@ import { dumpPack, loadPack, type ActionDef, type Pack, type TaskDef } from "./p
 export interface TaskEvent { id: string; category: string; outcome: "done" | "failed"; ticks: number; tick: number; limit_ticks: number }
 import { aroundOf, marginOf, marginNum, readAll, type Values } from "./reads.js";
 import { TetrisTracker } from "./tetris.js";
+import { slideOf } from "./slide.js";
 import { FingerprintIndex, fingerprint, fpToBase64, type Fingerprint } from "./fingerprint.js";
 import { palette } from "./color.js";
 import type { FallbackDecision, VLMFallback } from "./fallback.js";
@@ -137,7 +138,12 @@ export class Agent {
   // ---- questions ----------------------------------------------------------------------------
   questions(values: Values): Record<string, any> {
     const qs: Record<string, any> = {};
-    for (const q of this.pack.questions) qs[q.id] = { type: q.type, instructions: q.instructions, criteria: q.criteria };
+    for (const q of this.pack.questions as any[]) {
+      qs[q.id] = { type: q.type, instructions: q.instructions, criteria: q.criteria };
+      // `criteria_from: <read>`: a compiled read that ranks and annotates the options replaces the fixed ones
+      const ranked = q.criteria_from ? get(values, q.criteria_from) : null;
+      if (ranked && typeof ranked === "object" && !Array.isArray(ranked) && Object.keys(ranked).length) qs[q.id].criteria = { ...ranked };
+    }
     if (!qs.action) {
       const criteria: Record<string, string | null> = {};
       for (const a of this.pack.actions) criteria[a.id] = a.params.description ?? null;
@@ -330,7 +336,7 @@ export class Agent {
       else if (r.kind === "tetris") {
         if (!this.trackers[rid]) this.trackers[rid] = new TetrisTracker(r);
         values[rid] = this.trackers[rid].read(raw[r.in], r.next_in ? raw[r.next_in] : null);
-      }
+      } else if (r.kind === "slide") values[rid] = slideOf(raw[r.in], r);
     }
     return { values, timings, conf };
   }
