@@ -221,7 +221,7 @@ def diagnose(chat, pack: Pack, recs: list[dict[str, Any]], frames: list[tuple[in
     from .author import _b64
     from .pack import dump_pack
     sig = signature(recs)
-    text = (DIAGNOSE_RULES + "\n\n" + history_text(history or [], sig) + "\n\n" + episode_digest(pack, recs) + "\n\nTHE PACK:\n```yaml\n" + dump_pack(pack.raw) + "\n```")
+    text = (DIAGNOSE_RULES + "\n\n" + history_text(history or [], sig) + "\n\n" + episode_digest(pack, recs) + "\n\nTHE PACK:\n```yaml\n" + dump_pack({k: v for k, v in pack.raw.items() if k not in ("fingerprints", "lessons")}) + "\n```")
     parts: list[dict[str, Any]] = [{"type": "text", "text": text}]
     for tick, img in (frames or [])[-3:]:
         parts.append({"type": "text", "text": f"frame at tick {tick}:"})

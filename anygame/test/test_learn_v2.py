@@ -191,3 +191,15 @@ def test_a_score_read_decides_the_trial_before_how_long_a_lost_game_lasted():
     assert not keep and "median score 11" in why
     recs = [{"tick": 1, "screen": {"piece": {"lines_cleared": 4}}}, {"tick": 2, "screen": {"piece": {"lines_cleared": 9}}}, {"tick": 3, "action": "stop", "reason": "status is over", "screen": {"piece": "none"}}]
     assert outcome(recs, 1, 1, "piece.lines_cleared")["score"] == 9
+
+
+def test_reads_that_track_the_game_across_frames_come_from_the_record_in_replay():
+    inc = snake_incident()
+    for d in inc.decisions:
+        d.rec["screen"] = {"status": "playing", "phase": "falling" if d.rec["tick"] == 20 else "spawned"}
+    base = variant(stripped(), reads={"phase": {"kind": "color", "zone": "status", "options": {"spawned": "#3b82f6"}, "otherwise": "spawned"}})
+    gated = variant(base, act_when={"read": "phase", "equals": "spawned"})
+    assert replay2(gated, inc.decisions)["gated"] == [False, False, False]          # re-read from the frames, the phase is lost
+    assert replay2(gated, inc.decisions, {"phase"})["gated"] == [False, False, True]
+    v = verify_v2(gated, base, inc)
+    assert v["ok"] and "gate holds" in v["why"]

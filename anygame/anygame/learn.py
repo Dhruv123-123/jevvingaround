@@ -1002,6 +1002,13 @@ REVISION_RULES_V2 = (
     "frame. Then it plays a real game and stays only if it plays no worse. Return the whole pack.yaml in one fenced yaml block.")
 
 
+def shown_pack(pack: Pack) -> str:
+    """The pack as the chat model sees it: without screen fingerprints and lessons, which it must not edit and which
+    only make the prompt and the answer longer (a long answer timed out at the gateway on Tetris). Both are merged
+    back into every candidate."""
+    return dump_pack({k: v for k, v in pack.raw.items() if k not in ("fingerprints", "lessons")})
+
+
 def _gate_ok(pack: Pack, values: dict[str, Any]) -> bool:
     from .loop import Agent
     g = pack.raw.get("act_when")
@@ -1026,9 +1033,11 @@ def _sigs(pack: Pack, ag, answers: dict[str, Any], values: dict[str, Any]) -> tu
     return " ".join(lab), " ".join(res)
 
 
-def replay2(pack: Pack, decisions: list[Decision]) -> dict[str, list]:
+def replay2(pack: Pack, decisions: list[Decision], recorded: set[str] | None = None) -> dict[str, list]:
     """Push recorded decisions through a pack: the typed frame, whether its gate lets the agent act, the support, and
-    the decision after its rules, as labels and as what the labels mean on each frame."""
+    the decision after its rules, as labels and as what the labels mean on each frame. `recorded`: reads whose
+    definition did not change, taken from the record instead of re-read. A read that tracks the game across frames
+    (a piece's phase, a head's direction) cannot be rebuilt from the decision frames alone; the record has it."""
     from .loop import Agent
     from .device.base import Device
 
@@ -1041,6 +1050,9 @@ def replay2(pack: Pack, decisions: list[Decision]) -> dict[str, list]:
     try:
         for d in decisions:
             v, _, _ = ag.observe(d.frame, pack, want_conf=True, state=d.state)
+            scr = d.rec.get("screen") or {}
+            if recorded:
+                v = {**v, **{k: scr[k] for k in recorded if k in scr}}
             ag.last_values = v
             a = answers_of(d.rec)
             ag._apply_rules(a, v)
@@ -1157,12 +1169,13 @@ def verify_v2(candidate: Pack, incumbent: Pack, inc: Incident, diag: dict[str, A
     rc = read_check(candidate, incumbent, every)
     if not rc["ok"]:
         return {"ok": False, "why": rc["why"], "reads": rc["reads"]}
-    c, i = replay2(candidate, inc.decisions), replay2(incumbent, inc.decisions)
+    same = {rid for rid in incumbent.reads if rid not in changed_reads(candidate, incumbent)}
+    c, i = replay2(candidate, inc.decisions, same), replay2(incumbent, inc.decisions, same)
     worse = next((k for k, s in enumerate(c["support"]) if s < min(threshold, i["support"][k] - 0.05)), None)
     if worse is not None:
         return {"ok": False, "why": f"reads the incident screens worse (support {c['support'][worse]:.2f} vs {i['support'][worse]:.2f} at tick {inc.decisions[worse].rec.get('tick')})", "reads": rc["reads"]}
     # the gate must still open: a gate that never opens "guards" every loss by never playing
-    open_all = replay2(candidate, every)["gated"] if candidate.raw.get("act_when") != incumbent.raw.get("act_when") else []
+    open_all = replay2(candidate, every, same)["gated"] if candidate.raw.get("act_when") != incumbent.raw.get("act_when") else []
     gate_open = (1 - sum(open_all) / len(open_all)) if open_all else 1.0
     if open_all and gate_open < min_gate_open:
         return {"ok": False, "why": f"its act_when holds on only {int(gate_open * 100)}% of the {len(open_all)} recorded frames; the agent would hardly play", "reads": rc["reads"]}
@@ -1179,6 +1192,7 @@ def verify_v2(candidate: Pack, incumbent: Pack, inc: Incident, diag: dict[str, A
     visible = [k for k in separators([c["values"][k] for k in range(len(inc.decisions)) if k not in ev] + [c["values"][ev[-1]]]) if k not in sep_i]
     blind = blind_changes(candidate, incumbent)
     reasked = None
+    unjudged: set[int] = set()
     if len(how) * 2 < len(ev) and blind and sensor is not None:
         # replay cannot see a new paragraph, new questions or timing: ask the decider itself on the evidence frames
         todo = [k for k in ev if k not in how]
@@ -1186,12 +1200,14 @@ def verify_v2(candidate: Pack, incumbent: Pack, inc: Incident, diag: dict[str, A
         reasked = {}
         for k, a in zip(todo, ans):
             if a is None:
+                unjudged.add(k)            # the decider could not be asked there (the gate holds, the sensor failed)
                 continue
             was = i["resolved"][k]
             reasked[inc.decisions[k].rec.get("tick")] = {"was": was, "now": a[1]}
             if a[1] != was:
                 how[k] = f"re-asked under the new pack the decider answers {a[1]} (was {was})"
-    acted = len(how) * 2 >= len(ev) or (len(ev) - 1) in how
+    judged = [k for k in ev if k not in unjudged]
+    acted = bool(how) and (len(how) * 2 >= len(judged) or (len(ev) - 1) in how)
     timing_only = blind and set(blind) <= {"tick_hz", "settle", "settle_ticks", "budget_ms", "frames"}
     if not acted and not visible and not timing_only:
         return {"ok": False, "why": f"at the {len(ev)} evidence tick(s) ({', '.join(str(inc.decisions[k].rec.get('tick')) for k in ev)}) it acts exactly as before"
@@ -1214,12 +1230,12 @@ def verify_v2(candidate: Pack, incumbent: Pack, inc: Incident, diag: dict[str, A
     changed, total = blocked(c, i, inc.decisions, set(ev))
     for o in others or []:
         if o.decisions:
-            a, b = blocked(replay2(candidate, o.decisions), replay2(incumbent, o.decisions), o.decisions, {len(o.decisions) - 1})
+            a, b = blocked(replay2(candidate, o.decisions, same), replay2(incumbent, o.decisions, same), o.decisions, {len(o.decisions) - 1})
             changed, total = changed + a, total + b
     broke = 0
     for s in successes or []:
         if s.decisions:
-            a, b = blocked(replay2(candidate, s.decisions), replay2(incumbent, s.decisions), s.decisions, set())
+            a, b = blocked(replay2(candidate, s.decisions, same), replay2(incumbent, s.decisions, same), s.decisions, set())
             broke += a; changed, total = changed + a, total + b
     overblocked = changed / total if total else 0.0
     if broke:
@@ -1241,7 +1257,7 @@ def improve_v2(chat, pack: Pack, inc: Incident, diag: dict[str, Any], recs: list
     from .author import _b64, extract_yaml
     from .diagnose import diagnosis_text, episode_digest
     text = (REVISION_RULES_V2 + "\n\n" + diagnosis_text(diag, history) + "\n\n" + PACK_SCHEMA_HINT + "\n" + FEATURES_HINT + ("\n\n" + hints if hints else "")
-            + "\n\n" + episode_digest(pack, recs, max_chars=14000) + "\n\n```yaml\n" + dump_pack(pack.raw) + "\n```")
+            + "\n\n" + episode_digest(pack, recs, max_chars=14000) + "\n\n```yaml\n" + shown_pack(pack) + "\n```")
     parts: list[dict[str, Any]] = [{"type": "text", "text": text}]
     n = len(inc.decisions)
     for k in ([n - 2, n - 1] if n > 1 else [n - 1]):
@@ -1264,6 +1280,8 @@ def improve_v2(chat, pack: Pack, inc: Incident, diag: dict[str, Any], recs: list
                 cand.raw["fingerprints"] = {**(pack.raw.get("fingerprints") or {}), **(cand.raw.get("fingerprints") or {})}
                 if "modes" not in cand.raw and pack.raw.get("modes"):
                     cand.raw["modes"] = pack.raw["modes"]
+                if "lessons" not in cand.raw and pack.raw.get("lessons"):
+                    cand.raw["lessons"] = pack.raw["lessons"]
                 if "tests" not in cand.raw and pack.raw.get("tests"):
                     cand.raw["tests"] = pack.raw["tests"]
                 cand = load_pack_text(dump_pack(cand.raw), pack.name)
