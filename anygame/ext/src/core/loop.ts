@@ -7,10 +7,12 @@ import { TetrisTracker } from "./tetris.js";
 import { slideOf } from "./slide.js";
 import { FingerprintIndex, fingerprint, fpToBase64, type Fingerprint } from "./fingerprint.js";
 import { palette } from "./color.js";
+import { violations } from "./plausible.js";
 import type { FallbackDecision, VLMFallback } from "./fallback.js";
 
 export interface Device {
   size(): [number, number];
+  rereadable?: boolean;            // false: frame() is a recording, so looking again would skip a frame
   frame(): Promise<Frame>;
   state?(): Promise<any>;          // a game that publishes its state: what the json / json_grid reads consume
   tap(x: number, y: number): Promise<void>;
@@ -25,7 +27,7 @@ export interface SensorResult { answers: Record<string, Answer>; latency_ms: num
 export interface Sensor { ask(state: any, questions: Record<string, any>): Promise<SensorResult>; model?: string }
 
 export interface Rec { tick: number; hash: string; perception_ms: number; timings_ms: Record<string, number>; screen: Values; action: string; reason?: string; choice?: string; rules?: string[]; action_probs?: Record<string, number>; nouls?: Record<string, number>; choices?: Record<string, string | undefined>; jev_ms?: number; tokens?: number; cost_usd?: number; total_cost_usd?: number; sensor?: string; acted_after_ms?: number;
-  mode?: string; support?: number; known?: string | null; fallback?: string }
+  mode?: string; support?: number; known?: string | null; fallback?: string; skipped?: string; reread?: number; implausible?: string[] }
 
 export function stableHash(v: any): string {
   const s = JSON.stringify(v, (_, val) => (val && typeof val === "object" && !Array.isArray(val) ? Object.keys(val).sort().reduce((o: any, k) => ((o[k] = val[k]), o), {}) : val));
@@ -79,6 +81,11 @@ export class Agent {
   sensorEwmaMs = 0;        // what the decider has been taking lately: the per-tick budget is judged against it
   budgetSkips = 0;         // consecutive ticks the decider was skipped for the budget
   skippedBudget = 0;       // over the run
+  skippedReflex = 0;       // ticks the pack's reflex condition acted on the last answers without the decider
+  accepted: Values | null = null;   // the last reading that passed the pack's plausibility checks
+  implausibleTicks = 0;    // consecutive ticks whose reads broke a check even after re-reading
+  implausibleTotal = 0;
+  rereads = 0;             // fresh frames taken because a reading broke a check
   trackers: Record<string, TetrisTracker> = {};
   onRecord?: (rec: Rec, frame: Frame, answers: Record<string, Answer> | null) => void;
   // ---- the hybrid: which screen is this, does the pack understand it, and who decides when it does not
@@ -253,6 +260,7 @@ export class Agent {
         hit = "gte" in c ? p >= c.gte : p <= c.lte;
         why = `${c.noul}=${p.toFixed(2)}`;
       } else { hit = this.cond(c, values); why = `${c.read}=${get(values, c.read)}`; }
+      if (hit && rl.unless && this.cond(rl.unless, values)) continue;    // the exception: e.g. the cell guarded against is the food
       if (hit) out.push([rl, why]);
     }
     return out;
@@ -292,7 +300,10 @@ export class Agent {
     const act = answers.action;
     if (excluded.size && act && act.choice && excluded.has(act.choice)) {
       const probs = Object.entries(act.probabilities ?? {}).filter(([k]) => !excluded.has(k));
+      const allowed = this.pack.actions.map((a) => a.id).filter((id) => !excluded.has(id));
       if (probs.length) { const best = probs.sort((a, b) => b[1] - a[1])[0][0]; answers.action = { ...act, choice: best }; applied.push(`→ ${best}`); }
+      // the decider's answer (often a stale one, under budget_ms) never offered the one action the rules leave: take it
+      else if (allowed.length === 1) { answers.action = { ...act, choice: allowed[0] }; applied.push(`→ ${allowed[0]} (the only action the rules allow)`); }
       else applied.push(`→ every action excluded; ${act.choice} stands`);   // infeasible rules: the trap closed ticks ago
     }
     return applied;
@@ -469,7 +480,7 @@ export class Agent {
   async step(): Promise<Rec> {
     this.tick++;
     const t0 = performance.now();
-    const frame = await this.device.frame();
+    let frame = await this.device.frame();
     this.lastState = this.device.state ? await this.device.state() : undefined;
     const fp = fingerprint(frame);
     this.lastFp = fp;
@@ -479,15 +490,16 @@ export class Agent {
     if (cls.mode !== this.mode) { this.mode = cls.mode; this.trackers = {}; this.heads = {}; this.lastAnswers = null; this.noops = []; }
     this.pack = this.mode === "main" ? this.base : this.base.modes[this.mode];
     if (this.mode !== "main") obs = this.observe(frame, this.pack);
-    const { values, timings } = obs;
+    let { values } = obs;
+    const { timings } = obs;
     const support = this.support(obs.conf, values, this.pack);
     this.lastSupport = support;
     const threshold = Number(this.base.raw.support_threshold ?? 0.7);
     const supported = support >= threshold;
     if (supported && !cls.known) this.fps.add(this.mode, fp);          // a screen the pack reads well is a known screen from now on
     const tPerc = performance.now() - t0;
-    const h = stableHash(Object.fromEntries(Object.entries(values).filter(([k]) => !k.endsWith("_prev"))));
-    const changed = h !== this.lastHash;
+    let h = stableHash(Object.fromEntries(Object.entries(values).filter(([k]) => !k.endsWith("_prev"))));
+    let changed = h !== this.lastHash;
     if (changed) this.noops = [];
     else { const last = this.history[this.history.length - 1]; if (last?.key && !this.noops.includes(last.key)) this.noops.push(last.key); }
     const state: Record<string, any> = { game: this.pack.name, tick: this.tick, how_to_play: this.pack.play, screen: values, recent_actions: this.history.slice(-6).map((x) => x.action), last_action_changed_screen: this.history.length ? changed : null, actions_that_did_nothing_since_last_change: [...this.noops] };
@@ -517,6 +529,38 @@ export class Agent {
       const d = this.fallback.recall(fp);
       if (d) { rec.action = await this.actFallback(d.now); rec.fallback = `memo transient: ${JSON.stringify(d.now)}`; rec.reason = "known transient screen"; return done(rec); }
     }
+    const spec = this.pack.raw.plausible;
+    if (spec) {
+      // a reading that cannot follow the last accepted one is a wrong read, not a move: look again, and if it still
+      // does not add up, do nothing on it; if it persists, end the episode with the broken check as the reason
+      let bad = violations(spec, values, this.accepted, this.pack.reads);
+      let tries = 0;
+      while (bad.length && tries < Number(this.pack.raw.plausible_retries ?? 2) && this.device.rereadable !== false) {
+        tries++;
+        frame = await this.device.frame();
+        this.lastState = this.device.state ? await this.device.state() : undefined;
+        values = this.observe(frame, this.pack).values;
+        bad = violations(spec, values, this.accepted, this.pack.reads);
+      }
+      if (tries) {
+        this.rereads += tries;
+        rec.reread = tries;
+        h = stableHash(Object.fromEntries(Object.entries(values).filter(([k]) => !k.endsWith("_prev"))));
+        changed = h !== this.lastHash;
+        rec.screen = values; rec.hash = h; state.screen = values;
+        state.last_action_changed_screen = this.history.length ? changed : null;
+        this.lastValues = values;
+      }
+      if (bad.length) {
+        this.implausibleTicks++; this.implausibleTotal++;
+        rec.implausible = bad;
+        if (this.implausibleTicks >= Number(this.pack.raw.plausible_ticks ?? 6)) { rec.action = "stop"; rec.reason = `stalled: implausible read for ${this.implausibleTicks} ticks: ${bad[0]}`; }
+        else { rec.action = "wait"; rec.reason = `implausible read: ${bad[0]}`; }
+        return done(rec);
+      }
+      this.implausibleTicks = 0;
+      this.accepted = values;
+    }
     const stop = this.pack.raw.stop_when;
     if (stop && this.cond(stop, values)) { rec.action = "stop"; rec.reason = `${stop.read} is ${get(values, stop.read)}`; return done(rec); }
     const gate = this.pack.raw.act_when;
@@ -531,13 +575,22 @@ export class Agent {
     const qs = this.questions(values);
     let res: SensorResult;
     const budget = Number(this.pack.raw.budget_ms ?? 0);
-    if (budget && this.lastAnswers && this.pack.rules.length && tPerc + this.sensorEwmaMs > budget && this.budgetSkips < Number(this.pack.raw.budget_skip_max ?? 2)) {
+    const reflex = this.pack.raw.reflex;
+    if (reflex && this.lastAnswers && this.pack.rules.length && this.taskOk(reflex, values)) {
+      // a reflex: the fresh frame already needs a move before the decider could answer (Snake, a turn into a wall
+      // that needs a second turn on the very next step). The rules act on the decider's last answers, its ranking of
+      // the moves, at perception speed; the decider is asked again on the next frame
+      this.skippedReflex++;
+      res = { answers: JSON.parse(JSON.stringify(this.lastAnswers)), latency_ms: 0, input_tokens: 0, cost_usd: 0 };
+      rec.sensor = "reflex: " + (Array.isArray(reflex) ? reflex : [reflex]).map((c: any) => `${c.read}=${get(values, c.read)}`).join(", ") + " → rules on last answers";
+      rec.skipped = "reflex";
+    } else if (budget && this.lastAnswers && this.pack.rules.length && tPerc + this.sensorEwmaMs > budget && this.budgetSkips < Number(this.pack.raw.budget_skip_max ?? 2)) {
       // the tick cannot afford the decider: the rules act on its last answers (the post-posed shield), at most
       // budget_skip_max ticks in a row so a slow decider is never starved out of the loop
       this.budgetSkips++; this.skippedBudget++;
       res = { answers: JSON.parse(JSON.stringify(this.lastAnswers)), latency_ms: 0, input_tokens: 0, cost_usd: 0 };
       rec.sensor = `budget: skipped the decider (perception ${Math.round(tPerc)} ms + expected ${Math.round(this.sensorEwmaMs)} ms > ${budget} ms) → rules on last answers`;
-      (rec as any).skipped = "budget";
+      rec.skipped = "budget";
     } else {
       this.budgetSkips = 0;
       try {
