@@ -94,7 +94,8 @@ of ordinary ticks banked from every episode that the decider is re-asked on so a
 everywhere else, an **option-order A/B** on the banked states, a **conformal floor** for the calibrator (at most a
 quarter of revisions as good as the kept ones are refused; no veto until three have been kept), **`margin`**
 reads (the room after each move with the decision latency compensated) and a per-tick **`budget_ms`** that lets
-the rules act on the decider's last answers when the tick cannot afford it. `anygame audit <pack> --sensor jev`
+the rules act on the decider's last answers when the tick cannot afford it. A pack's **`reflex`** condition does the same whenever it holds (Snake: one free cell ahead, where a fresh
+answer would land after the next step); see [docs/snake-reflex.md](docs/snake-reflex.md). `anygame audit <pack> --sensor jev`
 prints all of it for a bank. On the Snake bank it found that listing `keep` first makes Jev want it 45% of the
 time against 20% for no bias and want a rule-excluded move 62% of the time against 28% as authored, and that the
 learned pack still owns one of its four banked losses, the pocket death a one-step rule cannot see.

@@ -56,7 +56,7 @@ class Pack:
         raise PackError(f"{self.path}: unknown action '{id}'")
 
 
-MODE_KEYS = ("zones", "read", "act", "play", "questions", "rules", "act_when", "stop_when", "settle", "tick_hz")
+MODE_KEYS = ("zones", "read", "act", "play", "questions", "rules", "act_when", "stop_when", "settle", "tick_hz", "reflex")
 TASK_CATEGORIES = ("navigate", "collect", "score", "survive", "clear", "build", "avoid", "other")
 
 
@@ -210,12 +210,18 @@ def load_pack(path: str | os.PathLike, _allow_no_tests: bool = False) -> Pack:
     if raw.get("settle") not in (None, "screen_change"):
         raise PackError(f"{p}: settle must be 'screen_change' (wait for the screen to change after an action before deciding again)")
     rules = raw.get("rules") or []
+    for c in (raw.get("reflex") if isinstance(raw.get("reflex"), list) else [raw.get("reflex")] if raw.get("reflex") else []):
+        if not (isinstance(c, dict) and "read" in c and any(k in c for k in ("equals", "in", "not", "gte", "lte"))):
+            raise PackError(f"{p}: reflex needs {{read, equals|in|not|gte|lte}} (or a list of them): when it holds, the rules act on the decider's last answers without asking it")
     for rl in rules:
         cond = rl.get("if") or {}
         ok_noul = "noul" in cond and any(k in cond for k in ("gte", "lte"))
         ok_read = "read" in cond and any(k in cond for k in ("equals", "in", "not", "gte", "lte"))
         if not (ok_noul or ok_read):
             raise PackError(f"{p}: rule needs if: {{noul, gte|lte}} or if: {{read, equals|in|not|gte|lte}}")
+        u = rl.get("unless")
+        if u is not None and not (isinstance(u, dict) and "read" in u and any(k in u for k in ("equals", "in", "not", "gte", "lte"))):
+            raise PackError(f"{p}: rule 'unless' needs {{read, equals|in|not|gte|lte}}: the rule does not apply when it holds")
         if not any(k in rl for k in ("exclude", "set", "avoid", "only")):
             raise PackError(f"{p}: rule needs 'exclude: [actions]', 'set: {{param_question: from_question}}', 'avoid: {{param_question: read}}' or 'only: {{param_question: read}}'")
     tests = raw.get("tests") or []
