@@ -184,3 +184,34 @@ test("tetris lookahead gives the Python compiler's ranking on 60 random boards",
   }
   assert.ok(changed > cases.length / 2, `lookahead should reorder most boards, reordered ${changed}`);
 });
+
+// ---- Go playouts ---------------------------------------------------------------------------------------------
+test("go playouts score the candidates the same way every time", async () => {
+  const { goRead, clearGoPlayoutCache } = await import("../dist/core.js");
+  // white's big chain in the middle is in atari: taking it wins the random games, the other moves mostly do not
+  const board = [".........", "...BBB...", "..BWWWB..", "..BWWWB..", "..BWW.B..", "...BBB...", "........."].concat([".........", "........."]);
+  const v = goRead(board, { komi: 6.5, playouts: 32 });
+  assert.equal(goRead(board, { komi: 6.5 }).playouts, undefined);          // opt-in
+  const po = v.playouts;
+  assert.deepEqual(new Set(Object.keys(po)), new Set([...v.best, ...v.captures])); assert.deepEqual(v.captures, ["c6r5"]);
+  assert.ok(po.c6r5.win >= 0.9 && Object.values(po).every((x) => x.win >= 0 && x.win <= 1));
+  clearGoPlayoutCache();
+  assert.deepEqual(goRead(board, { komi: 6.5, playouts: 32 }).playouts, po);    // seeded from the board
+});
+
+test("go playouts agree with the Python compiler's on real boards from the Jev run", async () => {
+  // test/fixtures/go-playouts.json: four mid-game boards from the go-playouts run with perceive/go.py's 512-playout
+  // results. The random streams differ (Python's Mersenne Twister, a small seeded generator here), so the check is
+  // statistical: the same candidates, the same worth, win rates within sampling error
+  const { goRead } = await import("../dist/core.js");
+  const cases = JSON.parse(readFileSync(join(process.cwd(), "test", "fixtures", "go-playouts.json"), "utf8"));
+  const diffs = [];
+  for (const c of cases) {
+    const v = goRead(c.board, { komi: 6.5, playouts: 256 });
+    assert.deepEqual(v.best, c.best); assert.deepEqual(v.worth, c.worth);
+    assert.deepEqual(Object.keys(v.playouts).sort(), Object.keys(c.playouts).sort());
+    for (const k of Object.keys(c.playouts)) diffs.push(Math.abs(v.playouts[k].win - c.playouts[k].win));
+  }
+  const mean = diffs.reduce((a, b) => a + b, 0) / diffs.length;
+  assert.ok(mean < 0.05 && Math.max(...diffs) < 0.15, `win-rate gap mean ${mean.toFixed(3)} max ${Math.max(...diffs)}`);
+});

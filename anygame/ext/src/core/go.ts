@@ -119,6 +119,103 @@ function areaScore(b: B, us: string, them: string, w: number, h: number, empty: 
   return [s[us], s[them]];
 }
 
+// ---- random playouts: a flat 1-D board (0 empty, 1 us, 2 them), as _playout in go.py -------------------------------
+function geometry(w: number, h: number): [number[][], number[][]] {
+  const nb: number[][] = [], dg: number[][] = [];
+  for (let r = 0; r < h; r++) for (let c = 0; c < w; c++) {
+    nb.push([[1, 0], [-1, 0], [0, 1], [0, -1]].filter(([dc, dr]) => c + dc >= 0 && c + dc < w && r + dr >= 0 && r + dr < h).map(([dc, dr]) => (r + dr) * w + c + dc));
+    dg.push([[-1, -1], [-1, 1], [1, -1], [1, 1]].filter(([dc, dr]) => c + dc >= 0 && c + dc < w && r + dr >= 0 && r + dr < h).map(([dc, dr]) => (r + dr) * w + c + dc));
+  }
+  return [nb, dg];
+}
+
+/** A seeded generator in [0, 1): the board string picks the stream, so the same board reads the same. (Python seeds
+ *  random.Random with the same string; the streams differ, the statistics do not.) */
+function seeded(text: string): () => number {
+  let h = 1779033703 ^ text.length;
+  for (let i = 0; i < text.length; i++) { h = Math.imul(h ^ text.charCodeAt(i), 3432918353); h = (h << 13) | (h >>> 19); }
+  let a = h >>> 0;
+  return () => { a = (a + 0x6d2b79f5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+}
+
+function hasLib(g: Uint8Array, i: number, nb: number[][], seen: Uint8Array, stack: number[]): boolean {
+  const c = g[i]; seen.fill(0); seen[i] = 1; stack.length = 0; stack.push(i);
+  while (stack.length) for (const n of nb[stack.pop()!]) { const v = g[n]; if (v === 0) return true; if (v === c && !seen[n]) { seen[n] = 1; stack.push(n); } }
+  return false;
+}
+
+function chain(g: Uint8Array, i: number, nb: number[][]): number[] {
+  const c = g[i], out = [i], seen = new Set([i]), todo = [i];
+  while (todo.length) for (const n of nb[todo.pop()!]) if (g[n] === c && !seen.has(n)) { seen.add(n); out.push(n); todo.push(n); }
+  return out;
+}
+
+/** Random moves to the end (two passes or 150 moves) from g with p to move: never an own eye, never suicide, the
+ *  same policy as the page's `ai=mc` white. Our (1) area minus theirs. */
+function playout(g0: Uint8Array, p: number, rng: () => number, nb: number[][], dg: number[][]): number {
+  const g = Uint8Array.from(g0), seen = new Uint8Array(g.length), stack: number[] = [];
+  const empt: number[] = []; g.forEach((v, i) => { if (!v) empt.push(i); });
+  let passes = 0, n = 0;
+  while (passes < 2 && n < 150) {
+    let moved = false, k = empt.length;
+    while (k > 0) {
+      const j = Math.floor(rng() * k), i = empt[j];
+      empt[j] = empt[k - 1]; empt[k - 1] = i;
+      k--;
+      if (nb[i].every((m) => g[m] === p)) {            // an own eye: never filled
+        const d = dg[i]; let bad = 0; for (const x of d) if (g[x] === 3 - p) bad++;
+        if (d.length < 4 ? bad === 0 : bad <= 1) continue;
+      }
+      g[i] = p;
+      const caps: number[] = [];
+      for (const m of nb[i]) if (g[m] === 3 - p && !hasLib(g, m, nb, seen, stack)) caps.push(...chain(g, m, nb));
+      for (const s of caps) g[s] = 0;
+      if (!caps.length && !hasLib(g, i, nb, seen, stack)) { g[i] = 0; continue; }    // suicide
+      empt[k] = empt[empt.length - 1]; empt.pop();
+      for (const s of new Set(caps)) empt.push(s);
+      moved = true;
+      break;
+    }
+    passes = moved ? 0 : passes + 1;
+    n++;
+    p = 3 - p;
+  }
+  const sc = [0, 0, 0];
+  for (let i = 0; i < g.length; i++) {
+    if (g[i]) { sc[g[i]]++; continue; }
+    let o = 0, mixed = false;
+    for (const m of nb[i]) { const v = g[m]; if (!v) { mixed = true; break; } if (o && v !== o) { mixed = true; break; } o = v; }
+    if (!mixed && o) sc[o]++;
+  }
+  return sc[1] - sc[2];
+}
+
+const PLAYOUT_CACHE = new Map<string, Record<string, { win: number; margin: number }>>();
+
+/** For each candidate move of ours: n random games from the board after it (white to move), our win rate and mean
+ *  margin after komi. Cached per board and seeded from it, so a board that has not changed costs nothing. */
+export function goPlayouts(b: B, cands: string[], us: string, them: string, w: number, h: number, empty: string, komi: number, n: number): Record<string, { win: number; margin: number }> {
+  const flat = (bb: B) => { const g = new Uint8Array(w * h); for (let r = 1; r <= h; r++) for (let c = 1; c <= w; c++) { const v = bb.get(key(c, r)); g[(r - 1) * w + c - 1] = v === us ? 1 : v === them ? 2 : 0; } return g; };
+  const k = `${w}x${h}:${n}:${komi}:` + flat(b).join("");
+  const out = PLAYOUT_CACHE.get(k) ?? {};
+  const todo = cands.filter((p) => !(p in out));
+  if (todo.length) {
+    const [nb, dg] = geometry(w, h);
+    for (const p of todo) {
+      const res = play(b, p, us, them, w, h, empty);
+      if (!res) continue;
+      const g = flat(res.nb), rng = seeded(k + p);
+      let wins = 0, sum = 0;
+      for (let i = 0; i < n; i++) { const m = playout(g, 2, rng, nb, dg) - komi; if (m > 0) wins++; sum += m; }
+      out[p] = { win: Math.round((wins / n) * 100) / 100, margin: Math.round((sum / n) * 10) / 10 };
+    }
+    if (PLAYOUT_CACHE.size > 64) PLAYOUT_CACHE.clear();
+    PLAYOUT_CACHE.set(k, out);
+  }
+  return Object.fromEntries(cands.filter((p) => p in out).map((p) => [p, out[p]]));
+}
+export const clearGoPlayoutCache = () => PLAYOUT_CACHE.clear();
+
 export function goRead(src: any, r: ReadDef): Record<string, any> | null {
   const { b, w, h } = board(src);
   if (!b.size) return null;
@@ -181,7 +278,11 @@ export function goRead(src: any, r: ReadDef): Record<string, any> | null {
   const [su, st] = areaScore(b, us, them, w, h, empty);
   const byPos = (s: Set<string>) => order.filter(k => s.has(k));
   const best = Object.keys(worth).sort((a, c) => worth[c] - worth[a]).slice(0, Number(r.top_k ?? 6));
+  const extra: Record<string, any> = {};
+  const nPo = Number(r.playouts ?? 0);
+  if (nPo > 0) extra.playouts = goPlayouts(b, [...new Set([...best, ...captures, ...saves])], us, them, w, h, empty, komi, nPo);
   return {
+    ...extra,
     legal, good, captures, saves, self_atari: selfAtari, eyes,
     urgent: [...captures, ...saves.filter(c => !captures.includes(c))],
     our_atari: byPos(ourAtari), their_atari: byPos(theirAtari), danger: byPos(danger), doomed,
