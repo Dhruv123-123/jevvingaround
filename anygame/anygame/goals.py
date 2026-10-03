@@ -157,7 +157,7 @@ class GoalBook:
                 self._close(g, "reached", tick)
             elif tick - g["set_tick"] > int(g.get("ticks") or self.give_up):
                 self._close(g, "given up", tick)
-        walking = values.get("screen") == "walk" and values.get("x") is not None
+        walking = values.get("x") is not None and values.get("screen", "walk") == "walk"   # no screen read: a position is enough
         if not walking:
             return self.quest()
         need = self.current is None

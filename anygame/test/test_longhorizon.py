@@ -217,3 +217,53 @@ def test_audit_agree_and_played_out_verdicts():
     assert len(a.worlds["world"].visited[0]) == 1 and a.tick == 0      # the branches left nothing behind
     rep = au.report()
     assert rep["decisions"] == 2 and rep["agree_share"] == 0.5 and rep["jev_helped_share"] == 0.5
+
+
+# ---- places and checkpoints on the grid world --------------------------------------------------------------
+def test_a_signature_change_without_a_jump_is_the_same_place():
+    from anygame.perceive.world import WorldTracker
+    w = WorldTracker({"x": "x", "y": "y", "map": "map"})
+    assert w.tile_of({"map": 11, "x": 3, "y": 3}) == (11, 3, 3)
+    assert w.tile_of({"map": 99, "x": 3, "y": 4}) == (11, 3, 4)       # a byte of the signature changed mid-dialogue
+    assert w.tile_of({"map": 42, "x": 9, "y": 1}) == (42, 9, 1)       # the position jumped with it: a door
+    assert w.tile_of({"map": 99, "x": 9, "y": 2}) == (11, 9, 2)       # an alias stays one for the run
+    d = w.dump()
+    w2 = WorldTracker({"x": "x", "y": "y", "map": "map"})
+    w2.load(json.loads(json.dumps(d)))
+    assert w2.alias == {99: 11}
+
+
+def test_checkpoint_resumes_the_run(tmp_path):
+    import pickle
+    from test_world import GridGame, PACK
+    from anygame.loop import Agent
+    from anygame.pack import load_pack
+    from anygame.memory import save_checkpoint, load_checkpoint
+    from anygame.sensors import open_sensor
+
+    class SavingGrid(GridGame):
+        def save_state(self, path):
+            with open(path, "wb") as f:
+                pickle.dump(self.__dict__, f)
+
+        def load_state(self, path):
+            with open(path, "rb") as f:
+                self.__dict__.update(pickle.load(f))
+
+    text = PACK.replace("goals:", "goals_from: dialogue\ngoals_old:")
+    (tmp_path / "pack.yaml").write_text(text)
+    (tmp_path / "s.json").write_text('{"map": 0, "x": 2, "y": 3}')
+    pack = load_pack(tmp_path)
+    g = SavingGrid()
+    a = Agent(pack, g, open_sensor("top"), None, max_ticks=40, background=False)
+    a.run()
+    assert a.goalbook.current is not None and a.memory.places
+    save_checkpoint(a, str(tmp_path / "ck"))
+    g2 = SavingGrid()
+    b = Agent(pack, g2, open_sensor("top"), None, max_ticks=60, background=False)
+    load_checkpoint(b, str(tmp_path / "ck"))
+    assert (g2.map, g2.x, g2.y) == (g.map, g.x, g.y) and b.tick == a.tick
+    assert b.worlds["world"].visited == a.worlds["world"].visited
+    assert b.memory.places == a.memory.places and b.goalbook.quest() == a.goalbook.quest()
+    b.run()
+    assert b.tick == 60
