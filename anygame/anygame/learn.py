@@ -48,11 +48,11 @@ def outcome(recs: list[dict[str, Any]], n: int, version: int, score_read: str | 
     dec = [r for r in recs if "jev_ms" in r]
     s = None
     if score_read:
-        # a dotted path into the typed frame (piece.lines_cleared), the best value seen in the episode: the last
-        # record is often the game-over screen, where the read is gone
+        # a dotted path into the typed frame (piece.lines_cleared), the last value read: the last record is often
+        # the game-over screen, where the read is gone (not the largest: one OCR misread would be the score)
         seen = [_get_path(r.get("screen") or {}, score_read) for r in recs]
         nums = [x for x in seen if isinstance(x, (int, float)) and not isinstance(x, bool)]
-        s = max(nums) if nums else None
+        s = nums[-1] if nums else None
     return {"n": n, "ticks": len(recs), "decisions": len(dec), "reason": reason, "score": s if isinstance(s, (int, float)) else None,
             "won": bool(WON.search(reason)) and not LOST.search(reason), "lost": bool(LOST.search(reason)),
             "tasks_done": sum(1 for r in recs if r.get("task_done")), "tasks_failed": sum(1 for r in recs if r.get("task_failed")),
@@ -1195,8 +1195,10 @@ def verify_v2(candidate: Pack, incumbent: Pack, inc: Incident, diag: dict[str, A
     blind = blind_changes(candidate, incumbent)
     reasked = None
     unjudged: set[int] = set()
-    if len(how) * 2 < len(ev) and blind and sensor is not None:
-        # replay cannot see a new paragraph, new questions or timing: ask the decider itself on the evidence frames
+    told = [k for k in blind if k in ("play", "questions")]
+    if len(how) * 2 < len(ev) and told and sensor is not None:
+        # replay cannot see a new paragraph or new questions: ask the decider itself on the evidence frames (not for
+        # timing alone: what the decider is told is unchanged, so a different answer would only be its own noise)
         todo = [k for k in ev if k not in how]
         ans = _reask2(sensor, candidate, [inc.decisions[k] for k in todo], log)
         reasked = {}
@@ -1297,7 +1299,9 @@ def improve_v2(chat, pack: Pack, inc: Incident, diag: dict[str, Any], recs: list
                     problem = f"checking it on the recorded frames: {v['why']}"
                 else:
                     feats = revision_features(v, cand, pack)
-                    if sensor is not None and holdout:
+                    if sensor is not None and holdout and not set(kinds) <= {"gate", "timing"}:
+                        # a gate or a timing change does not change what the decider is told, so re-asking it can
+                        # only measure its own noise (Snake: 80% of keep/turn answers flip on a second asking)
                         ho = holdout_check(sensor, cand, holdout, log)
                         v["holdout"] = {"n": ho["n"], "agreement": ho["agreement"]}
                         feats["holdout_agreement"] = ho["agreement"]

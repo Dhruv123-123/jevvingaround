@@ -478,7 +478,7 @@ def cmd_learn(a):
             log(f"learn: {str(e)[:140]}")
         tried = [{"fix_kinds": t.get("fix_kinds"), "fix_kind": "+".join(t.get("fix_kinds") or []) or "none", "outcome": t.get("outcome"), "why": t.get("why")} for t in res.get("attempts") or []]
         if res.get("pack") is not None and tried:
-            tried[-1]["outcome"], tried[-1]["version"] = "on trial", version + 1
+            tried[-1]["outcome"] = "on trial"
         bank.add_diagnosis({**{k: diag.get(k) for k in ("cause_id", "category", "cause", "evidence", "first_bad_tick", "fix_kind", "fix", "signature", "repeats")},
                             "episode": ep_n, "version": version, "tried": tried, "at": time.strftime("%Y-%m-%dT%H:%M:%S")})
         return res
@@ -486,8 +486,14 @@ def cmd_learn(a):
     def start_trial(res, reason):
         nonlocal pack, version, incumbent
         incumbent = (dump_pack(pack.raw), version, reason, len(bank.lessons))
-        version += 1
+        # a new number even after a revert, so no saved version is overwritten
+        version = max([version] + [int(p.stem.split(".v")[1]) for p in bank.path.glob("pack.v*.yaml") if p.stem.split(".v")[1].isdigit()]) + 1
         pack = res["pack"]
+        for d_ in reversed(bank.diagnoses):
+            if d_.get("tried") and d_["tried"][-1].get("outcome") == "on trial" and "version" not in d_["tried"][-1]:
+                d_["tried"][-1]["version"] = version
+                bank._rewrite("diagnoses.jsonl", bank.diagnoses)
+                break
         bank.add_revision(version, res.get("features"), res["verdict"]["why"])
         bank.save_version(version, dump_pack(pack.raw))
         learned.write_text(dump_pack(pack.raw))
@@ -600,7 +606,6 @@ def cmd_learn(a):
                         bank.record_trial(version, False)
                         bank.label_diagnosis(version, "reverted", why)
                         pack, version = load_pack_text(incumbent[0], pack.name), incumbent[1]
-                        ep["version"] = version
                     else:
                         log(f"learn: v{version} stays ({why})")
                         bank.record_trial(version, True, kept_pack=pack, before=load_pack_text(incumbent[0], pack.name), reason=incumbent[2])

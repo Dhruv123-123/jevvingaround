@@ -212,3 +212,11 @@ def test_showing_a_read_another_way_does_not_count_as_making_the_fatal_tick_visi
     plain = load_pack_text(dump_pack(raw), base.name)
     v = verify_v2(base, plain, inc)          # the only change: cells shown `as: matrix`
     assert not v["ok"] and "acts exactly as before" in v["why"], v
+
+
+def test_a_timing_change_goes_to_play_without_re_asking_the_decider():
+    inc = snake_incident()
+    base = stripped()
+    s = Sensor()
+    v = verify_v2(variant(base, tick_hz=2), base, inc, sensor=s)
+    assert v["ok"] and "only play can judge it" in v["why"] and s.calls == 0
