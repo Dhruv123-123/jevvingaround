@@ -18,9 +18,10 @@ with sync_playwright() as p:
     tab_id = sw.evaluate("async () => { const [t] = await chrome.tabs.query({}); return t.id; }")
     panel = ctx.new_page()
     panel.goto(f"chrome-extension://{ext_id}/panel.html?tab={tab_id}")
-    panel.wait_for_function("document.getElementById('log').textContent.includes('ready')", timeout=15000)
+    # locator waits, not wait_for_function: the panel's CSP forbids the eval Playwright polls a string predicate with
+    panel.locator("#log", has_text="ready").wait_for(timeout=15000)
     # the pool lookup runs after 'ready' and may select a pack itself: let it finish before choosing ours
-    panel.wait_for_function("() => !document.getElementById('poolinfo').textContent.includes('checking')", timeout=15000)
+    panel.locator("#poolinfo:not(:has-text('checking'))").wait_for(state="attached", timeout=15000)
     panel.select_option("#pack", "tictactoe"); panel.select_option("#sensor", "random")
     game.bring_to_front()
     panel.click("#play")
