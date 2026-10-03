@@ -214,7 +214,7 @@ export function readAll(pack: Pack, frame: Frame, only?: Set<string>, state?: an
       case "bar": values[rid] = readBar(frame, pack, r); conf[rid] = 1; break;
       case "locate": values[rid] = locate(values[r.in], r); if (!r.many) conf[rid] = values[rid] ? 1 : 0; break;
       case "runs": values[rid] = runsOf(values[r.in], r); break;
-      case "around": case "tetris": case "predict": case "margin": continue;
+      case "around": case "tetris": case "predict": case "margin": case "slide": continue;
       default: values[rid] = null;   // ocr, templates, blobs, vocab: not in the extension
     }
     timings[rid] = Math.round((performance.now() - t0) * 10) / 10;

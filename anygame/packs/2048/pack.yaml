@@ -7,6 +7,8 @@ read:
   # every tile value has its own background colour, so the board is a colour read, not OCR: ~1 ms instead of ~3 s
   tiles: { kind: color, zone: board, parse: int, empty: 0, inset: 0.3, max_dist: 45, otherwise: "0",
            options: { "0": "#cdc1b4", "2": "#eee4da", "4": "#ede0c8", "8": "#f2b179", "16": "#f59563", "32": "#f67c5f", "64": "#f65e3b", "128": "#edcf72", "256": "#edcc61", "512": "#edc850", "1024": "#edc53f", "2048": "#edc22e" } }
+  # the compiler: each swipe simulated exactly and ranked by an expectimax search two swipes deep over the random spawn
+  moves: { kind: slide, in: tiles, depth: 2, corner: c4r4 }
   score: { kind: ocr, zone: score, parse: int, every: 5 }
   # the gap between two rows is board-coloured while playing and washed out under the game-over overlay
   over:  { kind: color, rect: [0.1, 0.373, 0.9, 0.384], options: { playing: "#bbada0", over: "#e4d9ce" }, max_dist: 80, otherwise: playing }
@@ -18,23 +20,18 @@ act:
 tick_hz: 3
 stop_when: { read: over, equals: over }
 play: >
-  2048 on a 4x4 grid. A swipe slides every tile as far as it goes in that direction; two tiles with the
-  same number that collide merge into one with double the number. Keep the largest tile in one corner
-  (bottom-right), build a monotone chain along the bottom row, and avoid the swipe that lifts the big
-  tile out of its corner. Prefer moves that merge; among merges prefer ones that keep the bottom row
-  full. Never swipe up unless nothing else changes the board.
+  2048 on a 4x4 grid. A swipe slides every tile as far as it goes; two equal tiles that collide merge into their
+  sum. The swipes on offer are already ranked by the compiler, which simulates each one exactly and searches two
+  swipes ahead over the random tile that appears after it, keeping the largest tile in the bottom-right corner
+  and the board open. A swipe that would not move anything is not offered. Each option says its rank, the points
+  it merges, the empty cells after it and whether the largest tile stays in its corner. Take the option marked
+  #1 best; the search has already weighed merges, empty cells and the corner, so a bigger merge further down the
+  list is a trap more often than not.
 questions:
-  - id: corner_at_risk
-    type: noul
-    instructions: Would the most natural merging move lift the largest tile out of the bottom-right corner?
-    criteria: { true: "The best-looking merge requires moving the largest tile away from its corner.", false: "The largest tile stays anchored whatever the good moves are." }
-  - id: board_nearly_full
-    type: noul
-    instructions: Are fewer than 4 cells empty?
-    criteria: { true: "Three or fewer zeros in the grid.", false: "Four or more zeros." }
   - id: action
     type: choice
-    instructions: Which swipe now? Consider merges available in each direction and the corner strategy in the play notes.
+    criteria_from: moves.ranked
+    instructions: Which swipe now? The options are ranked best first by a lookahead search; take the one marked "#1 best".
     criteria: { up: "slide all tiles up", down: "slide all tiles down", left: "slide all tiles left", right: "slide all tiles right" }
 tests:
   - frame: fixtures/board-a.png

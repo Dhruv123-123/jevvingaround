@@ -72,7 +72,7 @@ export function dumpPack(raw: Record<string, any>): string {
 
 export class PackError extends Error {}
 
-export const READ_KINDS = new Set(["bar", "templates", "ocr", "vocab", "blobs", "color", "locate", "runs", "around", "tetris", "json", "json_grid", "predict", "margin"]);
+export const READ_KINDS = new Set(["bar", "templates", "ocr", "vocab", "blobs", "color", "locate", "runs", "around", "tetris", "json", "json_grid", "predict", "margin", "slide"]);
 export const QUESTION_TYPES = new Set(["noul", "choice", "score"]);
 
 function parseRect(v: any): Rect {
@@ -115,6 +115,8 @@ export function loadPack(text: string, name = "pack"): Pack {
       if (!(r.of in reads) || !(r.in in reads)) throw new PackError(`${name}: read '${rid}': around needs 'of' and 'in'`);
     } else if (r.kind === "tetris") {
       if (!(r.in in reads)) throw new PackError(`${name}: read '${rid}': tetris needs 'in'`);
+    } else if (r.kind === "slide") {
+      if (!(r.in in reads)) throw new PackError(`${name}: read '${rid}': slide needs 'in' (the 4x4 number grid read), optionally depth and corner`);
     } else if (r.kind === "margin") {
       if (!(r.of in reads) || (r.in !== undefined && !(r.in in reads)) || (r.in === undefined && r.lower === undefined && r.upper === undefined)) throw new PackError(`${name}: read '${rid}': margin needs 'of' (a locate read) and 'in' (a grid read), or 'of' (a number read) with lower and/or upper`);
     } else if (r.kind === "predict") {

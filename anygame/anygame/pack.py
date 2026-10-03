@@ -7,7 +7,7 @@ from typing import Any
 import yaml
 from .geometry import Rect, Zone
 
-READ_KINDS = {"bar", "templates", "ocr", "vocab", "blobs", "color", "locate", "runs", "around", "tetris", "json", "json_grid", "predict", "margin"}
+READ_KINDS = {"bar", "templates", "ocr", "vocab", "blobs", "color", "locate", "runs", "around", "tetris", "json", "json_grid", "predict", "margin", "slide"}
 QUESTION_TYPES = {"noul", "choice", "score"}
 
 
@@ -170,6 +170,9 @@ def load_pack(path: str | os.PathLike, _allow_no_tests: bool = False) -> Pack:
         elif r.get("kind") == "tetris":
             if r.get("in") not in reads:
                 raise PackError(f"{p}: read '{rid}': tetris needs 'in' (the board grid read), optionally next_in (the preview grid read)")
+        elif r.get("kind") == "slide":
+            if r.get("in") not in reads:
+                raise PackError(f"{p}: read '{rid}': slide needs 'in' (the 4x4 number grid read), optionally depth and corner")
         elif r.get("kind") == "around":
             if r.get("of") not in reads or r.get("in") not in reads:
                 raise PackError(f"{p}: read '{rid}': around needs 'of' (a locate read id) and 'in' (a grid read id)")

@@ -98,9 +98,10 @@ def test_loop_drops_noop_actions_until_screen_changes():
     jev = FakeJev()
     ag = Agent(pack, dev, jev)
     ag.step(); ag.step(); ag.step()
-    # tick 1 offers all four; the chosen 'up' did nothing, so tick 2 offers three, tick 3 two
+    # tick 1 offers all four; the chosen swipe did nothing, so tick 2 offers three, tick 3 two
     assert [len(c) for c in jev.seen] == [4, 3, 2]
-    assert "up" not in jev.seen[1] and "down" not in jev.seen[2]
+    first, second = list(jev.seen[0])[0], list(jev.seen[1])[0]
+    assert first not in jev.seen[1] and second not in jev.seen[2] and first not in jev.seen[2]
     assert dev.log and dev.log[0][0] == "swipe"
 
 
@@ -589,3 +590,23 @@ def test_demonstration_digest_and_author_from_demo(monkeypatch, tmp_path):
     out = tmp_path / "out"
     ok, _ = A.author("web://unused", "x", out, rounds=1, log=lambda m: None, demo=d, size=(200, 200))
     assert (out / "fixtures" / "probe-1.png").exists() and "DEMONSTRATION (explorer)" in seen[0] and "Use the demonstration" in seen[0]
+
+
+def test_slide_compiler_ranks_only_moving_swipes_and_offers_them_as_the_action():
+    from anygame.perceive.slide import rank, move
+    g = (0, 2, 2, 0, 0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0, 0)
+    r = rank(g)
+    assert r["best"] == r["legal"][0] and set(r["legal"]) == {"up", "down", "left", "right"}
+    assert list(r["ranked"])[0] == r["best"] and r["ranked"][r["best"]].startswith("#1 best")
+    full = (4, 8, 2, 4, 2, 4, 8, 32, 4, 2, 32, 8, 8, 16, 64, 256)
+    assert rank(full)["legal"] == [] and rank(full)["best"] == "none"
+    # a swipe that does not move the board is never offered
+    blocked = (2, 4, 2, 4, 4, 2, 4, 2, 2, 4, 2, 4, 0, 0, 0, 0)
+    assert "down" not in rank(blocked)["legal"] or move(blocked, "down")[0] != blocked
+    assert all(move(blocked, d)[0] != blocked for d in rank(blocked)["legal"])
+    # the pack's action question takes its options from the compiled read
+    pack = load_pack(os.path.join(ROOT, "packs", "2048"))
+    frame = cv2.imread(os.path.join(ROOT, "packs", "2048", "fixtures", "board-a.png"))
+    jev = FakeJev()
+    Agent(pack, FakeDevice([frame]), jev).step()
+    assert list(jev.seen[0])[0] == "left" and jev.seen[0]["left"].startswith("#1 best")

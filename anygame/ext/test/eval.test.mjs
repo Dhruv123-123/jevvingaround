@@ -74,3 +74,17 @@ test("the loop plays tic-tac-toe frames with the random sensor and only offers l
   assert.equal(rec.choice, "mark");
   assert.ok(matches({ a: 1 }, { a: 1, b: 2 }) && !matches([1, 2], [1]));
 });
+
+test("2048 slide compiler ranks swipes like the Python one", async () => {
+  const { slideOf } = await import("../dist/core.js");
+  // expected values computed by anygame/perceive/slide.py on the same boards
+  const a = slideOf([2, 0, 0, 0, 0, 4, 0, 0, 0, 0, 8, 2, 16, 32, 64, 128], {});
+  assert.deepEqual(a.legal, ["left", "right", "down", "up"]);
+  assert.equal(a.ranked.up, "#4: merges +0, 8 empty after, largest tile NOT in the corner");
+  const full = slideOf({ c1r1: 4, c2r1: 8, c3r1: 2, c4r1: 4, c1r2: 2, c2r2: 4, c3r2: 8, c4r2: 32, c1r3: 4, c2r3: 2, c3r3: 32, c4r3: 8, c1r4: 8, c2r4: 16, c3r4: 64, c4r4: 256 }, {});
+  assert.deepEqual(full.legal, []);
+  assert.equal(full.best, "none");
+  const b = slideOf([0, 2, 2, 0, 0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0, 0], { depth: 2 });
+  assert.deepEqual(b.legal, ["right", "down", "up", "left"]);
+  assert.equal(b.ranked.right, "#1 best: merges +4, 14 empty after, largest tile NOT in the corner");
+});
