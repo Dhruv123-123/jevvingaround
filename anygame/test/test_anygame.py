@@ -628,3 +628,16 @@ def test_go_read_sees_a_ladder():
     mid = ["BBW..B...", "B.W..W...", ".BBW..B..", "..W...W..", ".....B...", "....WW..B", "...B...W.", "....B...W", ".WBW....B"]
     v = go.read(mid, {"komi": 6.5})
     assert "c9r7" in v["doomed"] and "c9r7" not in v["best"]
+
+
+def test_go_playouts_score_the_candidates_the_same_way_every_time():
+    from anygame.perceive import go
+    # white's big chain in the middle is in atari: taking it wins the random games, the other moves mostly do not
+    board = [".........", "...BBB...", "..BWWWB..", "..BWWWB..", "..BWW.B..", "...BBB...", "........."] + ["........."] * 2
+    v = go.read(board, {"komi": 6.5, "playouts": 32})
+    assert "playouts" not in go.read(board, {"komi": 6.5})          # opt-in
+    po = v["playouts"]
+    assert set(po) == set(v["best"]) | set(v["captures"]) and v["captures"] == ["c6r5"]
+    assert po["c6r5"]["win"] >= 0.9 and all(0 <= x["win"] <= 1 for x in po.values())
+    go._PLAYOUT_CACHE.clear()
+    assert go.read(board, {"komi": 6.5, "playouts": 32})["playouts"] == po    # seeded from the board
