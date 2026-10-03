@@ -224,6 +224,28 @@ export function goPlayouts(b: B, cands: string[], us: string, them: string, w: n
 }
 export const clearGoPlayoutCache = () => PLAYOUT_CACHE.clear();
 
+/** `rerank: playouts`: the playout leader goes first in `best` when its win rate beats the first `best` move's by
+ *  `margin` or more (`extra.reranked` says {from, to, gap}). The leader is picked among the good moves with the most
+ *  games (the `playouts_top` leaders), so a lucky 32-game result never jumps the queue; a tie on win goes to the
+ *  higher margin, then to the `best` order. Port of rerank in perceive/go.py. */
+export function goRerank(best: string[], po: Record<string, { win: number; margin: number; n: number }>, good: Set<string>, margin: number, extra: Record<string, any>): string[] {
+  const top = best[0];
+  if (!(top in po)) return best;
+  const ranked = Object.keys(po).filter((k) => good.has(k));
+  const most = Math.max(0, ...ranked.map((k) => po[k].n));
+  const pool = ranked.filter((k) => po[k].n === most);
+  if (!pool.length) return best;
+  const order = (k: string) => (best.includes(k) ? best.indexOf(k) : best.length);
+  const lead = pool.reduce((a, k) => {
+    const d = po[k].win - po[a].win || po[k].margin - po[a].margin || order(a) - order(k);
+    return d > 0 ? k : a;
+  });
+  const gap = Math.round((po[lead].win - po[top].win) * 100) / 100;
+  if (lead === top || gap < margin - 1e-9) return best;
+  extra.reranked = { from: top, to: lead, gap };
+  return [lead, ...best.filter((k) => k !== lead)];
+}
+
 export function goRead(src: any, r: ReadDef): Record<string, any> | null {
   const { b, w, h } = board(src);
   if (!b.size) return null;
@@ -285,10 +307,13 @@ export function goRead(src: any, r: ReadDef): Record<string, any> | null {
   }
   const [su, st] = areaScore(b, us, them, w, h, empty);
   const byPos = (s: Set<string>) => order.filter(k => s.has(k));
-  const best = Object.keys(worth).sort((a, c) => worth[c] - worth[a]).slice(0, Number(r.top_k ?? 6));
+  let best = Object.keys(worth).sort((a, c) => worth[c] - worth[a]).slice(0, Number(r.top_k ?? 6));
   const extra: Record<string, any> = {};
   const nPo = Number(r.playouts ?? 0);
-  if (nPo > 0) extra.playouts = goPlayouts(b, [...new Set([...best, ...captures, ...saves])], us, them, w, h, empty, komi, nPo, Number(r.playouts_top ?? 0), Number(r.playouts_top_n ?? 0));
+  if (nPo > 0) {
+    extra.playouts = goPlayouts(b, [...new Set([...best, ...captures, ...saves])], us, them, w, h, empty, komi, nPo, Number(r.playouts_top ?? 0), Number(r.playouts_top_n ?? 0));
+    if (r.rerank === "playouts" && best.length) best = goRerank(best, extra.playouts, new Set(good), Number(r.rerank_margin ?? 0.06), extra);
+  }
   return {
     ...extra,
     legal, good, captures, saves, self_atari: selfAtari, eyes,

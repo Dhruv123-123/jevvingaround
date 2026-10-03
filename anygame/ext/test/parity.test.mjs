@@ -217,6 +217,41 @@ test("go playouts spend more games on the leaders", async () => {
   assert.deepEqual(ns.slice(-2), [24, 24]); assert.deepEqual(new Set(ns.slice(0, -2)), new Set([8]));
 });
 
+test("go rerank puts the playout leader first past the margin", async () => {
+  // mirrors test_go_rerank_puts_the_playout_leader_first_past_the_margin
+  const { goRerank } = await import("../dist/core.js");
+  const po = { a: { win: 0.50, margin: 1.0, n: 160 }, b: { win: 0.55, margin: 2.0, n: 160 }, c: { win: 0.58, margin: 3.0, n: 160 }, d: { win: 0.90, margin: 9.0, n: 32 } };
+  const good = new Set(["a", "b", "c", "d"]);
+  let extra = {};
+  // c beats the worth top a by 0.08: it goes first; d's 32-game 0.90 is a guess and never leads
+  assert.deepEqual(goRerank(["a", "b", "c", "d"], po, good, 0.06, extra), ["c", "a", "b", "d"]);
+  assert.deepEqual(extra.reranked, { from: "a", to: "c", gap: 0.08 });
+  extra = {};
+  assert.deepEqual(goRerank(["a", "b", "c", "d"], po, good, 0.10, extra), ["a", "b", "c", "d"]); assert.equal(extra.reranked, undefined);
+  // a move that is not good never leads; a capture outside best can
+  assert.deepEqual(goRerank(["a", "b"], po, new Set(["a", "b", "d"]), 0.04, {}), ["b", "a"]);
+  po.e = { win: 0.70, margin: 5.0, n: 160 };
+  assert.deepEqual(goRerank(["a", "b"], po, new Set(["a", "b", "e"]), 0.06, {}), ["e", "a", "b"]);
+  // the worth top already leads, or has no playouts: unchanged
+  assert.deepEqual(goRerank(["e", "a"], po, new Set([...good, "e"]), 0.06, {}), ["e", "a"]);
+  assert.deepEqual(goRerank(["z", "a"], po, good, 0.06, {}), ["z", "a"]);
+});
+
+test("go read reranks best only when asked", async () => {
+  const { goRead } = await import("../dist/core.js");
+  const board = Array(9).fill(".........");
+  const cfg = { komi: 6.5, playouts: 8, playouts_top: 2, playouts_top_n: 24 };
+  const plain = goRead(board, cfg);
+  assert.equal(plain.reranked, undefined);                                   // opt-in
+  // margin -1: the 24-game leader always goes first, so the read's wiring shows on any board
+  const v = goRead(board, { ...cfg, rerank: "playouts", rerank_margin: -1 });
+  assert.deepEqual([...v.best].sort(), [...plain.best].sort()); assert.deepEqual(Object.keys(v.worth), v.best);
+  const lead = Object.keys(v.playouts).filter((k) => v.playouts[k].n === 24).sort((a, b) => v.playouts[b].win - v.playouts[a].win || v.playouts[b].margin - v.playouts[a].margin)[0];
+  assert.equal(v.best[0], lead);
+  if (lead !== plain.best[0]) assert.deepEqual(v.reranked, { from: plain.best[0], to: lead, gap: Math.round((v.playouts[lead].win - v.playouts[plain.best[0]].win) * 100) / 100 });
+  assert.deepEqual(goRead(board, { ...cfg, rerank: "playouts", rerank_margin: 1 }).best, plain.best);
+});
+
 test("go playouts agree with the Python compiler's on real boards from the Jev run", async () => {
   // test/fixtures/go-playouts.json: four mid-game boards from the go-playouts run with perceive/go.py's 512-playout
   // results. The random streams differ (Python's Mersenne Twister, a small seeded generator here), so the check is
