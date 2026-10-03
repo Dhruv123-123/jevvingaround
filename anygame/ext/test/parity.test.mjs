@@ -158,3 +158,29 @@ test("when the rules leave one action and the answer never offered it, that acti
   const applied = ag.applyRules(answers, { status: "playing" });
   assert.equal(answers.action.choice, "down"); assert.ok(applied.at(-1).includes("only action the rules allow"));
 });
+
+// ---- Tetris lookahead ----------------------------------------------------------------------------------------
+test("tetris lookahead ranks by two pieces", async () => {
+  const { TetrisTracker, lookahead, features } = await import("../dist/core.js");
+  // a one-wide well and the next piece unknown (mean over all seven): the O never plugs the well
+  const board = Array.from({ length: 20 }, () => ".".repeat(10));
+  board[0] = ".OO......."; board[1] = ".OO.......";
+  for (let r = 16; r < 20; r++) board[r] = "#########.";
+  const v = new TetrisTracker({ in: "board", lookahead: true }).read(board, null);
+  assert.equal(v.shape, "O"); assert.equal(Object.keys(v.landings).length, 6);
+  assert.ok(v.landings.a.includes("holes +0") && !v.landings.a.includes("col10"), v.landings.a);
+  const full = new Set(); for (let c = 0; c < 10; c++) for (let r = 0; r < 20; r++) full.add(`${c},${r}`);
+  assert.equal(lookahead(features(full, 10, 20), full, 0, "I", 10, 20), null);
+});
+
+test("tetris lookahead gives the Python compiler's ranking on 60 random boards", async () => {
+  // test/fixtures/tetris-lookahead.json: boards, previews and the landings perceive/tetris.py ranked with lookahead: true
+  const { TetrisTracker } = await import("../dist/core.js");
+  const cases = JSON.parse(readFileSync(join(process.cwd(), "test", "fixtures", "tetris-lookahead.json"), "utf8"));
+  let changed = 0;
+  for (const c of cases) {
+    assert.deepEqual(new TetrisTracker({ in: "board", lookahead: true }).read(c.board, c.preview).landings, c.landings);
+    if (JSON.stringify(new TetrisTracker({ in: "board" }).read(c.board, c.preview).landings) !== JSON.stringify(c.landings)) changed++;
+  }
+  assert.ok(changed > cases.length / 2, `lookahead should reorder most boards, reordered ${changed}`);
+});
