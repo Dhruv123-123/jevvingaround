@@ -25,11 +25,12 @@ act:
   # Chrome ends a jump early when Space comes up after it has risen ~35 px: a 60 ms press is a low jump (~60 px,
   # ~460 ms in the air), 250 ms the full one (~90 px, ~580 ms). The low jump is too low and too short to time
   # reliably at 15 frames a second (tried for close pairs on 2026-10-03: worse), so both actions are full jumps.
-  - { id: jump, kind: key, key: Space, hold_ms: 250, release: later, description: "jump over a cactus or a low bird" }
+  - { id: jump, kind: key, key: Space, hold_ms: 250, release: later, again_ms: 60, description: "jump over a cactus or a low bird" }
   - { id: duck, kind: key, key: ArrowDown, hold_ms: 350, release: later, repeat: hold, description: "duck under a bird flying at chest height" }
   - { id: drop, kind: key, key: ArrowDown, hold_ms: 40, release: later, description: "in the air: fall fast, to land in time for the next obstacle" }
   - { id: keep, kind: wait, description: "keep running" }
-tick_hz: 15
+tick_hz: 30
+frames: stream                            # a screenshot takes ~40 ms, which held the loop near 15 frames a second
 reflex: { read: next.ttc_ms, lte: 900 }   # an obstacle is closer than one Jev call plus its slack: act on the last answers
 ask: async                                # never wait for Jev: the loop keeps acting on its last answers while it thinks
 ask_when: [{ read: next.px, lte: 384 }, { read: next.age_ms, lte: 300 }]   # once per obstacle: when it is the nearest and fully in view
