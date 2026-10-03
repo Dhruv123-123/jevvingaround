@@ -257,7 +257,8 @@ class GapTracker:
     the mover faces) to the first column holding `symbol` in any row. Per frame it gives the free distance (`cells`,
     and `px` with `cell_px`), the obstacle's `width_px`, which named rows it fills (`rows`: e.g. "low", "chest" or
     "chest,low"), the closing `speed` in px/s, `ttc_ms`, the time until contact at that speed, and `age_ms`, how
-    long it has been the nearest (a small age means the one before it has only just gone by). The speed is
+    long it has been the nearest (a small age means the one before it has only just gone by). `then_px`/`then_ms`:
+    how far behind it the following obstacle starts, front to front, when one is in view. The speed is
     measured over the obstacle's whole approach (its first sighting to now), not frame to frame, so a column of jitter in its edge does not swing it; until an
     obstacle has been watched for `baseline_s`, the last speed (at first `speed0`) stands."""
 
@@ -288,7 +289,7 @@ class GapTracker:
         names = list(self.r.get("row_names") or [f"r{i + 1}" for i in range(nrows)])
         first = next((c for c in range(1, ncols + 1) if cols.get(c)), None)
         out: dict[str, Any] = {"cells": (first - 1) if first else ncols, "px": round(((first - 1) if first else ncols) * cell),
-                               "width_px": 0, "rows": "none"}
+                               "width_px": 0, "rows": "none", "then_px": None}
         if first:
             w, hit = 0, set()
             gaps_allowed = int(self.r.get("join", 1))          # a cactus group or a flapping bird can show 1 empty column inside
@@ -301,6 +302,9 @@ class GapTracker:
                     empty += 1
                 c += 1
             out["width_px"] = round(w * cell)
+            # the obstacle after it: the first filled column past this one's end
+            nxt2 = next((cc for cc in range(first + w + gaps_allowed + 1, ncols + 1) if cols.get(cc)), None)
+            out["then_px"] = round((nxt2 - first) * cell) if nxt2 else None
             out["rows"] = ",".join(names[i - 1] if i - 1 < len(names) else f"r{i}" for i in sorted(hit))
             px = out["px"]
             if self.first is None or px > self.last[0] + 2 * cell:
@@ -317,4 +321,6 @@ class GapTracker:
         out["speed"] = round(self.speed) if self.speed else None
         out["ttc_ms"] = round(out["px"] / self.speed * 1000) if first and self.speed else None
         out["age_ms"] = round((t - self.first[1]) * 1000) if first and self.first else None    # since it became the nearest
+        # how long after this one the next obstacle reaches the dino (front to front); None when none is in view
+        out["then_ms"] = round(out["then_px"] / self.speed * 1000) if out.get("then_px") is not None and self.speed else None
         return out

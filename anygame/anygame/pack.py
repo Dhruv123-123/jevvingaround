@@ -61,7 +61,7 @@ TASK_CATEGORIES = ("navigate", "collect", "score", "survive", "clear", "build", 
 
 
 def _cond_ok(c: Any) -> bool:
-    return isinstance(c, dict) and "read" in c and any(k in c for k in ("equals", "in", "not", "gte", "lte"))
+    return isinstance(c, dict) and "read" in c and any(k in c for k in ("equals", "in", "not", "gte", "lte", "contains"))
 
 
 def check_tasks(tasks: Any, reads: dict[str, Any], where: str = "pack") -> list[dict[str, Any]]:
@@ -217,22 +217,22 @@ def load_pack(path: str | os.PathLike, _allow_no_tests: bool = False) -> Pack:
         raise PackError(f"{p}: settle must be 'screen_change' (wait for the screen to change after an action before deciding again)")
     rules = raw.get("rules") or []
     for c in (raw.get("reflex") if isinstance(raw.get("reflex"), list) else [raw.get("reflex")] if raw.get("reflex") else []):
-        if not (isinstance(c, dict) and "read" in c and any(k in c for k in ("equals", "in", "not", "gte", "lte"))):
+        if not (isinstance(c, dict) and "read" in c and any(k in c for k in ("equals", "in", "not", "gte", "lte", "contains"))):
             raise PackError(f"{p}: reflex needs {{read, equals|in|not|gte|lte}} (or a list of them): when it holds, the rules act on the decider's last answers without asking it")
     if raw.get("ask") not in (None, "async"):
         raise PackError(f"{p}: ask: async is the only option (the decider runs beside the loop, which acts on its last answers meanwhile)")
     for c in (raw.get("ask_when") if isinstance(raw.get("ask_when"), list) else [raw.get("ask_when")] if raw.get("ask_when") else []):
-        if not (isinstance(c, dict) and "read" in c and any(k in c for k in ("equals", "in", "not", "gte", "lte"))):
+        if not (isinstance(c, dict) and "read" in c and any(k in c for k in ("equals", "in", "not", "gte", "lte", "contains"))):
             raise PackError(f"{p}: ask_when needs {{read, equals|in|not|gte|lte}} (or a list of them): with ask: async, the decider is asked only when it holds")
     for rl in rules:
         conds = rl.get("if") if isinstance(rl.get("if"), list) and rl.get("if") else [rl.get("if") or {}]
         for cond in conds:
             ok_noul = isinstance(cond, dict) and "noul" in cond and any(k in cond for k in ("gte", "lte"))
-            ok_read = isinstance(cond, dict) and "read" in cond and any(k in cond for k in ("equals", "in", "not", "gte", "lte"))
+            ok_read = isinstance(cond, dict) and "read" in cond and any(k in cond for k in ("equals", "in", "not", "gte", "lte", "contains"))
             if not (ok_noul or ok_read):
                 raise PackError(f"{p}: rule needs if: {{noul, gte|lte}} or if: {{read, equals|in|not|gte|lte}} (or a list of them, all of which must hold)")
         u = rl.get("unless")
-        if u is not None and not all(isinstance(x, dict) and "read" in x and any(k in x for k in ("equals", "in", "not", "gte", "lte")) for x in (u if isinstance(u, list) and u else [u])):
+        if u is not None and not all(isinstance(x, dict) and "read" in x and any(k in x for k in ("equals", "in", "not", "gte", "lte", "contains")) for x in (u if isinstance(u, list) and u else [u])):
             raise PackError(f"{p}: rule 'unless' needs {{read, equals|in|not|gte|lte}} (or a list of them): the rule does not apply when one holds")
         if not any(k in rl for k in ("exclude", "set", "avoid", "only")):
             raise PackError(f"{p}: rule needs 'exclude: [actions]', 'set: {{param_question: from_question}}', 'avoid: {{param_question: read}}' or 'only: {{param_question: read}}'")

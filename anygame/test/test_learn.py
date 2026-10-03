@@ -680,13 +680,16 @@ def test_gap_read_gives_distance_speed_and_time_to_contact():
     g = GapTracker({"in": "road", "symbol": "#", "cell_px": 10, "row_names": ["chest", "low"], "speed0": 300, "speed_range": [50, 2000]})
     def road(col, width=2, rows=(2,)):
         return {f"c{c}r{r}": ("#" if col <= c < col + width and r in rows else ".") for c in range(1, 41) for r in (1, 2)}
-    assert g.read(road(99), 0.0) == {"cells": 40, "px": 400, "width_px": 0, "rows": "none", "speed": 300, "ttc_ms": None, "age_ms": None}
+    assert g.read(road(99), 0.0) == {"cells": 40, "px": 400, "width_px": 0, "rows": "none", "then_px": None, "speed": 300, "ttc_ms": None, "age_ms": None, "then_ms": None}
     a = g.read(road(31), 1.0)                       # an obstacle 300 px out: speed0 until it has been watched a while
     assert (a["px"], a["width_px"], a["rows"], a["speed"], a["ttc_ms"], a["age_ms"]) == (300, 20, "low", 300, 1000, 0)
     b = g.read(road(21, rows=(1, 2)), 1.2)          # 100 px in 0.2 s: 500 px/s, measured over its whole approach
     assert (b["px"], b["rows"], b["speed"], b["ttc_ms"], b["age_ms"]) == (200, "chest,low", 500, 400, 200)
     c = g.read(road(36, rows=(1,)), 1.3)            # it went by; the next one is new (its age restarts), the speed stands
-    assert (c["px"], c["rows"], c["speed"], c["age_ms"]) == (350, "chest", 500, 0)
+    assert (c["px"], c["rows"], c["speed"], c["age_ms"], c["then_ms"]) == (350, "chest", 500, 0, None)
+    two = {**road(11), **{f"c{c}r2": "#" for c in (21, 22)}}       # a second obstacle 100 px behind the first
+    d = g.read(two, 1.4)
+    assert (d["px"], d["width_px"], d["then_px"], d["then_ms"]) == (100, 20, 100, 200)
 
 
 def test_dino_jumps_on_the_frame_and_asks_jev_beside_the_loop():

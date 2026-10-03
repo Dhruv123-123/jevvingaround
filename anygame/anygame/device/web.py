@@ -52,11 +52,12 @@ class WebDevice(Device):
         m.move(x1, y1, steps=steps)
         m.up()
 
-    def key(self, name, hold_ms=0, block=True):
+    def key(self, name, hold_ms=0, block=True, extend=False):
         p = getattr(self, "_pending_up", None)
-        if p and p[0] == name and hold_ms and not block:
-            # the same key again while it is still held: keep holding (letting go between would stand a ducking
-            # dino up for a frame), and let go hold_ms from now
+        if extend and p and p[0] == name and hold_ms and not block:
+            # the same key again while it is still held, for a hold that should last (a duck): keep holding (letting
+            # go between would stand a ducking dino up for a frame), and let go hold_ms from now. Not for a press
+            # that must come down anew to count (a jump)
             self._pending_up = (name, time.perf_counter() + hold_ms / 1000)
             return
         self._release_due(force=True)

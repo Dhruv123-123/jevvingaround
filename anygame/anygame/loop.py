@@ -210,7 +210,10 @@ class Agent:
                 # held without stopping the loop: let go on the first frame after hold_ms (a device that cannot
                 # do that holds it in place)
                 try:
-                    self.device.key(p["key"], hold, block=False)
+                    if p.get("repeat") == "hold":      # pressed again while held: keep holding
+                        self.device.key(p["key"], hold, block=False, extend=True)
+                    else:
+                        self.device.key(p["key"], hold, block=False)
                     return f"key {p['key']} down, up after {hold} ms"
                 except TypeError:
                     pass
@@ -801,6 +804,10 @@ class Agent:
             return v in c["in"]
         if "not" in c:
             return v != c["not"]
+        if "contains" in c:
+            # a list read holds the item, or a comma-joined read (a gap read's rows: "chest,low") names it
+            items = v if isinstance(v, (list, tuple)) else str(v or "").split(",")
+            return c["contains"] in items
         try:
             if "gte" in c:
                 return float(v) >= float(c["gte"])

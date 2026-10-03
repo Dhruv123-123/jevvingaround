@@ -144,8 +144,14 @@ def dino_start(dev):
     page.evaluate("window.scrollTo(0, 0)")
     page.keyboard.press("Space")
     page.wait_for_function("Runner.instance_ && Runner.instance_.activated && !Runner.instance_.crashed && Runner.instance_.tRex.yPos >= 90", timeout=15000)
-    # the page's layout varies between visits (a banner above the game, sometimes): scroll so the game sits where
+    # some visits get an ad anchored over the top of the page (covering the score and the air above the dino) and
+    # pushing the game down ~100 px: hide ads and anything fixed over the page, then scroll so the game sits where
     # the pack's zones expect it, 137 px from the top
+    page.evaluate("""() => { for (const e of document.querySelectorAll('ins.adsbygoogle, iframe, [id^=google_ads], [id^=aswift], .google-auto-placed'))
+        e.style.display = 'none';
+      for (const e of document.querySelectorAll('body *')) { const p = getComputedStyle(e).position;
+        if ((p === 'fixed' || p === 'sticky') && !e.querySelector('canvas')) e.style.display = 'none'; } }""")
+    page.wait_for_timeout(200)
     y = page.evaluate("window.scrollTo(0, 0); document.querySelector('canvas').getBoundingClientRect().y")
     if round(y) != 137:
         page.evaluate(f"window.scrollTo(0, {y - 137})")
