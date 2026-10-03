@@ -78,6 +78,10 @@ def read_all(pack: Pack, frame: np.ndarray, only: set[str] | None = None, tick: 
                 conf[rid] = 1.0 if cells else 0.0
             timings[rid] = 0.0
             continue
+        if kind == "count":
+            values[rid] = count_of(values.get(r["in"], {}), r)
+            timings[rid] = 0.0
+            continue
         if kind in ("around", "tetris", "predict", "margin", "slide", "head", "gap"):
             continue  # derived in the loop (needs direction / history / per-run tracker state)
         if kind == "runs":
@@ -121,6 +125,19 @@ def read_all(pack: Pack, frame: np.ndarray, only: set[str] | None = None, tick: 
 
 def _read_one(pack: Pack, frame: np.ndarray, rid: str, tick: int) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, float]]:
     return read_all(pack, frame, {rid}, tick, None)
+
+
+def count_of(src: Any, r: dict[str, Any]) -> int:
+    """How many cells of a grid read hold `symbol`, less how many hold `minus` when given. A turn-based game whose
+    marks alternate (X, O, X, …) is our turn when `{kind: count, symbol: X, minus: O}` is 0 (we move first)."""
+    if isinstance(src, dict):
+        vals = [str(v) for v in src.values()]
+    elif isinstance(src, (list, tuple)):
+        vals = [ch for row in src for ch in str(row)]
+    else:
+        return 0
+    n = sum(1 for v in vals if v == str(r["symbol"]))
+    return n - sum(1 for v in vals if v == str(r["minus"])) if "minus" in r else n
 
 
 def runs_of(src: Any, r: dict[str, Any]) -> list[str]:

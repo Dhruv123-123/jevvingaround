@@ -123,3 +123,19 @@ test("chat: no chat model configured stops, and OpenRouter is refused for any ch
   for (const m of ["anthropic/claude-sonnet-5", "openai/gpt-5.6-luna"]) assert.throws(() => new Chat({ llmBase: "https://openrouter.ai/api/v1", llmKey: "k", llmModel: m }), /Jev only/);
   assert.equal(new Chat({ llmBase: "https://r.openai.azure.com/openai/v1", llmKey: "k", llmModel: "gpt-5.6-luna" }).api, "azure");
 });
+
+test("a count read and a list act_when: the agent waits while the marks say it is not its turn", async () => {
+  const { countOf } = await import("../dist/core.js");
+  assert.equal(countOf({ c1r1: "X", c2r1: "O", c3r1: "X" }, { symbol: "X", minus: "O" }), 1);
+  assert.equal(countOf(["X..", ".O.", "..O"], { symbol: "O" }), 2);
+  const base = packFromText(BUNDLED_PACKS.tictactoe, "tictactoe");
+  const raw = JSON.parse(JSON.stringify(base.raw));
+  const grid = Object.keys(raw.read).find((k) => raw.read[k].kind === "color" && raw.read[k].as === "matrix");
+  raw.read.turn = { kind: "count", in: grid, symbol: "X", minus: "O" };
+  raw.act_when = [{ read: "turn", gte: -5 }, { read: "turn", equals: 1 }];   // the fixture has four X and four O: turn 0
+  raw.tests = [];
+  const pack = loadPack(dumpPack(raw), "ttt-turn");
+  const ag = new Agent(pack, new StillDevice([png(join(PACKS, "tictactoe", "fixtures", "probe-4.png"))], pack.size), new RandomSensor(1));
+  const r = await ag.step();
+  assert.equal(r.screen.turn, 0); assert.equal(r.action, "wait"); assert.equal(r.reason, "turn is 0");
+});

@@ -1,0 +1,27 @@
+[
+ {
+  "frame": "fixtures/probe-1.png",
+  "note": "the page as loaded, before any input",
+  "gameplay": false
+ },
+ {
+  "frame": "fixtures/probe-2.png",
+  "note": "just after tap at (135, 280) (screen in motion)",
+  "gameplay": true
+ },
+ {
+  "frame": "fixtures/probe-3.png",
+  "note": "just after tap at (270, 140) (screen in motion)",
+  "gameplay": true
+ },
+ {
+  "frame": "fixtures/probe-4.png",
+  "note": "half a second after tap at (135, 140) (screen in motion)",
+  "gameplay": true
+ },
+ {
+  "frame": "fixtures/probe-5.png",
+  "note": "half a second after tap at (405, 140) (screen in motion)",
+  "gameplay": true
+ }
+]
