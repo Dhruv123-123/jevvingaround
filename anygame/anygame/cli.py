@@ -54,6 +54,7 @@ def cmd_play(a):
         print(f"HUD on http://localhost:{a.hud}", file=sys.stderr)
     agent = Agent(pack, device, jev, hud, log_path=a.log, max_ticks=a.max_ticks, record_dir=a.record)
     _start_fresh(device)
+    grader = _attach_grader(agent, device, getattr(a, "saves", None))
     if a.fallback:
         from .fallback import VLMFallback
         agent.fallback = VLMFallback()
@@ -68,7 +69,8 @@ def cmd_play(a):
         last = agent.run()
     finally:
         device.close()
-    summary = {"game": pack.name, "fallback_calls": agent.fallback_calls, "mode": agent.mode, "ticks": agent.tick, "last": last.get("action"), "reason": last.get("reason"), "sensor_errors": agent.errors,
+    summary = {"game": pack.name, "grade": grader.report() if grader else None, "goals": agent.goal_log, "auto_ticks": agent.auto_ticks, "decisions": getattr(agent, "top_asked", 0), "agreed_with_top": getattr(agent, "top_agreed", 0),
+               "emulated_frames": getattr(device, "frames", None), "fallback_calls": agent.fallback_calls, "mode": agent.mode, "ticks": agent.tick, "last": last.get("action"), "reason": last.get("reason"), "sensor_errors": agent.errors,
                "total_cost_usd": round(agent.total_cost, 6), "final_screen": {k: v for k, v in (last.get("screen") or {}).items() if not isinstance(v, dict)}}
     print(json.dumps(summary, indent=1))
     if a.record:
@@ -138,6 +140,32 @@ def cmd_eval(a):
         failed += 0 if ok else 1
     print(f"  {len(pack.tests) - failed} passed, {failed} failed")
     sys.exit(1 if failed else 0)
+
+
+def _attach_grader(agent, device, saves: str | None = None):
+    """A ROM a grader knows (anygame/graders) is graded every tick from RAM the agent never reads; each new milestone
+    is logged beside the tick (`grader`, never in the decider's state) and, with --saves, kept as a save state."""
+    rom = getattr(device, "rom", None)
+    if not rom:
+        return None
+    from .graders import for_rom
+    g = for_rom(rom)
+    if g is None:
+        return None
+    prev = agent.on_record
+
+    def on_record(rec, frame):
+        new = g.update(device.memory, when=getattr(device, "frames", None))
+        if new:
+            rec["grader"] = new
+            print(f"milestone: {', '.join(new)} at tick {rec.get('tick')} ({getattr(device, 'frames', 0) / 3600:.1f} game-min)", file=sys.stderr)
+            if saves and hasattr(device, "save_state"):
+                for m in new:
+                    device.save_state(str(Path(saves) / f"{g.game}-{m}.state"))
+        if prev is not None:
+            prev(rec, frame)
+    agent.on_record = on_record
+    return g
 
 
 def _start_fresh(device):
@@ -819,7 +847,7 @@ def main(argv=None):
     p = argparse.ArgumentParser(prog="anygame", description="One paragraph, any game.")
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("packs").set_defaults(fn=cmd_packs)
-    pl = sub.add_parser("play"); pl.add_argument("pack"); pl.add_argument("--device", default=os.environ.get("DEVICE", "adb")); pl.add_argument("--sensor", default="jev", help="jev | none | random[:seed] | llm:<model>")
+    pl = sub.add_parser("play"); pl.add_argument("pack"); pl.add_argument("--device", default=os.environ.get("DEVICE", "adb")); pl.add_argument("--sensor", default="jev", help="jev | none | random[:seed] | llm:<model>"); pl.add_argument("--saves", default=None, help="a directory: a save state at each graded milestone (emulator devices)")
     pl.add_argument("--fallback", nargs="?", const="yes", default=None, help="VLM fallback on screens the pack cannot read; optional path for the learned pack (default <pack>/pack.learned.yaml)")
     pl.add_argument("--goal", default=None, help="what the game is about, for the fallback")
     pl.add_argument("--hud", type=int, default=int(os.environ.get("HUD_PORT", "8080"))); pl.add_argument("--no-hud", dest="hud", action="store_const", const=0); pl.add_argument("--log", default="anygame.log.jsonl")
@@ -875,6 +903,9 @@ def main(argv=None):
     bn.add_argument("--seeds", default="1,2,3"); bn.add_argument("--max-ticks", type=int, default=200); bn.add_argument("--score-read", default=None)
     bn.add_argument("--out", default="bench"); bn.add_argument("--append", default=None, help="append the summary row to this jsonl")
     bn.set_defaults(fn=cmd_bench)
+    rs = sub.add_parser("ramscan", help="find a game's position bytes in RAM by walking the player (an emulator device)")
+    rs.add_argument("device", help="pyboy://<rom>?state=<a save state in the overworld>"); rs.add_argument("--presses", type=int, default=60); rs.add_argument("--seed", type=int, default=0)
+    rs.set_defaults(fn=lambda a: __import__("anygame.ramscan", fromlist=["main"]).main(a))
     rc = sub.add_parser("record"); rc.add_argument("--device", required=True); rc.add_argument("--out", required=True); rc.add_argument("--seconds", type=int, default=20); rc.add_argument("--hz", type=float, default=2); rc.add_argument("--pack"); rc.set_defaults(fn=cmd_record)
     a = p.parse_args(argv)
     a.fn(a)
