@@ -124,10 +124,14 @@ class MenuTracker:
         self.branches = 0
         self.reads = 0
         self.seen: dict[str, tuple[np.ndarray, str]] = {}   # screens the run has shown: small image, its text
+        self.loops: dict[str, dict[str, int]] = {}   # screen key → label → times it came straight back to this menu
+        self._pending: tuple[str, str] | None = None  # the last pick: (screen key, label)
+        self._since = 0                              # ticks seen since that pick
 
     def see(self, screen: np.ndarray, text: str | None = None) -> None:
         """A screen the run passed through (any tick): an outcome that looks like one of these leads back to it."""
         k = _key(screen)
+        self._since += 1
         if k not in self.seen:
             self.seen[k] = (_small(screen), (text or "")[:60])
             if len(self.seen) > 300:
@@ -217,6 +221,11 @@ class MenuTracker:
     # ---- the read ------------------------------------------------------------------------------------------
     def read(self, device, screen: np.ndarray, pos: Callable[[], tuple] | None = None) -> dict[str, Any]:
         k = _key(screen)
+        if self._pending and self._pending[0] == k and self._since <= int(self.r.get("loop_within", 3)):
+            # the last pick here led straight back to this same menu (a box that closes, an empty bag): a loop
+            lp = self.loops.setdefault(k, {})
+            lp[self._pending[1]] = lp.get(self._pending[1], 0) + 1
+        self._pending = None
         self.last_key = k
         self.see(screen)
         m = self.cache.get(k)
@@ -264,6 +273,12 @@ class MenuTracker:
             for lab in idle:                 # an entry that does nothing is not a choice while others do something
                 landings.pop(lab)
                 plans.pop(lab, None)
+        # an entry that came straight back here twice is not offered again while something else is
+        looped = {lab for lab, c in (self.loops.get(k) or {}).items() if c >= 2 and lab in landings}
+        if looped and len(looped) < len(landings):
+            for lab in looped:
+                landings.pop(lab)
+                plans.pop(lab, None)
         def group(lab):
             if lab in idle:
                 return 4
@@ -308,10 +323,12 @@ class MenuTracker:
             device.press(k, hold=int(h) if h else self.hold, after=self.gap)
         if self.last_key:
             self.history.setdefault(self.last_key, []).append(f"{label}:{self.last_landings.get(label, '')[:60]}")
+            self._pending, self._since = (self.last_key, label), 0
         return f"{label}: " + " ".join(k.split(":")[0].upper() for k in plan)
 
     def dump(self) -> dict[str, Any]:
-        return {"history": self.history}
+        return {"history": self.history, "loops": self.loops}
 
     def load(self, d: dict[str, Any]) -> None:
         self.history = dict(d.get("history") or {})
+        self.loops = {k: dict(v) for k, v in (d.get("loops") or {}).items()}

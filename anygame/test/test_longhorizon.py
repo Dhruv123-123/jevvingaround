@@ -150,6 +150,23 @@ def test_menu_entries_found_by_trying_and_ranked(monkeypatch):
     assert g.real_presses == t.plans["pick_2"] and g.s["text"] is not None
 
 
+def test_a_pick_that_comes_straight_back_twice_is_dropped(monkeypatch):
+    import anygame.perceive.menu as menu
+    monkeypatch.setattr(menu, "_ocr_boxes", lambda img: [])
+    g = MenuGame()
+    t = MenuTracker({"depth": 4})
+    for _ in range(2):
+        assert "pick_1" in t.read(g, g.screen())["landings"]
+        t.run(g, "pick_1", lambda: {})
+        t.see(g.screen())                               # the box it opened, for a tick
+        g.s = {"cur": 0, "open": True, "text": None}    # then it closes, back on the same menu
+    lands = t.read(g, g.screen())["landings"]
+    assert "pick_1" not in lands and "pick_2" in lands
+    t2 = MenuTracker({"depth": 4})
+    t2.load(json.loads(json.dumps(t.dump())))
+    assert t2.loops == t.loops
+
+
 # ---- the audit ------------------------------------------------------------------------------------------
 class TinyDevice:
     def __init__(self):

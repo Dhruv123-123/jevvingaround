@@ -131,7 +131,8 @@ class GoalBook:
     def _holds(self, cond: dict[str, Any], g: dict[str, Any], values: dict[str, Any]) -> bool:
         (k, v), = cond.items()
         m = values.get("map")
-        here_known = values.get("x") is not None and m is not None
+        # a place counts only while walking: a menu or a text box redraws the screen memory a place is read from
+        here_known = values.get("x") is not None and m is not None and values.get("screen", "walk") == "walk"
         if k == "new_place":
             return here_known and str(m) not in g["places_at_set"]
         if k == "leave_place":
