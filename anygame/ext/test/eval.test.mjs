@@ -119,3 +119,18 @@ test("2048 slide compiler ranks swipes like the Python one", async () => {
   assert.deepEqual(b.legal, ["right", "down", "up", "left"]);
   assert.equal(b.ranked.right, "#1 best: merges +4, 14 empty after, largest tile NOT in the corner");
 });
+
+test("rules take a list of conditions, an unless, and contains, like the Python loop", () => {
+  const pack = packFromText(BUNDLED_PACKS["web-dino"], "web-dino");
+  const ag = new Agent(pack, new StillDevice([]), new RandomSensor());
+  const byExcl = (vals) => ag.hits({}, vals).map(([rl]) => (rl.exclude ?? []).join("+")).sort();
+  // a low obstacle cannot be ducked; a head-only bird is never jumped into
+  assert.ok(byExcl({ next: { rows: "chest,low" } }).includes("duck"));
+  assert.ok(!byExcl({ next: { rows: "chest" } }).includes("duck"));
+  assert.ok(byExcl({ next: { rows: "head" } }).includes("jump"));
+  // the list rule needs all three, and its unless cancels it
+  const air = { dino: "air", next: { age_ms: 50, ttc_ms: 200 }, under: "clear" };
+  assert.ok(byExcl(air).includes("keep"));
+  assert.ok(!byExcl({ ...air, next: { age_ms: 500, ttc_ms: 200 } }).includes("keep"));
+  assert.ok(!byExcl({ ...air, under: "ink" }).includes("keep"));
+});

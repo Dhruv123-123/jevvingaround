@@ -96,6 +96,9 @@ class Agent:
         self.budget_skips = 0            # consecutive ticks the decider was skipped for the budget
         self.skipped_budget = 0          # over the run
         self.skipped_reflex = 0          # ticks the pack's reflex condition acted on the last answers without the decider
+        self.inflight = None             # ask: async — the decider call running beside the loop, if any
+        self.asked_async = 0             # calls started that way, over the run
+        self.ask_pool = None
         self._load_fingerprints()
         # slow reads (OCR, detectors) run in a forked worker process: a thread starves next to onnxruntime and
         # the browser, a process does not, and the loop only ever waits on the first value
@@ -215,6 +218,17 @@ class Agent:
             return "wait"
         if a.kind == "key":
             hold = int(p.get("hold_ms", 0) or 0)
+            if hold and p.get("release") == "later":
+                # held without stopping the loop: let go on the first frame after hold_ms (a device that cannot
+                # do that holds it in place)
+                try:
+                    if p.get("repeat") == "hold":      # pressed again while held: keep holding
+                        self.device.key(p["key"], hold, block=False, extend=True)
+                    else:
+                        self.device.key(p["key"], hold, block=False)
+                    return f"key {p['key']} down, up after {hold} ms"
+                except TypeError:
+                    pass
             if hold:
                 self.device.key(p["key"], hold)
                 return f"key {p['key']} held {hold} ms"
@@ -360,6 +374,7 @@ class Agent:
         and the derived reads computed here because they need per-run state (around, tetris). `wait`: a still frame,
         so slow reads are waited for instead of left at `otherwise`."""
         pack = pack or self.pack
+        t_frame = time.perf_counter()
         conf: dict[str, float] = {}
         values, dets, timings = read_all(pack, frame, tick=self.tick, previous=self.last_values, pool=self.pool, pending=self.pending, conf=conf, state=state, wait=wait)
         self.last_conf = conf
@@ -391,6 +406,12 @@ class Agent:
             elif r.get("kind") == "margin":
                 # the barrier after each move with the decision latency compensated (a discrete control barrier function)
                 values[rid] = margin_of(values.get(r["of"]), raw_values.get(r["in"]), r) if "in" in r else margin_num(values.get(r["of"]), r)
+            elif r.get("kind") == "gap":
+                # distance to the next obstacle in a runner, its closing speed and time to contact
+                if rid not in self.trackers:
+                    from .perceive import GapTracker
+                    self.trackers[rid] = GapTracker(r)
+                values[rid] = self.trackers[rid].read(raw_values.get(r["in"]), t_frame)
             elif r.get("kind") == "tetris":
                 if rid not in self.trackers:
                     from .perceive.tetris import TetrisTracker
@@ -593,7 +614,33 @@ class Agent:
         budget = float(self.pack.raw.get("budget_ms") or 0)
         expected = t_perc + self.sensor_ewma_ms
         reflex = self.pack.raw.get("reflex")
-        if reflex and self.last_answers and self.pack.rules and self._task_ok(reflex, values):
+        ask_async = self.pack.raw.get("ask") == "async" and self.pack.rules
+        fresh = None
+        if ask_async and self.inflight is not None and self.inflight.done():
+            # the decider's answer to an earlier frame has come back: it becomes the policy from this frame on
+            try:
+                fresh = self.inflight.result()
+                lat = float(fresh.get("latency_ms") or 0)
+                self.sensor_ewma_ms = lat if not self.sensor_ewma_ms else 0.7 * self.sensor_ewma_ms + 0.3 * lat
+            except Exception as ex:  # noqa: BLE001
+                self.errors += 1
+                rec["sensor_error"] = str(ex)[:120]
+            self.inflight = None
+        if ask_async and self.last_answers and self.inflight is None and fresh is None:
+            ask_when = self.pack.raw.get("ask_when")
+            if not ask_when or self._task_ok(ask_when, values):
+                # ask without waiting: the loop keeps reading frames and acting on the last answers while the call
+                # runs (a fast game moves on during a 400 ms call, and a blocked loop sees none of it)
+                if self.ask_pool is None:
+                    from concurrent.futures import ThreadPoolExecutor
+                    self.ask_pool = ThreadPoolExecutor(max_workers=1)
+                self.inflight = self.ask_pool.submit(self.jev.ask, state, qs)
+                self.asked_async += 1
+                rec["asked"] = "async"
+        if fresh is not None:
+            res = fresh
+            e = None
+        elif reflex and self.last_answers and self.pack.rules and self._task_ok(reflex, values):
             # a reflex: the fresh frame already needs a move before the decider could answer (Snake, a turn into a
             # wall that needs a second turn on the very next step). The rules act on the decider's last answers, its
             # ranking of the moves, at perception speed; the decider is asked again on the next frame
@@ -602,6 +649,13 @@ class Agent:
             res = {"answers": copy.deepcopy(self.last_answers), "latency_ms": 0, "input_tokens": 0, "cost_usd": 0.0}
             rec["sensor"] = "reflex: " + ", ".join(f"{c['read']}={_get(values, c['read'])}" for c in (reflex if isinstance(reflex, list) else [reflex])) + " → rules on last answers"
             rec["skipped"] = "reflex"
+            e = None
+        elif ask_async and self.last_answers:
+            # no fresh answer this frame: the rules act on the last ones (a call may be running beside the loop)
+            import copy
+            res = {"answers": copy.deepcopy(self.last_answers), "latency_ms": 0, "input_tokens": 0, "cost_usd": 0.0}
+            rec["sensor"] = "async: rules on last answers" + (" (call in flight)" if self.inflight is not None else "")
+            rec["skipped"] = "async"
             e = None
         elif (budget and self.last_answers and self.pack.rules and expected > budget
                 and self.budget_skips < int(self.pack.raw.get("budget_skip_max", 2))):
@@ -760,19 +814,24 @@ class Agent:
         """The rules whose condition holds on these answers and values, with why."""
         out = []
         for rl in self.pack.rules:
-            c = rl["if"]
-            if "noul" in c:
-                a = answers.get(c["noul"])
-                if not a or a.get("type") != "noul":
-                    continue
-                p = a["noul"]
-                hit = (p >= c["gte"]) if "gte" in c else (p <= c["lte"])
-                why = f"{c['noul']}={p:.2f}"
-            else:
-                hit = self._cond(c, values)
-                why = f"{c['read']}={_get(values, c['read'])}"
+            hit, whys = True, []
+            for c in (rl["if"] if isinstance(rl["if"], list) else [rl["if"]]):     # a list: all must hold
+                if "noul" in c:
+                    a = answers.get(c["noul"])
+                    if not a or a.get("type") != "noul":
+                        hit = False
+                        break
+                    p = a["noul"]
+                    hit = (p >= c["gte"]) if "gte" in c else (p <= c["lte"])
+                    whys.append(f"{c['noul']}={p:.2f}")
+                else:
+                    hit = self._cond(c, values)
+                    whys.append(f"{c['read']}={_get(values, c['read'])}")
+                if not hit:
+                    break
+            why = ", ".join(whys)
             u = rl.get("unless")
-            if hit and u and self._cond(u, values):
+            if hit and u and any(self._cond(x, values) for x in (u if isinstance(u, list) else [u])):
                 continue        # the exception: e.g. the cell the rule guards against is the food itself
             if hit:
                 out.append((rl, why))
@@ -797,6 +856,10 @@ class Agent:
             return v in c["in"]
         if "not" in c:
             return v != c["not"]
+        if "contains" in c:
+            # a list read holds the item, or a comma-joined read (a gap read's rows: "chest,low") names it
+            items = v if isinstance(v, (list, tuple)) else str(v or "").split(",")
+            return c["contains"] in items
         try:
             if "gte" in c:
                 return float(v) >= float(c["gte"])

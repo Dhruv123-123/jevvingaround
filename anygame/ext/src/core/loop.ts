@@ -204,6 +204,8 @@ export class Agent {
     if ("equals" in c) return v === c.equals;
     if ("in" in c) return (c.in as any[]).includes(v);
     if ("not" in c) return v !== c.not;
+    // a list read holds the item, or a comma-joined read (a gap read's rows: "chest,low") names it
+    if ("contains" in c) return (Array.isArray(v) ? v : String(v ?? "").split(",")).includes(c.contains);
     const n = Number(v);
     if (Number.isNaN(n)) return false;
     if ("gte" in c) return n >= Number(c.gte);
@@ -244,16 +246,21 @@ export class Agent {
   hits(answers: Record<string, Answer>, values: Values): [any, string][] {
     const out: [any, string][] = [];
     for (const rl of this.pack.rules) {
-      const c = rl.if;
-      let hit: boolean, why: string;
-      if ("noul" in c) {
-        const a = answers[c.noul];
-        if (!a || a.type !== "noul") continue;
-        const p = a.noul ?? 0;
-        hit = "gte" in c ? p >= c.gte : p <= c.lte;
-        why = `${c.noul}=${p.toFixed(2)}`;
-      } else { hit = this.cond(c, values); why = `${c.read}=${get(values, c.read)}`; }
-      if (hit) out.push([rl, why]);
+      let hit = true;
+      const whys: string[] = [];
+      for (const c of Array.isArray(rl.if) ? rl.if : [rl.if]) {     // a list: all must hold
+        if ("noul" in c) {
+          const a = answers[c.noul];
+          if (!a || a.type !== "noul") { hit = false; break; }
+          const p = a.noul ?? 0;
+          hit = "gte" in c ? p >= c.gte : p <= c.lte;
+          whys.push(`${c.noul}=${p.toFixed(2)}`);
+        } else { hit = this.cond(c, values); whys.push(`${c.read}=${get(values, c.read)}`); }
+        if (!hit) break;
+      }
+      const u = rl.unless;
+      if (hit && u && (Array.isArray(u) ? u : [u]).some((x: any) => this.cond(x, values))) continue;   // the exception
+      if (hit) out.push([rl, whys.join(", ")]);
     }
     return out;
   }
