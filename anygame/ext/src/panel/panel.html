@@ -47,6 +47,22 @@
     <div class="row">
       <label><input type="checkbox" id="improve"> keep learning: after a loss the model revises the pack, the revision must replay better on that loss, the game restarts, and a revision that plays worse is reverted</label>
     </div>
+    <details id="practice">
+      <summary>practice tasks and the episode rater (use the chat model in "keys and models")</summary>
+      <div class="row">
+        <label title="the chat model looks at the screen and proposes new practice tasks on the first and every other episode"><input type="checkbox" id="settasks"> task setter: propose up to</label>
+        <select id="settasksk" style="width:auto" title="tasks proposed per round"><option>1</option><option>2</option><option selected>3</option></select>
+        <span class="dim">tasks on the first and every other episode</span>
+      </div>
+      <div class="row">
+        <button id="proposenow" disabled title="ask the setter now, from the current screen (while playing)">propose tasks now</button>
+        <span id="setterinfo" class="dim">limits are clamped to a sane range; tasks that can never be done are refused</span>
+      </div>
+      <div class="row">
+        <label><input type="checkbox" id="rate"> rate each episode: completion and directedness 0 to 100 from sampled frames (the score when the pack has none)</label>
+      </div>
+      <div id="tasklist" class="dim"></div>
+    </details>
     <details id="authorbox">
       <summary>no pack for this game? write one</summary>
       <input id="game" placeholder="the game in a sentence: 'Tetris, arrow keys rotate and move, space drops'">
@@ -78,6 +94,8 @@
     <div id="nouls"></div>
     <div id="rules" class="dim"></div>
     <div id="meta" class="dim"></div>
+    <div id="taskline" class="dim"></div>
+    <div id="rating" class="dim"></div>
     <details open>
       <summary class="dim">the paragraph (edit and apply: it takes effect on the next tick)</summary>
       <textarea id="playtext" rows="6"></textarea>

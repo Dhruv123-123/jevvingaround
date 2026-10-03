@@ -520,6 +520,53 @@ def test_task_setter_validates_the_model_s_proposals():
     assert any("bogus" in m for m in log) and any("already done" in m for m in log) and any("exact cell" in m for m in log)
 
 
+def test_task_bounds_refuse_tasks_that_can_never_be_done_and_the_setter_clamps_its_limits():
+    from anygame.pack import check_tasks, PackError, SETTER_LIMIT_MIN, SETTER_LIMIT_MAX
+    from anygame.tasks import propose_tasks
+    from anygame.pack import load_pack
+    reads = {"score": {"kind": "json", "path": "score"},
+             "status": {"kind": "color", "rect": [0, 0, 1, 1], "options": {"playing": "#000000", "over": "#ffffff"}, "otherwise": "menu"},
+             "board": {"kind": "color", "zone": "b", "options": {"x": "#000000"}, "otherwise": "."}}
+    ok = lambda **kw: check_tasks([{"id": "t", "instruction": "?", "done": {"read": "score", "gte": 5}, **kw}], reads)[0]
+    # a pack's own tasks keep short limits (tests and tiny games use them) but not impossible ones
+    assert ok(limit_ticks=2)["limit_ticks"] == 2 and ok(limit_ticks=60.0, hold_ticks=60)["hold_ticks"] == 60
+    for bad in ({"limit_ticks": 0}, {"limit_ticks": -5}, {"limit_ticks": 2.5}, {"limit_ticks": "60"}, {"limit_ticks": True},
+                {"limit_ticks": 10 ** 6}, {"hold_ticks": 0}, {"limit_ticks": 50, "hold_ticks": 51}):
+        with pytest.raises(PackError):
+            ok(**bad)
+    never = [{"read": "score", "gte": "ten"}, {"read": "score", "in": []}, {"read": "status", "equals": "won"},
+             {"read": "status", "in": ["won", "lost"]}, {"read": "status", "gte": 1},
+             [{"read": "score", "gte": 10}, {"read": "score", "lte": 5}]]
+    for d in never:
+        with pytest.raises(PackError, match="can never be done"):
+            check_tasks([{"id": "t", "instruction": "?", "done": d}], reads)
+    with pytest.raises(PackError, match="can never be done"):
+        check_tasks([{"id": "t", "instruction": "?", "done": {"read": "score", "gte": 1}, "when": {"read": "status", "equals": "paused"}}], reads)
+    # labels a closed read gives, its otherwise, a partly-known `in`, and open reads (grids, paths) pass
+    for d in ({"read": "status", "equals": "over"}, {"read": "status", "equals": "menu"}, {"read": "status", "in": ["over", "won"]},
+              {"read": "board", "equals": "anything"}, {"read": "score.total", "gte": 1}, [{"read": "score", "gte": 5}, {"read": "score", "lte": 5}]):
+        check_tasks([{"id": "t", "instruction": "?", "done": d}], reads)
+    # a colour read on a zone without a grid gives labels too (snake's status); a grid zone gives cells, so it stays open
+    snake = load_pack(os.path.join(ROOT, "packs", "snake"))
+    check_tasks([{"id": "t", "instruction": "?", "done": {"read": "status", "equals": "won"}}], snake.reads, zones=snake.zones)
+    with pytest.raises(PackError, match="never reads 'paused'"):
+        check_tasks([{"id": "t", "instruction": "?", "done": {"read": "status", "equals": "paused"}}], snake.reads, zones=snake.zones)
+    # the setter: a 5-tick and a 9000-tick limit are clamped into its range, 0 ticks and a hold past the limit are refused
+    pack = load_pack(os.path.join(ROOT, "packs", "snake-state"))
+    class _Chat:
+        model = "fake"
+        def complete(self, messages, **kw):
+            assert "%d to %d" % (SETTER_LIMIT_MIN, SETTER_LIMIT_MAX) in messages[0]["content"]
+            return ('[{"id": "quick", "instruction": "score 1", "done": {"read": "score", "gte": 1}, "limit_ticks": 5},'
+                    ' {"id": "forever", "instruction": "score 9", "done": {"read": "score", "gte": 9}, "limit_ticks": 9000},'
+                    ' {"id": "zero", "instruction": "score 2", "done": {"read": "score", "gte": 2}, "limit_ticks": 0},'
+                    ' {"id": "held", "instruction": "score 3", "done": {"read": "score", "gte": 3}, "hold_ticks": 500, "limit_ticks": 300}]', {}, 0)
+    log = []
+    new = propose_tasks(_Chat(), pack, np.zeros((560, 540, 3), np.uint8), {"score": 0, "head": "c3r7", "status": "playing"}, [], k=5, log=log.append)
+    assert [(t["id"], t["limit_ticks"]) for t in new] == [("quick", SETTER_LIMIT_MIN), ("forever", SETTER_LIMIT_MAX)]
+    assert any("quick" in m and "clamped" in m for m in log) and any("zero" in m and "rejected" in m for m in log) and any("held" in m and "rejected" in m for m in log)
+
+
 def test_rater_samples_frames_parses_scores_and_calibrates_against_the_trial_order():
     from anygame.rater import sample_frames, actions_summary, rate_episode, calibrate
     frames = [(t, np.zeros((4, 4, 3), np.uint8)) for t in range(1, 101)]

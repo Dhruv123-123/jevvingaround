@@ -114,7 +114,11 @@ done within its limit and done at all (SIMA's two numbers), per category, agains
 the task has one; the pack as written is the held-out number, `--learned` the learned one.
 `anygame learn --rate` adds an **episode rater** (the chat model scores sampled frames and the action log 0 to
 100 for completion and directedness), used as the score where the pack has none and calibrated against the
-trial order the loop already trusts (`anygame audit` reports the agreement). And the input vocabulary grew
+trial order the loop already trusts (`anygame audit` reports the agreement). A task that can never be done is
+refused when the pack loads: a limit under one tick, `hold_ticks` past `limit_ticks`, a threshold that is not a
+number, `gte` above `lte`, or a label a colour read never gives. The setter's own proposals are also held to
+20 to 2000 ticks (clamped, and logged). In the extension, the "practice tasks and the episode rater" box turns
+the setter (with a "propose tasks now" button) and the rater on; the tasks it adds are saved with the pack. And the input vocabulary grew
 for 3D and action games: `key` takes `hold_ms`, `mouse_move` moves the pointer by `dx, dy`, and `chunk` plays
 a short key sequence as one decision, which the demonstration digest proposes from recurring key runs.
 
