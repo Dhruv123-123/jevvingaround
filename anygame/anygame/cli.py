@@ -56,6 +56,9 @@ def cmd_play(a):
     _start_fresh(device)
     grader = _attach_grader(agent, device, getattr(a, "saves", None))
     _long_horizon(agent, device, grader, a)
+    if getattr(a, "live", None):
+        from .live import attach
+        attach(agent, a.live, a.live_every, grader, getattr(grader, "game", None) or pack.name)
     if a.fallback:
         from .fallback import VLMFallback
         agent.fallback = VLMFallback()
@@ -902,6 +905,8 @@ def main(argv=None):
     pl.add_argument("--checkpoint", default=None, help="a directory: the run's state (emulator, world, memory, goals) saved there")
     pl.add_argument("--checkpoint-every", dest="checkpoint_every", type=int, default=0, help="save a checkpoint every N ticks")
     pl.add_argument("--resume", default=None, help="a checkpoint directory to continue a run from")
+    pl.add_argument("--live", default=None, help="a directory: the screen (frame.png) and status.json written every --live-every ticks, with index.html to watch them")
+    pl.add_argument("--live-every", dest="live_every", type=int, default=10, help="ticks between live frames")
     pl.add_argument("--no-writer", dest="no_writer", action="store_true", help="no chat-model goal writer: the generic goal only")
     pl.add_argument("--fallback", nargs="?", const="yes", default=None, help="VLM fallback on screens the pack cannot read; optional path for the learned pack (default <pack>/pack.learned.yaml)")
     pl.add_argument("--goal", default=None, help="what the game is about, for the fallback")
