@@ -219,6 +219,8 @@ def load_pack(path: str | os.PathLike, _allow_no_tests: bool = False) -> Pack:
     for c in (raw.get("reflex") if isinstance(raw.get("reflex"), list) else [raw.get("reflex")] if raw.get("reflex") else []):
         if not (isinstance(c, dict) and "read" in c and any(k in c for k in ("equals", "in", "not", "gte", "lte", "contains"))):
             raise PackError(f"{p}: reflex needs {{read, equals|in|not|gte|lte}} (or a list of them): when it holds, the rules act on the decider's last answers without asking it")
+    if raw.get("frames") not in (None, "shot", "stream"):
+        raise PackError(f"{p}: frames must be 'shot' (a screenshot per frame, the default) or 'stream' (the browser's screencast: faster frames, Chromium only)")
     if raw.get("ask") not in (None, "async"):
         raise PackError(f"{p}: ask: async is the only option (the decider runs beside the loop, which acts on its last answers meanwhile)")
     for c in (raw.get("ask_when") if isinstance(raw.get("ask_when"), list) else [raw.get("ask_when")] if raw.get("ask_when") else []):

@@ -72,6 +72,9 @@ class Agent:
         self.settling = 0
         self.last_answers: dict[str, Any] | None = None
         self.trackers: dict[str, Any] = {}
+        self.pressed_at: dict[str, float] = {}      # action id → when its key last went down (for again_ms)
+        if pack.raw.get("frames") == "stream" and hasattr(device, "stream"):
+            device.stream()             # frames from the browser's screencast: ~10 ms a frame instead of a 40 ms screenshot
         # the hybrid: which screen is this, does the pack understand it, and who decides when it does not
         self.base = pack
         self.mode = "main"
@@ -205,6 +208,14 @@ class Agent:
         if a.kind == "wait":
             return "wait"
         if a.kind == "key":
+            again = p.get("again_ms")
+            if again:
+                # not pressed again this soon: at a high frame rate the screen may not show the last press yet (a
+                # dino still on the ground one frame after its jump key), and a second press would cut the first short
+                now, last = time.perf_counter(), self.pressed_at.get(a.id)
+                if last is not None and now - last < float(again) / 1000:
+                    return f"wait: {a.id} pressed {round((now - last) * 1000)} ms ago"
+                self.pressed_at[a.id] = now
             hold = int(p.get("hold_ms", 0) or 0)
             if hold and p.get("release") == "later":
                 # held without stopping the loop: let go on the first frame after hold_ms (a device that cannot

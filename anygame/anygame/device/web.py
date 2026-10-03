@@ -2,8 +2,9 @@
 `web://<url>#state=<js expression>` also gives state(): the expression evaluated on the page (e.g. a game's own
 `window.__state()`), for packs that read the stream instead of the pixels."""
 from __future__ import annotations
-import time
+import base64
 import os
+import time
 import numpy as np
 import cv2
 from .base import Device
@@ -35,8 +36,47 @@ class WebDevice(Device):
     def size(self):
         return self._size
 
+    def stream(self, on=True):
+        """Frames from Chrome's screencast instead of a screenshot per frame. A screenshot costs 35-50 ms whatever its
+        size, which caps a loop near 15 frames a second; the screencast pushes every painted frame (60 a second), and
+        frame() takes the first one painted after it was called. Chromium only."""
+        if not on:
+            if getattr(self, "_cdp", None):
+                self._cdp.send("Page.stopScreencast")
+            self._cdp = None
+            return
+        if getattr(self, "_cdp", None):
+            return
+        self._cdp = self._page.context.new_cdp_session(self._page)
+        self._shot = None
+
+        def got(e):
+            self._shot = (e["metadata"].get("timestamp") or time.time(), e["data"])
+            try:
+                self._cdp.send("Page.screencastFrameAck", {"sessionId": e["sessionId"]})
+            except Exception:  # noqa: BLE001
+                pass
+
+        self._cdp.on("Page.screencastFrame", got)
+        self._cdp.send("Page.startScreencast", {"format": "png", "everyNthFrame": 1})
+
+    def _streamed(self, wait_s=0.05):
+        """The first screencast frame painted after now, or None when the page paints nothing new within wait_s (a
+        still screen sends no frames: the caller takes a screenshot instead)."""
+        t0, end = time.time(), time.perf_counter() + wait_s
+        while time.perf_counter() < end:
+            s = self._shot
+            if s and s[0] >= t0 - 0.002:
+                return cv2.imdecode(np.frombuffer(base64.b64decode(s[1]), dtype=np.uint8), cv2.IMREAD_COLOR)
+            self._page.wait_for_timeout(2)       # lets the frame events in
+        return None
+
     def frame(self):
         self._release_due()
+        if getattr(self, "_cdp", None):
+            img = self._streamed()
+            if img is not None and img.shape[1] == self._size[0] and img.shape[0] == self._size[1]:
+                return img
         png = self._page.screenshot(type="png")
         arr = np.frombuffer(png, dtype=np.uint8)
         return cv2.imdecode(arr, cv2.IMREAD_COLOR)
@@ -117,6 +157,11 @@ class WebDevice(Device):
         return self._page.evaluate(js)
 
     def close(self):
+        try:
+            if getattr(self, "_cdp", None):
+                self._cdp.send("Page.stopScreencast")
+        except Exception:  # noqa: BLE001
+            pass
         try:
             self._browser.close()
         finally:
