@@ -219,6 +219,8 @@ export class Agent {
     if ("not" in c) return v !== c.not;
     // a list read holds the item, or a comma-joined read (a gap read's rows: "chest,low") names it
     if ("contains" in c) return (Array.isArray(v) ? v : String(v ?? "").split(",")).includes(c.contains);
+    // a missing value is no number (Number(null) is 0: a gap read's null time to contact would count as "now")
+    if (v === null || v === undefined || (typeof v === "string" && !v.trim())) return false;
     const n = Number(v);
     if (Number.isNaN(n)) return false;
     if ("gte" in c) return n >= Number(c.gte);

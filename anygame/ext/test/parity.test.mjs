@@ -159,6 +159,17 @@ test("when the rules leave one action and the answer never offered it, that acti
   assert.equal(answers.action.choice, "down"); assert.ok(applied.at(-1).includes("only action the rules allow"));
 });
 
+test("a missing number never meets gte or lte, as in the CLI", () => {
+  // the dino's gap read gives ttc_ms: null on an empty road; Number(null) is 0, which made every `lte` rule and the
+  // reflex fire there, and the dino hopped on an empty road
+  const ag = new Agent(packFromText(BUNDLED_PACKS["snake-state"], "snake-state"), null, null);
+  for (const v of [null, undefined, "", "x"]) {
+    assert.equal(ag.cond({ read: "next.ttc_ms", lte: 900 }, { next: { ttc_ms: v } }), false, String(v));
+    assert.equal(ag.cond({ read: "next.ttc_ms", gte: -1 }, { next: { ttc_ms: v } }), false, String(v));
+  }
+  assert.equal(ag.cond({ read: "next.ttc_ms", lte: 900 }, { next: { ttc_ms: 0 } }), true);
+});
+
 // ---- Tetris lookahead ----------------------------------------------------------------------------------------
 test("tetris lookahead ranks by two pieces", async () => {
   const { TetrisTracker, lookahead, features } = await import("../dist/core.js");
