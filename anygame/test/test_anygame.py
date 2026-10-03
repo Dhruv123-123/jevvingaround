@@ -693,3 +693,16 @@ def test_slide_compiler_ranks_only_moving_swipes_and_offers_them_as_the_action()
     jev = FakeJev()
     Agent(pack, FakeDevice([frame]), jev).step()
     assert list(jev.seen[0])[0] == "left" and jev.seen[0]["left"].startswith("#1 best")
+
+
+def test_go_playouts_score_the_candidates_the_same_way_every_time():
+    from anygame.perceive import go
+    # white's big chain in the middle is in atari: taking it wins the random games, the other moves mostly do not
+    board = [".........", "...BBB...", "..BWWWB..", "..BWWWB..", "..BWW.B..", "...BBB...", "........."] + ["........."] * 2
+    v = go.read(board, {"komi": 6.5, "playouts": 32})
+    assert "playouts" not in go.read(board, {"komi": 6.5})          # opt-in
+    po = v["playouts"]
+    assert set(po) == set(v["best"]) | set(v["captures"]) and v["captures"] == ["c6r5"]
+    assert po["c6r5"]["win"] >= 0.9 and all(0 <= x["win"] <= 1 for x in po.values())
+    go._PLAYOUT_CACHE.clear()
+    assert go.read(board, {"komi": 6.5, "playouts": 32})["playouts"] == po    # seeded from the board

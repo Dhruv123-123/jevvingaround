@@ -10,12 +10,16 @@ Value:        { legal: [cells], good: [cells], captures: [cells], saves: [cells]
                 danger: [cells],
                 eyes: [cells], urgent: [cells], our_atari: [cells], their_atari: [cells], moves_left: n,
                 stones: {us, them}, captured_by_move: {cell: n}, score: {us, them, lead},
-                best: [top_k good cells by worth], worth: {cell: n}, estimate: {us, them, lead} }
+                best: [top_k good cells by worth], worth: {cell: n}, estimate: {us, them, lead},
+                playouts: {cell: {win, margin}} }   (only with `playouts: n` in the config)
 `worth` looks one move deep for area: the swing in a rough area estimate (each empty point goes to the nearer colour),
 plus the stones a move saves; and reads ataris deeper (ladders and short chases, `_attack`): a move whose chain
 white can then chase down is `doomed` and heavily penalised, a move that gets a `danger` chain away earns its
 stones, an atari white cannot escape earns twice the stones and one it can escape a little. `score` is exact area scoring and
 only means something once the board is settled; `estimate` is the mid-game guess.
+`playouts` (opt-in, `playouts: n`): each `best` move and each capture or save is played out n times to the end by
+both sides moving at random (never filling an own eye, never suicide, the same policy as the page's `ai=mc` white),
+and gets our win rate and mean final margin after komi. Seeded from the board, so the same board reads the same.
 Cells are c<col>r<row> as in every grid read; r1 is the top row."""
 from __future__ import annotations
 import re
@@ -172,6 +176,113 @@ def estimate(b: dict[Pt, str], us: str, them: str, w: int, h: int, empty: str, r
     return s[us], s[them]
 
 
+# ---- random playouts: a flat 1-D board (0 empty, 1 us, 2 them), fast enough for a few hundred games per read -------
+def _geometry(w: int, h: int) -> tuple[list[list[int]], list[list[int]]]:
+    nb = [[(r + dr) * w + c + dc for dc, dr in ((1, 0), (-1, 0), (0, 1), (0, -1)) if 0 <= c + dc < w and 0 <= r + dr < h]
+          for r in range(h) for c in range(w)]
+    dg = [[(r + dr) * w + c + dc for dc in (-1, 1) for dr in (-1, 1) if 0 <= c + dc < w and 0 <= r + dr < h]
+          for r in range(h) for c in range(w)]
+    return nb, dg
+
+
+def _has_lib(g: list[int], i: int, nb: list[list[int]]) -> bool:
+    c, seen, todo = g[i], {i}, [i]
+    while todo:
+        for n in nb[todo.pop()]:
+            v = g[n]
+            if v == 0:
+                return True
+            if v == c and n not in seen:
+                seen.add(n)
+                todo.append(n)
+    return False
+
+
+def _chain(g: list[int], i: int, nb: list[list[int]]) -> set[int]:
+    c, seen, todo = g[i], {i}, [i]
+    while todo:
+        for n in nb[todo.pop()]:
+            if g[n] == c and n not in seen:
+                seen.add(n)
+                todo.append(n)
+    return seen
+
+
+def _playout(g: list[int], p: int, rng: Any, nb: list[list[int]], dg: list[list[int]]) -> int:
+    """Play random moves to the end (two passes or 150 moves) from g with p to move; our (1) area minus theirs."""
+    g = list(g)
+    empt = [i for i, v in enumerate(g) if v == 0]
+    passes = n = 0
+    while passes < 2 and n < 150:
+        moved, k = False, len(empt)
+        while k > 0:
+            j = int(rng.random() * k)
+            i = empt[j]
+            empt[j], empt[k - 1] = empt[k - 1], empt[j]
+            k -= 1
+            if all(g[m] == p for m in nb[i]):          # an own eye: never filled
+                d = dg[i]
+                bad = sum(1 for x in d if g[x] == 3 - p)
+                if (bad == 0) if len(d) < 4 else (bad <= 1):
+                    continue
+            g[i] = p
+            caps: list[int] = []
+            for m in nb[i]:
+                if g[m] == 3 - p and not _has_lib(g, m, nb):
+                    caps.extend(_chain(g, m, nb))
+            for s_ in caps:
+                g[s_] = 0
+            if not caps and not _has_lib(g, i, nb):   # suicide
+                g[i] = 0
+                continue
+            empt[k] = empt[-1]
+            empt.pop()
+            empt.extend(caps)
+            moved = True
+            break
+        passes = 0 if moved else passes + 1
+        n += 1
+        p = 3 - p
+    s = [0, 0, 0]
+    for i, v in enumerate(g):
+        if v:
+            s[v] += 1
+        else:
+            o = {g[m] for m in nb[i]}
+            if len(o) == 1 and 0 not in o:
+                s[o.pop()] += 1
+    return s[1] - s[2]
+
+
+_PLAYOUT_CACHE: dict[str, dict[str, dict[str, float]]] = {}
+
+
+def playouts(b: dict[Pt, str], cands: list[Pt], us: str, them: str, w: int, h: int, empty: str, komi: float,
+             n: int) -> dict[str, dict[str, float]]:
+    """For each candidate move of ours: n random games from the board after it (white to move), our win rate and mean
+    margin after komi. Cached per board, and seeded from it, so a board that has not changed costs nothing."""
+    import random
+    flat = [1 if b.get((c, r)) == us else 2 if b.get((c, r)) == them else 0 for r in range(1, h + 1) for c in range(1, w + 1)]
+    key = f"{w}x{h}:{n}:{komi}:" + "".join(map(str, flat))
+    out = _PLAYOUT_CACHE.get(key, {})
+    todo = [p for p in cands if cell(p) not in out]
+    if todo:
+        nb, dg = _geometry(w, h)
+        for p in todo:
+            res = play(b, p, us, them, w, h, empty)
+            if res is None:
+                continue
+            g = [1 if res[0].get((c, r)) == us else 2 if res[0].get((c, r)) == them else 0
+                 for r in range(1, h + 1) for c in range(1, w + 1)]
+            rng = random.Random(key + cell(p))
+            margins = [_playout(g, 2, rng, nb, dg) - komi for _ in range(n)]
+            out[cell(p)] = {"win": round(sum(1 for m in margins if m > 0) / n, 2), "margin": round(sum(margins) / n, 1)}
+        if len(_PLAYOUT_CACHE) > 64:
+            _PLAYOUT_CACHE.clear()
+        _PLAYOUT_CACHE[key] = out
+    return {cell(p): out[cell(p)] for p in cands if cell(p) in out}
+
+
 def cell(p: Pt) -> str:
     return f"c{p[0]}r{p[1]}"
 
@@ -263,7 +374,14 @@ def read(src: Any, r: dict[str, Any]) -> dict[str, Any] | None:
     su, st_ = area_score(b, us, them, w, h, empty)
     top_k = int(r.get("top_k", 6))
     best = sorted(worth, key=lambda k: -worth[k])[:top_k]
+    extra: dict[str, Any] = {}
+    n_po = int(r.get("playouts", 0))
+    if n_po > 0:
+        pts = {cell(p): p for p in order}
+        cands = list(dict.fromkeys(best + captures + saves))
+        extra["playouts"] = playouts(b, [pts[c] for c in cands], us, them, w, h, empty, komi, n_po)
     return {
+        **extra,
         "legal": legal, "good": good, "captures": captures, "saves": saves, "self_atari": self_atari, "eyes": eyes,
         "urgent": captures + [c for c in saves if c not in captures],
         "our_atari": [cell(p) for p in sorted(our_atari, key=lambda p: (p[1], p[0]))],
