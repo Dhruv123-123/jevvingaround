@@ -21,6 +21,7 @@ Base: `claude/anygame-jev-scale-run-dubj38` (which already contains `scale-run`)
 | 10 | go-playouts (merged again for rounds three and four, no conflicts) | `test/test_anygame.py` | Both tests kept |
 | 11 | dino-reflex (merged again for the 30 fps round, no conflicts) | `pack.py`, `perceive/__init__.py` | Additive: read kinds add `gap`; `MODE_KEYS` keeps `reflex`, `plausible`, `ask`, `ask_when` |
 | 12 | dino-framerate-wtqykg (PR #7) | none | |
+| 13 | go-playout-rerank-k5roqu (PR #8) | none | |
 
 No conflict needed one side's behaviour dropped. The auto-merged question builder was checked by hand: 2048's
 `criteria_from` replaces options first, Go's refused-move filter runs after the parameter questions are built, and
@@ -34,7 +35,7 @@ CLI-only; that is the extension-parity thread's work.
 
 ## Tests (final head)
 
-- Python: 86 passed, 1 failed. The failure is `test_nested_display_runs_the_game_in_a_sandbox_the_runtime_owns`, which
+- Python: 90 passed, 1 failed. The failure is `test_nested_display_runs_the_game_in_a_sandbox_the_runtime_owns`, which
   fails the same way on the base branch: this container has no X display for pynput. It needs the `desktop` extra and an X
   server, which CI provides.
 - Extension: `tsc --noEmit` clean, `npm test` 42/42.
