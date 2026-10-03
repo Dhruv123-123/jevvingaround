@@ -98,6 +98,14 @@ class WebDevice(Device):
             pass
         return True
 
+    def goto(self, url: str):
+        """Open another URL in the same page (the same game under another seed)."""
+        if "#state=" in url:
+            url, self._state_js = url.split("#state=", 1)
+        self._url = url if "://" in url else "file://" + os.path.abspath(url)
+        self._page.goto(self._url)
+        self._page.wait_for_load_state("load")
+
     def reload(self):
         """Reload the page: the cheapest restart for a browser game between episodes."""
         self._page.reload()

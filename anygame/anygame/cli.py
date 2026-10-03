@@ -429,7 +429,8 @@ def cmd_learn(a):
         pack = load_pack_text(learned.read_text(), pack.name)
         print(f"continuing from {learned} (v{bank.version})", file=sys.stderr)
     chat = Chat()
-    device = open_device(a.device, pack.size)
+    seeded = "{seed}" in a.device          # a new seed per episode: 100 + the episode number, apart from benchmark seeds
+    device = open_device(a.device.replace("{seed}", "100"), pack.size)
     jev = open_sensor(a.sensor, timeout=float(pack.raw.get("sensor_timeout_s", os.environ.get("ANYGAME_JEV_TIMEOUT", "4"))))
     fallback = VLMFallback(chat) if a.fallback else None
     score_read = pack.raw.get("score_read") or ("score" if "score" in pack.reads else None)
@@ -574,7 +575,10 @@ def cmd_learn(a):
                         if j < 6:
                             sample[j] = d
             agent.on_record = _rec
-            if hasattr(device, "reload"):
+            if seeded and hasattr(device, "goto"):
+                device.goto(a.device.replace("{seed}", str(100 + n)).removeprefix("web://"))
+                log(f"episode {n}: seed {100 + n}")
+            elif hasattr(device, "reload"):
                 device.reload()          # after the agent is built (its OCR worker is warm), so the game does not run unattended
             try:
                 last = agent.run()
