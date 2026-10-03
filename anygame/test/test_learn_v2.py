@@ -183,3 +183,11 @@ def test_a_rewrite_must_make_the_kind_of_change_the_diagnosis_calls_for():
 
     res = improve_v2(Chat(), stripped(), inc, {"cause_id": "told", "category": "instruction", "cause": "the paragraph misleads", "evidence": [], "fix_kind": "paragraph", "fix": "reword"}, [d.rec for d in inc.decisions], rounds=1)
     assert res["pack"] is None and "instruction fault" in res["attempts"][0]["why"]
+
+
+def test_a_score_read_decides_the_trial_before_how_long_a_lost_game_lasted():
+    l = {"won": False, "lost": True, "tasks_done": 0}
+    keep, why = trial_verdict([dict(l, ticks=187, score=11)], [dict(l, ticks=72, score=15), dict(l, ticks=71, score=15)])
+    assert not keep and "median score 11" in why
+    recs = [{"tick": 1, "screen": {"piece": {"lines_cleared": 4}}}, {"tick": 2, "screen": {"piece": {"lines_cleared": 9}}}, {"tick": 3, "action": "stop", "reason": "status is over", "screen": {"piece": "none"}}]
+    assert outcome(recs, 1, 1, "piece.lines_cleared")["score"] == 9

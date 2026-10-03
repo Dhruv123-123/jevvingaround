@@ -46,7 +46,13 @@ def outcome(recs: list[dict[str, Any]], n: int, version: int, score_read: str | 
     last = recs[-1] if recs else {}
     reason = str(last.get("reason") or ("stop" if last.get("action") == "stop" else "tick cap"))
     dec = [r for r in recs if "jev_ms" in r]
-    s = (last.get("screen") or {}).get(score_read) if score_read else None
+    s = None
+    if score_read:
+        # a dotted path into the typed frame (piece.lines_cleared), the best value seen in the episode: the last
+        # record is often the game-over screen, where the read is gone
+        seen = [_get_path(r.get("screen") or {}, score_read) for r in recs]
+        nums = [x for x in seen if isinstance(x, (int, float)) and not isinstance(x, bool)]
+        s = max(nums) if nums else None
     return {"n": n, "ticks": len(recs), "decisions": len(dec), "reason": reason, "score": s if isinstance(s, (int, float)) else None,
             "won": bool(WON.search(reason)) and not LOST.search(reason), "lost": bool(LOST.search(reason)),
             "tasks_done": sum(1 for r in recs if r.get("task_done")), "tasks_failed": sum(1 for r in recs if r.get("task_failed")),
@@ -84,6 +90,10 @@ def trial_verdict(trial: list[dict[str, Any]], incumbent: list[dict[str, Any]]) 
     mt, mi = sum(map(_value, trial)) / len(trial), sum(map(_value, incumbent)) / len(incumbent)
     if (any(_value(e) for e in trial) or any(_value(e) for e in incumbent)) and abs(mt - mi) > 1e-9:
         return mt > mi, f"mean outcome {mt:+.2f} over {len(trial)} vs {mi:+.2f} over {len(incumbent)}"
+    if all(e.get("score") is not None for e in trial + incumbent):
+        # a score says more than how long a lost game lasted (a gate that waits more makes games longer, not better)
+        st, si = sorted(e["score"] for e in trial)[len(trial) // 2], sorted(e["score"] for e in incumbent)[len(incumbent) // 2]
+        return st >= si, f"median score {st} over {len(trial)} vs {si} over {len(incumbent)} (outcome {mt:+.2f} vs {mi:+.2f})"
     rt, ri = median_episode(trial), median_episode(incumbent)
     worse = better_episode(rt, ri) and not better_episode(ri, rt)
     return not worse, f"median episode {rt['ticks']} ticks{' score ' + str(rt.get('score')) if rt.get('score') is not None else ''} vs {ri['ticks']}{' score ' + str(ri.get('score')) if ri.get('score') is not None else ''} (outcome {mt:+.2f} vs {mi:+.2f})"

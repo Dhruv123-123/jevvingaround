@@ -1,0 +1,53 @@
+# Tetris: the compiler enumerates every landing of the falling piece with its consequences; Jev picks one; the loop
+# plays it as a key macro. One decision per piece, so a 200 ms model plays a 60 fps game without being frame perfect.
+game: tetris
+screen: { orientation: portrait, size: [540, 700] }
+zones:
+  board:   { rect_px: [20, 60, 300, 620], grid: [10, 20] }
+  preview: { rect_px: [340, 60, 452, 116], grid: [4, 2] }
+  status:  { rect_px: [20, 14, 300, 42] }
+read:
+  board:   { kind: color, zone: board, inset: 0.25, max_dist: 60, otherwise: "#", as: matrix,
+             options: { ".": "#131a2e", I: "#22d3ee", O: "#facc15", T: "#a855f7", S: "#4ade80", Z: "#f87171", J: "#60a5fa", L: "#fb923c" } }
+  preview: { kind: color, zone: preview, inset: 0.25, max_dist: 60, otherwise: "#",
+             options: { ".": "#131a2e", I: "#22d3ee", O: "#facc15", T: "#a855f7", S: "#4ade80", Z: "#f87171", J: "#60a5fa", L: "#fb923c" } }
+  status:  { kind: color, zone: status, options: { playing: "#3b82f6", over: "#ef4444" }, max_dist: 90, otherwise: playing }
+  piece:   { kind: tetris, in: board, next_in: preview, empty: ".", top_k: 6, moves_per_row: 3,
+             keys: { rotate: ArrowUp, left: ArrowLeft, right: ArrowRight, drop: Space } }
+act:
+  - { id: place, kind: macro, options: piece, key_ms: 40, description: "rotate, move and hard-drop the piece onto one of the computed landings" }
+  - { id: wait, kind: wait, description: "let the piece fall one more tick" }
+tick_hz: 6
+settle: screen_change
+act_when:  { read: piece.phase, in: [spawned, falling] }
+stop_when: { read: status, equals: over }
+score_read: piece.lines_cleared   # how the learn loop compares games (added for the v2 trial; play unchanged)
+play: >
+  Tetris on a 10x20 board. `piece` is the falling tetromino and `next` the one after it. `landings` are the
+  reachable places this piece can be dropped, each with its computed consequences: lines cleared, holes made
+  (+n is bad), the stack height afterwards, bumpiness, and whether it keeps the well (the deepest column)
+  open for an I piece. Pick the landing that clears lines when the stack is high, otherwise the one that
+  makes no holes and keeps the surface flat and the well open. Prefer a landing that sets up a clear for
+  `next`. `place` is the only useful action; `wait` only when `landings` is empty.
+questions:
+  - id: stack_dangerous
+    type: noul
+    instructions: Is stack.danger true, or stack.max_height 12 or more?
+    criteria: { true: "The stack is close to the top; clearing lines now matters more than shape.", false: "Plenty of room." }
+  - id: action
+    type: choice
+    instructions: Which action now? `place` whenever landings are listed.
+    criteria: { place: "drop the piece onto a computed landing", wait: "do nothing this tick" }
+rules:
+  - { if: { read: piece.phase, in: [spawned, falling] }, exclude: [wait] }
+tests:
+  - frame: fixtures/spawn.png
+    expect: { status: playing, piece: { phase: spawned, shape: Z, col: 4, next: O, lines_cleared: 0 } }
+    expect_action: { is: place }
+    requires_sensor: true
+  - frame: fixtures/stack.png
+    expect: { board: ["....SS....", "...SS.....", "..........", "..........", "..........", "..........", "..........", "..........", "..........", "..........", "..........", "..........", "..........", "..........", "..........", "..........", "......T...", ".....TTT..", "ZZ.....OO.", ".ZZ....OO."],
+              piece: { shape: S, next: L, stack: { max_height: 4, holes: 5 } } }
+fingerprints:
+  main:spawn: NoVlZoxRZoxRZoxRZoxRZoxRZoxRZoxRXIpVFYJ1L4F3JIF2FYJ1FYJ1FYJ1FYJ1FYJ0F4N0F4N0XZyHU5iEF4N0F4N0F4N0FYRzFYJ1H4B4h36zWX2dFYJzFYJ1FYJ1FYJzGIJzGIJzG4ZzZ6CJRpOAGIJzGIJzF4NzFYJ1H4B4h36zWX2cFYJzFYJ1FYJ1FYJzGIJzGIJzFYRyGIJzGIJzGIJzGIJzFYRyFYJ1LoF2FYJ1FYJ1FYJ1FYJ1FYJ1FYJzGINxGINxF4NyGINxGINxGINxGINxF4NzFYJ1LYF2FYJ1FYJ1FYJ1FYJ1FYJ1FYJzGIJzGIJzFYRyGIJzGIJzGIJzGIJzFYRyFYJ1JIF2FYJ1FYJ1FYJ1FYJ1FYJ1FYJzGINxGINxF4NyGINxGINxGINxGINxF4NzFYJ1G4J1FYJ1FYJ1FYJ1FYJ1FYJ1FYJzGIJzGIJzFYRyGIJzGIJzGIJzGIJzFYRyFYJ1FYJ1FYJ1FYJ1FYJ1FYJ1FYJ1FYJzGINxGINxF4NyGINxGINxGINxGINxF4NzFYJ1FYJ1FYJ1FYJ1FYJ1FYJ1FYJ1FYJzGIJzGIJzFYRyGIJzGIJzGIJzGIJzFYRyFYJ1FYJ1FYJ1FYJ1FYJ1FYJ1FYJ1FYJzGIJzGIJzFYRyGIJzGIJzGIJzGIJzFYRyFYJ1FYJ1FYJ1FYJ1FYJ1FYJ1FYJ1FYJzGINxGINxF4NyGINxGINxGINxGINxF4NzFYJ1FYJ1FYJ1FYJ1FYJ1FYJ1FYJ1FYJzGIJzGIJzFYRyGIJzGIJzGIJzGIJzFYRyFYJ1FYJ1FYJ1FYJ1FYJ1FYJ1FYJ1FYJzGINxGINxF4NyGINxGINxGINxGINxF4NzFYJ1FYJ1FYJ1FYJ1FYJ1FYJ1FYJ1FYJ1FYJ0FYJ0FYJ0FYJ0FYJ0FYJ0FYJ0FYJ0FYJ1FYJ1FYJ1FYJ1FYJ1FYJ1FYJ1FYJ1FYJ1FYJ1FYJ1FYJ1FYJ1FYJ1FYJ1FYJ1FYJ1FYJ1FYJ1FYJ1FYJ1FYJ1FYJ1
+  main:stack: NoVlZoxRZoxRZoxRZoxRZoxRZoxRZoxRXIpVFYJ1L4F3JIF2FYJ1FYJ1FYJ1FYJ1FYJ0F4N0F4N0HX91gFuRVWmGF4N0F4N0FYRzFYJ1F4NzLoWAS4uOFYJzFYJ1FYJ1FYJzGIJzGIJzdGCNZ2SKGIJzGIJzGIJzF4NzFYJ1aJCdcpOhS4uOFYJzFYJ1FYJ1FYJzGIJzGIJzFYRyGIJzGIJzGIJzGIJzFYRyFYJ1LoF2FYJ1FYJ1FYJ1FYJ1FYJ1FYJzGINxGINxF4NyGINxGINxGINxGINxF4NzFYJ1LYF2FYJ1FYJ1FYJ1FYJ1FYJ1FYJzGIJzGIJzFYRyGIJzGIJzGIJzGIJzFYRyFYJ1JIF2FYJ1FYJ1FYJ1FYJ1FYJ1FYJzGINxGINxF4NyGINxGINxGINxGINxF4NzFYJ1G4J1FYJ1FYJ1FYJ1FYJ1FYJ1FYJzGIJzGIJzFYRyGIJzGIJzGIJzGIJzFYRyFYJ1FYJ1FYJ1FYJ1FYJ1FYJ1FYJ1FYJzGINxGINxF4NyGINxGINxGINxGINxF4NzFYJ1FYJ1FYJ1FYJ1FYJ1FYJ1FYJ1FYJzGIJzGIJzFYRyGIJzGIJzGIJzGIJzFYRyFYJ1FYJ1FYJ1FYJ1FYJ1FYJ1FYJ1FYJzGIJzGIJzFYRyGIJzGIJzGIJzGIJzFYRyFYJ1FYJ1FYJ1FYJ1FYJ1FYJ1FYJ1FYJzGINxGINxF4NyGINxKY5oJ45oGINxF4NzFYJ1FYJ1FYJ1FYJ1FYJ1FYJ1FYJ1G4N1IoZ1GYVyFYRyJ45pYq1NaapTNYl1F4NzFYJ1FYJ1FYJ1FYJ1FYJ1FYJ1FYJ1Mot7fqeQZJ6IGoVzGINxGINxhH+xxIHMHIF2FYJ1FYJ1FYJ1FYJ1FYJ1FYJ1FYJ1FYJ1IYV4Kol6F4J1FYJ0FYJ0J4CAM32JF4J1FYJ1FYJ1FYJ1FYJ1FYJ1FYJ1FYJ1FYJ1FYJ1FYJ1FYJ1FYJ1FYJ1FYJ1FYJ1FYJ1FYJ1FYJ1FYJ1FYJ1FYJ1FYJ1FYJ1
