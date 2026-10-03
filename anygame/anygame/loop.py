@@ -21,6 +21,12 @@ def copy_answers(answers: dict[str, Any]) -> dict[str, Any]:
     return copy.deepcopy(answers)
 
 
+def _stops(raw: dict[str, Any]) -> list[dict[str, Any]]:
+    """A pack's end conditions: `stop_when` as one condition or a list of them."""
+    s = raw.get("stop_when")
+    return [c for c in (s if isinstance(s, list) else [s]) if isinstance(c, dict)]
+
+
 def _get(values: dict[str, Any], path: str) -> Any:
     """values['head_around.ahead'] style lookup: dotted path into nested dicts."""
     cur: Any = values
@@ -576,8 +582,10 @@ class Agent:
                 return rec
             self.implausible_ticks = 0
             self.accepted = values
-        stop = self.pack.raw.get("stop_when")
-        if stop and self._cond(stop, values):
+        # stop_when: one end condition, or a list of them (the first that holds ends the run and names it, so a pack
+        # can say how a game ended: `won`, `lost`, `tied`, which the learn loop reads as the episode's outcome)
+        stop = next((c for c in _stops(self.pack.raw) if self._cond(c, values)), None)
+        if stop:
             rec["action"] = "stop"
             rec["reason"] = f"{stop['read']} is {_get(values, stop['read'])}"
             self._emit(rec, frame, dets, None)

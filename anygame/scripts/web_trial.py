@@ -30,7 +30,7 @@ TTT_JS = """(() => { const sq = [...document.querySelectorAll('.board .square > 
 
 def ttt_compare(values, truth):
     want = ["".join({"x": "X", "o": "O"}.get(truth["cells"][r * 3 + c], ".") for c in range(3)) for r in range(3)]
-    b = values.get("board") or {}
+    b = values.get("board") or values.get("cells") or {}
     got = list(b) if isinstance(b, list) else ["".join(str(b.get(f"c{c + 1}r{r + 1}", "?")) for c in range(3)) for r in range(3)]
     wrong = {}
     if got != want:
@@ -201,11 +201,13 @@ def main():
     ap.add_argument("--sensor", default="jev")
     ap.add_argument("--ticks", type=int, default=None)
     ap.add_argument("--out", default=None)
+    ap.add_argument("--pack", default=None, help="a pack directory to play instead of the game's bundled one")
+    ap.add_argument("--reload", action="store_true", help="reload the page before each game after the first, as `anygame learn` does")
     a = ap.parse_args()
     g = GAMES[a.game]
     out = Path(a.out or HERE / "trial" / a.game)
     out.mkdir(parents=True, exist_ok=True)
-    pack = load_pack(HERE / "packs" / g["pack"])
+    pack = load_pack(Path(a.pack) if a.pack else HERE / "packs" / g["pack"])
     dev = TruthDevice(open_device("web://" + g["url"], pack.size), g["js"])
     if g.get("start"):
         g["start"](dev)
@@ -245,7 +247,11 @@ def main():
             print(json.dumps(row), flush=True)
             summary.append(row)
             if ep + 1 < a.episodes:
-                g["restart"](dev)
+                if a.reload:
+                    dev.reload()
+                    time.sleep(1.5)
+                else:
+                    g["restart"](dev)
     finally:
         dev.close()
     (out / "summary.json").write_text(json.dumps(summary, indent=1))
