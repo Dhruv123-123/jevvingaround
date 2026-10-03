@@ -64,7 +64,7 @@ function showRec(rec: Rec) {
   bars($("probs"), rec.action_probs, "action", rec.choice);
   bars($("nouls"), rec.nouls, "beliefs", undefined, true);
   $("rules").textContent = (rec.rules ?? []).join("  ·  ");
-  $("meta").textContent = `tick ${rec.tick} · perception ${rec.perception_ms} ms · sensor ${rec.jev_ms ?? "–"} ms · $${(rec.total_cost_usd ?? 0).toFixed(4)}${rec.reason ? " · " + rec.reason : ""}`;
+  $("meta").textContent = `tick ${rec.tick} · perception ${rec.perception_ms} ms · sensor ${rec.jev_ms ?? "–"} ms · $${(rec.total_cost_usd ?? 0).toFixed(4)}${rec.skipped ? " · " + rec.skipped + ": acted on the last answers" : ""}${rec.reread ? ` · read again ${rec.reread}x` : ""}${rec.reason ? " · " + rec.reason : ""}`;
   $("screen").textContent = JSON.stringify(rec.screen, null, 1);
 }
 
@@ -285,6 +285,7 @@ async function play() {
       showRec(rec);
       $("taskline").textContent = ag.task ? `task: ${ag.task.instruction} (${ag.tick - ag.taskStarted}/${ag.task.limit_ticks} ticks)` : ag.base.tasks.length ? "task: none available on this screen" : "";
       records.push(rec); if (records.length > 2000) records.shift();
+      (window as any).__anygameRecords = records;     // the episode so far, for the headless end-to-end checks
       if ((rec.mode ?? "main") === "main") lastSeen = { rec, frame };
       if (setterDue && rec.tick >= 3 && (rec.mode ?? "main") === "main") { setterDue = false; setTasks(`episode ${episodeN}`).catch((e) => log(String(e))); }
       if (($("rate") as HTMLInputElement).checked) {

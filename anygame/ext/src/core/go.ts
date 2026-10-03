@@ -119,6 +119,133 @@ function areaScore(b: B, us: string, them: string, w: number, h: number, empty: 
   return [s[us], s[them]];
 }
 
+// ---- random playouts: a flat 1-D board (0 empty, 1 us, 2 them), as _playout in go.py -------------------------------
+function geometry(w: number, h: number): [number[][], number[][]] {
+  const nb: number[][] = [], dg: number[][] = [];
+  for (let r = 0; r < h; r++) for (let c = 0; c < w; c++) {
+    nb.push([[1, 0], [-1, 0], [0, 1], [0, -1]].filter(([dc, dr]) => c + dc >= 0 && c + dc < w && r + dr >= 0 && r + dr < h).map(([dc, dr]) => (r + dr) * w + c + dc));
+    dg.push([[-1, -1], [-1, 1], [1, -1], [1, 1]].filter(([dc, dr]) => c + dc >= 0 && c + dc < w && r + dr >= 0 && r + dr < h).map(([dc, dr]) => (r + dr) * w + c + dc));
+  }
+  return [nb, dg];
+}
+
+/** A seeded generator in [0, 1): the board string picks the stream, so the same board reads the same. (Python seeds
+ *  random.Random with the same string; the streams differ, the statistics do not.) */
+function seeded(text: string): () => number {
+  let h = 1779033703 ^ text.length;
+  for (let i = 0; i < text.length; i++) { h = Math.imul(h ^ text.charCodeAt(i), 3432918353); h = (h << 13) | (h >>> 19); }
+  let a = h >>> 0;
+  return () => { a = (a + 0x6d2b79f5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+}
+
+function hasLib(g: Uint8Array, i: number, nb: number[][], seen: Uint8Array, stack: number[]): boolean {
+  const c = g[i]; seen.fill(0); seen[i] = 1; stack.length = 0; stack.push(i);
+  while (stack.length) for (const n of nb[stack.pop()!]) { const v = g[n]; if (v === 0) return true; if (v === c && !seen[n]) { seen[n] = 1; stack.push(n); } }
+  return false;
+}
+
+function chain(g: Uint8Array, i: number, nb: number[][]): number[] {
+  const c = g[i], out = [i], seen = new Set([i]), todo = [i];
+  while (todo.length) for (const n of nb[todo.pop()!]) if (g[n] === c && !seen.has(n)) { seen.add(n); out.push(n); todo.push(n); }
+  return out;
+}
+
+/** Random moves to the end (two passes or 150 moves) from g with p to move: never an own eye, never suicide, the
+ *  same policy as the page's `ai=mc` white. Our (1) area minus theirs. */
+function playout(g0: Uint8Array, p: number, rng: () => number, nb: number[][], dg: number[][]): number {
+  const g = Uint8Array.from(g0), seen = new Uint8Array(g.length), stack: number[] = [];
+  const empt: number[] = []; g.forEach((v, i) => { if (!v) empt.push(i); });
+  let passes = 0, n = 0;
+  while (passes < 2 && n < 150) {
+    let moved = false, k = empt.length;
+    while (k > 0) {
+      const j = Math.floor(rng() * k), i = empt[j];
+      empt[j] = empt[k - 1]; empt[k - 1] = i;
+      k--;
+      if (nb[i].every((m) => g[m] === p)) {            // an own eye: never filled
+        const d = dg[i]; let bad = 0; for (const x of d) if (g[x] === 3 - p) bad++;
+        if (d.length < 4 ? bad === 0 : bad <= 1) continue;
+      }
+      g[i] = p;
+      const caps: number[] = [];
+      for (const m of nb[i]) if (g[m] === 3 - p && !hasLib(g, m, nb, seen, stack)) caps.push(...chain(g, m, nb));
+      for (const s of caps) g[s] = 0;
+      if (!caps.length && !hasLib(g, i, nb, seen, stack)) { g[i] = 0; continue; }    // suicide
+      empt[k] = empt[empt.length - 1]; empt.pop();
+      for (const s of new Set(caps)) empt.push(s);
+      moved = true;
+      break;
+    }
+    passes = moved ? 0 : passes + 1;
+    n++;
+    p = 3 - p;
+  }
+  const sc = [0, 0, 0];
+  for (let i = 0; i < g.length; i++) {
+    if (g[i]) { sc[g[i]]++; continue; }
+    let o = 0, mixed = false;
+    for (const m of nb[i]) { const v = g[m]; if (!v) { mixed = true; break; } if (o && v !== o) { mixed = true; break; } o = v; }
+    if (!mixed && o) sc[o]++;
+  }
+  return sc[1] - sc[2];
+}
+
+const PLAYOUT_CACHE = new Map<string, Record<string, number[]>>();      // per board: each candidate's game margins so far
+
+/** For each candidate move of ours: n random games from the board after it (white to move), our win rate and mean
+ *  margin after komi. Cached per board and seeded from it, so a board that has not changed costs nothing. */
+export function goPlayouts(b: B, cands: string[], us: string, them: string, w: number, h: number, empty: string, komi: number, n: number,
+                           top = 0, topN = 0): Record<string, { win: number; margin: number; n: number }> {
+  // `top` with `topN`: the `top` best of the first pass are played on to `topN` games each, so the close contenders separate
+  const flat = (bb: B) => { const g = new Uint8Array(w * h); for (let r = 1; r <= h; r++) for (let c = 1; c <= w; c++) { const v = bb.get(key(c, r)); g[(r - 1) * w + c - 1] = v === us ? 1 : v === them ? 2 : 0; } return g; };
+  const k = `${w}x${h}:${komi}:` + flat(b).join("");
+  let runs = PLAYOUT_CACHE.get(k);
+  if (!runs) { if (PLAYOUT_CACHE.size > 64) PLAYOUT_CACHE.clear(); runs = {}; PLAYOUT_CACHE.set(k, runs); }
+  const starts: Record<string, Uint8Array | null> = {};
+  let geo: [number[][], number[][]] | null = null;
+  const more = (p: string, upto: number) => {
+    const got = (runs![p] ??= []);
+    if (got.length >= upto) return;
+    if (!(p in starts)) { const res = play(b, p, us, them, w, h, empty); starts[p] = res ? flat(res.nb) : null; }
+    const g = starts[p];
+    if (!g) return;
+    geo ??= geometry(w, h);
+    const rng = seeded(k + p + got.length);     // seeded by the games it already has: same board, same games
+    while (got.length < upto) got.push(playout(g, 2, rng, geo![0], geo![1]) - komi);
+  };
+  const summary = (p: string) => { const m = runs![p]; return { win: Math.round((m.filter((x) => x > 0).length / m.length) * 100) / 100, margin: Math.round((m.reduce((a, x) => a + x, 0) / m.length) * 10) / 10, n: m.length }; };
+  for (const p of cands) more(p, n);
+  const done = cands.filter((p) => runs![p]?.length);
+  if (top && topN > n) {
+    const lead = [...done].sort((x, y) => { const a = summary(x), c = summary(y); return c.win - a.win || c.margin - a.margin; }).slice(0, top);
+    for (const p of lead) more(p, topN);
+  }
+  return Object.fromEntries(done.map((p) => [p, summary(p)]));
+}
+export const clearGoPlayoutCache = () => PLAYOUT_CACHE.clear();
+
+/** `rerank: playouts`: the playout leader goes first in `best` when its win rate beats the first `best` move's by
+ *  `margin` or more (`extra.reranked` says {from, to, gap}). The leader is picked among the good moves with the most
+ *  games (the `playouts_top` leaders), so a lucky 32-game result never jumps the queue; a tie on win goes to the
+ *  higher margin, then to the `best` order. Port of rerank in perceive/go.py. */
+export function goRerank(best: string[], po: Record<string, { win: number; margin: number; n: number }>, good: Set<string>, margin: number, extra: Record<string, any>): string[] {
+  const top = best[0];
+  if (!(top in po)) return best;
+  const ranked = Object.keys(po).filter((k) => good.has(k));
+  const most = Math.max(0, ...ranked.map((k) => po[k].n));
+  const pool = ranked.filter((k) => po[k].n === most);
+  if (!pool.length) return best;
+  const order = (k: string) => (best.includes(k) ? best.indexOf(k) : best.length);
+  const lead = pool.reduce((a, k) => {
+    const d = po[k].win - po[a].win || po[k].margin - po[a].margin || order(a) - order(k);
+    return d > 0 ? k : a;
+  });
+  const gap = Math.round((po[lead].win - po[top].win) * 100) / 100;
+  if (lead === top || gap < margin - 1e-9) return best;
+  extra.reranked = { from: top, to: lead, gap };
+  return [lead, ...best.filter((k) => k !== lead)];
+}
+
 export function goRead(src: any, r: ReadDef): Record<string, any> | null {
   const { b, w, h } = board(src);
   if (!b.size) return null;
@@ -180,8 +307,15 @@ export function goRead(src: any, r: ReadDef): Record<string, any> | null {
   }
   const [su, st] = areaScore(b, us, them, w, h, empty);
   const byPos = (s: Set<string>) => order.filter(k => s.has(k));
-  const best = Object.keys(worth).sort((a, c) => worth[c] - worth[a]).slice(0, Number(r.top_k ?? 6));
+  let best = Object.keys(worth).sort((a, c) => worth[c] - worth[a]).slice(0, Number(r.top_k ?? 6));
+  const extra: Record<string, any> = {};
+  const nPo = Number(r.playouts ?? 0);
+  if (nPo > 0) {
+    extra.playouts = goPlayouts(b, [...new Set([...best, ...captures, ...saves])], us, them, w, h, empty, komi, nPo, Number(r.playouts_top ?? 0), Number(r.playouts_top_n ?? 0));
+    if (r.rerank === "playouts" && best.length) best = goRerank(best, extra.playouts, new Set(good), Number(r.rerank_margin ?? 0.06), extra);
+  }
   return {
+    ...extra,
     legal, good, captures, saves, self_atari: selfAtari, eyes,
     urgent: [...captures, ...saves.filter(c => !captures.includes(c))],
     our_atari: byPos(ourAtari), their_atari: byPos(theirAtari), danger: byPos(danger), doomed,

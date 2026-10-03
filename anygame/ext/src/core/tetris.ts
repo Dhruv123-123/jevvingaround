@@ -108,6 +108,34 @@ function score(base: Features, after: Features, lines: number): number {
   return 0.76 * lines - 0.51 * after.sum_height - 0.36 * after.holes - 0.18 * after.bumpiness - 1.5 * Math.max(0, after.holes - base.holes);
 }
 
+/** Every [rot, x, cells] where this piece can come to rest, dropped straight down. */
+export function placements(stack: Set<string>, shape: string, w: number, h: number): [number, number, Cell[]][] {
+  const out: [number, number, Cell[]][] = [];
+  for (const r2 of UNIQUE_ROTS[shape]) {
+    const offs = SHAPES[shape][r2];
+    const minDx = Math.min(...offs.map((o) => o[0])), maxDx = Math.max(...offs.map((o) => o[0]));
+    for (let x2 = -minDx; x2 < w - maxDx; x2++) { const landed = drop(stack, shape, r2, x2, w, h); if (landed) out.push([r2, x2, landed[0]]); }
+  }
+  return out;
+}
+
+/** The score after the best placement of the next piece too (the preview's piece, or the mean over all seven when
+ *  it is unknown); null when no next placement fits. */
+export function lookahead(base: Features, stack: Set<string>, lines: number, nxt: string | null, w: number, h: number): number | null {
+  const best = (shape: string): number | null => {
+    let m: number | null = null;
+    for (const [, , cells] of placements(stack, shape, w, h)) {
+      const [s2, l2] = settle(stack, cells, w, h);
+      const v = score(base, features(s2, w, h), lines + l2);
+      if (m === null || v > m) m = v;
+    }
+    return m;
+  };
+  if (nxt && nxt in SHAPES) return best(nxt);
+  const vals = Object.keys(SHAPES).map(best).filter((v): v is number => v !== null);
+  return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
+}
+
 function components(cells: Set<string>): Set<string>[] {
   const seen = new Set<string>();
   const comps: Set<string>[] = [];
@@ -135,6 +163,7 @@ export class TetrisTracker {
   keys: Record<string, string>;
   topK: number;
   movesPerRow: number;
+  lookahead: boolean;      // rank by the best two-piece outcome (this piece, then `next`)
   lastPiece: [string, number, number] | null = null;
   macros: Record<string, string[]> = {};
   predicted: Set<string> | null = null;
@@ -149,6 +178,7 @@ export class TetrisTracker {
     this.keys = { rotate: "ArrowUp", left: "ArrowLeft", right: "ArrowRight", drop: "Space", ...(cfg.keys ?? {}) };
     this.topK = Number(cfg.top_k ?? 6);
     this.movesPerRow = Number(cfg.moves_per_row ?? 3);
+    this.lookahead = Boolean(cfg.lookahead ?? false);
   }
 
   read(board: any, preview: any): Record<string, any> {
@@ -217,6 +247,12 @@ export class TetrisTracker {
     }
     let reach = cands.filter((c) => c.reachable);
     if (!reach.length) reach = cands;
+    if (this.lookahead) {
+      for (const c of reach) {
+        const two = lookahead(feats, settle(stack, c.cells, w, h)[0], c.lines, nxt, w, h);
+        c.score = two ?? c.score - 1e6;      // no room for the next piece is worse than anything that has room
+      }
+    }
     reach.sort((a, b) => b.score - a.score);
     this.macros = {}; this.cands = {};
     reach.slice(0, this.topK).forEach((c, i) => {

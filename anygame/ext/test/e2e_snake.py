@@ -9,7 +9,7 @@ CHROME = "/opt/pw-browsers/chromium-1194/chrome-linux/chrome"
 
 with sync_playwright() as p:
     ctx = p.chromium.launch_persistent_context("/tmp/anygame-ext-profile", headless=False, executable_path=CHROME if os.path.exists(CHROME) else None,
-        args=["--headless=new", "--no-sandbox", f"--disable-extensions-except={EXT}", f"--load-extension={EXT}"], viewport={"width": 540, "height": 560})
+        args=["--headless=new", "--no-sandbox", f"--disable-extensions-except={EXT}", f"--load-extension={EXT}", "--window-size=540,900"], no_viewport=True)   # taller than the game: the debugger infobar takes room from the tab
     sw = ctx.service_workers[0] if ctx.service_workers else ctx.wait_for_event("serviceworker")
     ext_id = sw.url.split("/")[2]
     game = ctx.pages[0] if ctx.pages else ctx.new_page()

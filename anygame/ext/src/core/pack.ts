@@ -1,4 +1,5 @@
 // A pack: the typed contract between one game and Jev. Same YAML as the Python runtime.
+import { checkPlausible } from "./plausible.js";
 import yaml from "js-yaml";
 import { Zone, type Rect } from "./geometry.js";
 
@@ -101,7 +102,7 @@ export function checkTasks(tasks: any, reads: Record<string, ReadDef>, where = "
 export interface ModeWhen { read?: string; equals?: any; in?: any[]; not?: any; fingerprint?: string }
 
 /** A mode is the base pack with these keys overridden or merged. */
-export const MODE_KEYS = ["zones", "read", "act", "play", "questions", "rules", "act_when", "stop_when", "settle", "tick_hz"];
+export const MODE_KEYS = ["zones", "read", "act", "play", "questions", "rules", "act_when", "stop_when", "settle", "tick_hz", "reflex", "plausible", "ask", "ask_when"];
 
 export function mergeMode(base: Record<string, any>, mode: Record<string, any>): Record<string, any> {
   const out: Record<string, any> = { ...base };
@@ -205,6 +206,14 @@ export function loadPack(text: string, name = "pack"): Pack {
   }
   if (raw.settle !== undefined && raw.settle !== null && raw.settle !== "screen_change") throw new PackError(`${name}: settle must be 'screen_change'`);
   const rules: Record<string, any>[] = raw.rules ?? [];
+  for (const c of Array.isArray(raw.reflex) ? raw.reflex : raw.reflex ? [raw.reflex] : []) {
+    if (!condOk(c)) throw new PackError(`${name}: reflex needs {read, equals|in|not|gte|lte} (or a list of them): when it holds, the rules act on the decider's last answers without asking it`);
+  }
+  if (raw.ask !== undefined && raw.ask !== null && raw.ask !== "async") throw new PackError(`${name}: ask: async is the only option (the decider runs beside the loop, which acts on its last answers meanwhile)`);
+  if (![undefined, null, "shot", "stream"].includes(raw.frames)) throw new PackError(`${name}: frames must be 'shot' (a screenshot per frame, the default) or 'stream' (the browser's screencast: faster frames, Chromium only)`);
+  for (const c of Array.isArray(raw.ask_when) ? raw.ask_when : raw.ask_when ? [raw.ask_when] : []) {
+    if (!condOk(c)) throw new PackError(`${name}: ask_when needs {read, equals|in|not|gte|lte} (or a list of them): with ask: async, the decider is asked only when it holds`);
+  }
   for (const rl of rules) {
     const cs: any[] = Array.isArray(rl.if) && rl.if.length ? rl.if : [rl.if ?? {}];   // a list: all must hold
     for (const c of cs) {
@@ -214,7 +223,15 @@ export function loadPack(text: string, name = "pack"): Pack {
     if (rl.unless !== undefined && !(Array.isArray(rl.unless) && rl.unless.length ? rl.unless : [rl.unless]).every(condOk))
       throw new PackError(`${name}: rule 'unless' needs {read, equals|in|not|gte|lte|contains}: the rule does not apply when it holds`);
     if (!["exclude", "set", "avoid", "only"].some((k) => k in rl)) throw new PackError(`${name}: rule needs exclude, set, avoid or only`);
+    for (const k of ["set", "avoid", "only"]) {
+      if (k in rl && (!rl[k] || typeof rl[k] !== "object" || Array.isArray(rl[k])))
+        throw new PackError(`${name}: rule ${k}: must map a parameter question to a read (${k}: {<action>__cell: <read>}), got ${JSON.stringify(rl[k])}`
+          + (k === "only" ? "; to allow only some actions, exclude the others with exclude: [actions]" : ""));
+    }
+    if ("exclude" in rl && !Array.isArray(rl.exclude)) throw new PackError(`${name}: rule exclude: must be a list of action ids, got ${JSON.stringify(rl.exclude)}`);
   }
+  const badPlausible = checkPlausible(raw.plausible, reads);
+  if (badPlausible) throw new PackError(`${name}: ${badPlausible}`);
   const tests: Test[] = raw.tests ?? [];
   const tasks = checkTasks(raw.tasks, reads, name, undefined, zones);
   const modes: Record<string, Pack> = {};
