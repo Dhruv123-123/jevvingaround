@@ -288,3 +288,17 @@ done when two runs in a row reach its last milestone from the previous phase's s
 - **Jev is blocked** while the OpenRouter account has no credit. Everything up to phase 2 runs on the offline
   deciders; the Jev comparison slots in when credit returns.
 - **Event flags and item ids** marked "verify" need the ROM.
+
+## Where a second thread can split off
+
+The work splits cleanly at the device boundary:
+
+- **Thread A, platform and state:** `device/pyboy.py` (clock, save states, branching), `discover.py` (position, map
+  signature; next: menu cursor, HP, money, text from tiles), the `probe` read, graders. Measured by agreement of the
+  discovered state with the grader's RAM truth on both ROMs.
+- **Thread B, long-horizon play:** `perceive/world.py` (memory, navigator, inspect, stall rules), the dialogue log, goals
+  from what the game says (roadmap G5), battle and menu options with branching, the Jev audit. Measured by milestones
+  on both ROMs.
+
+The contract between them is the device's `state()["found"]` (x, y, map, cell) plus `branch()` and the `probe`
+categories. Thread B never reads raw RAM.
