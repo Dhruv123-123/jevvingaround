@@ -20,6 +20,7 @@ Base: `claude/anygame-jev-scale-run-dubj38` (which already contains `scale-run`)
 | 9 | plausible-reads | `pack.py` | Additive: `MODE_KEYS` keeps `reflex` and `plausible`; `load_pack` keeps the rule shape checks and runs the plausible spec check after the rule loop |
 | 10 | go-playouts (merged again for rounds three and four, no conflicts) | `test/test_anygame.py` | Both tests kept |
 | 11 | dino-reflex (merged again for the 30 fps round, no conflicts) | `pack.py`, `perceive/__init__.py` | Additive: read kinds add `gap`; `MODE_KEYS` keeps `reflex`, `plausible`, `ask`, `ask_when` |
+| 12 | dino-framerate-wtqykg (PR #7) | none | |
 
 No conflict needed one side's behaviour dropped. The auto-merged question builder was checked by hand: 2048's
 `criteria_from` replaces options first, Go's refused-move filter runs after the parameter questions are built, and

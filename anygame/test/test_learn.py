@@ -797,6 +797,12 @@ def test_dino_jumps_on_the_frame_and_asks_jev_beside_the_loop():
     n, dev.pause = len(dev.keys), 0
     again = ag.step()
     assert len(dev.keys) == n and again["choice"] == "jump" and again["action"].startswith("wait: jump pressed")
+    # an answer that lands just then and ranks duck first (a bird behind the cactus) does not press ArrowDown: on a
+    # real page that is a fast drop out of the jump (lock_ms); once the lock has run out the duck goes down
+    assert ag.act(pack.action("duck"), {}).startswith("wait: jump locks keys") and len(dev.keys) == n
+    ag.locked = ("jump", time.perf_counter() - 0.001)
+    dev.key = lambda name, hold_ms=0, block=True, extend=False: dev.keys.append((dev.i, name, hold_ms, block))
+    assert ag.act(pack.action("duck"), {}).startswith("key ArrowDown") and dev.keys[-1][1] == "ArrowDown"
 
 
 def test_frames_setting_is_checked(tmp_path):
