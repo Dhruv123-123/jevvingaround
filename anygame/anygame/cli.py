@@ -412,7 +412,7 @@ def cmd_learn(a):
     from .chat import Chat
     from .device import open_device
     from .fallback import VLMFallback
-    from .learn import Bank, Decision, Incident, better_episode, hints_text, improve, improve_v2, incident_of, lessons_of, median_episode, outcome, relevance, relevance_text, audit_questions, trial_verdict
+    from .learn import Bank, Decision, Incident, better_episode, hints_text, improve, improve_v2, incident_of, lessons_of, median_episode, outcome, relevance, relevance_text, audit_questions, trial_verdict, change_kinds, timing_only
     from .diagnose import diagnose
     import cv2
     import numpy as np
@@ -445,6 +445,7 @@ def cmd_learn(a):
     v2 = not getattr(a, "legacy", False)
     trial_n = max(1, int(getattr(a, "trial", 1) or 1))
     trial_eps: list = []
+    trial_now = {"n": trial_n, "by_score": False}    # the running trial: a timing change plays at least 5, judged on score
 
     def revise_v2(inc, recs, ep_n, frame_of):
         """v2: diagnose the whole episode, add the decisions it names to the incident, ask for a rewrite, check it."""
@@ -479,7 +480,7 @@ def cmd_learn(a):
         tried = [{"fix_kinds": t.get("fix_kinds"), "fix_kind": "+".join(t.get("fix_kinds") or []) or "none", "outcome": t.get("outcome"), "why": t.get("why")} for t in res.get("attempts") or []]
         if res.get("pack") is not None and tried:
             tried[-1]["outcome"] = "on trial"
-        bank.add_diagnosis({**{k: diag.get(k) for k in ("cause_id", "category", "cause", "evidence", "first_bad_tick", "fix_kind", "fix", "signature", "repeats")},
+        bank.add_diagnosis({**{k: diag.get(k) for k in ("cause_id", "fault", "category", "cause", "evidence", "first_bad_tick", "fix_kind", "fix", "signature", "repeats")},
                             "episode": ep_n, "version": version, "tried": tried, "at": time.strftime("%Y-%m-%dT%H:%M:%S")})
         return res
 
@@ -488,6 +489,9 @@ def cmd_learn(a):
         incumbent = (dump_pack(pack.raw), version, reason, len(bank.lessons))
         # a new number even after a revert, so no saved version is overwritten
         version = max([version] + [int(p.stem.split(".v")[1]) for p in bank.path.glob("pack.v*.yaml") if p.stem.split(".v")[1].isdigit()]) + 1
+        kinds = change_kinds(res["pack"], pack)
+        play_only = timing_only(kinds)
+        trial_now.update(n=max(trial_n, 5) if play_only else trial_n, by_score=play_only)
         pack = res["pack"]
         for d_ in reversed(bank.diagnoses):
             if d_.get("tried") and d_["tried"][-1].get("outcome") == "on trial" and "version" not in d_["tried"][-1]:
@@ -497,7 +501,7 @@ def cmd_learn(a):
         bank.add_revision(version, res.get("features"), res["verdict"]["why"])
         bank.save_version(version, dump_pack(pack.raw))
         learned.write_text(dump_pack(pack.raw))
-        log(f"learn: v{version} on trial for {trial_n} episode(s): {res['verdict']['why']}")
+        log(f"learn: v{version} on trial for {trial_now['n']} episode(s){' judged on score (a ' + '+'.join(kinds) + ' change only play can judge)' if play_only else ''}: {res['verdict']['why']}")
 
     if v2 and getattr(a, "revise_first", False) and bank.incidents():
         # start from what the bank already holds: diagnose its newest loss before playing
@@ -599,8 +603,8 @@ def cmd_learn(a):
             log(f"episode {n}: {last.get('action')}{' · ' + str(last.get('reason')) if last.get('reason') else ''} after {agent.tick} ticks, ${agent.total_cost:.4f}" + (f", score {ep['score']}" if ep["score"] is not None else "") + (f", tasks {ep['tasks_done']} done" if ep.get("tasks_done") else ""))
             if incumbent is not None and v2:
                 trial_eps.append(ep)
-                if len(trial_eps) >= trial_n:
-                    keep, why = trial_verdict(trial_eps, bank.of_version(incumbent[1]))
+                if len(trial_eps) >= trial_now["n"]:
+                    keep, why = trial_verdict(trial_eps, bank.of_version(incumbent[1]), by_score=trial_now["by_score"])
                     if not keep:
                         log(f"learn: v{version} played worse than v{incumbent[1]} ({why}); reverting")
                         bank.record_trial(version, False)

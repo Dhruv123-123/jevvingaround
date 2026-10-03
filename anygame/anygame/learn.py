@@ -79,15 +79,20 @@ def _value(e: dict[str, Any]) -> int:
     return 1 if e.get("won") else -1 if e.get("lost") else 0
 
 
-def trial_verdict(trial: list[dict[str, Any]], incumbent: list[dict[str, Any]]) -> tuple[bool, str]:
+def trial_verdict(trial: list[dict[str, Any]], incumbent: list[dict[str, Any]], by_score: bool = False) -> tuple[bool, str]:
     """Does a rewrite on trial stay? Its episodes against the incumbent's: by mean outcome (won 1, ended 0, lost -1)
     when either side has a win or a loss, ties broken (and outcome-less games judged) by the median episode order.
+    `by_score` (a timing change, judged only by play): the game's own median score first, when every game has one.
     Kept unless it plays worse."""
     if not trial:
         return True, "no trial episodes"
     if not incumbent:
         return True, "no incumbent episodes to compare with"
     mt, mi = sum(map(_value, trial)) / len(trial), sum(map(_value, incumbent)) / len(incumbent)
+    if by_score and all(e.get("score") is not None for e in trial + incumbent):
+        st, si = sorted(e["score"] for e in trial)[len(trial) // 2], sorted(e["score"] for e in incumbent)[len(incumbent) // 2]
+        if st != si:
+            return st > si, f"median score {st} over {len(trial)} vs {si} over {len(incumbent)} (outcome {mt:+.2f} vs {mi:+.2f})"
     if (any(_value(e) for e in trial) or any(_value(e) for e in incumbent)) and abs(mt - mi) > 1e-9:
         return mt > mi, f"mean outcome {mt:+.2f} over {len(trial)} vs {mi:+.2f} over {len(incumbent)}"
     if all(e.get("score") is not None for e in trial + incumbent):
@@ -974,6 +979,11 @@ class Bank:
 # compiler features (not only rules), check a new read on the frames already recorded, and judge the rewrite at the
 # ticks the diagnosis names, by replay where replay can see the change and by re-asking the decider where it cannot.
 
+def features_hint() -> str:
+    from .diagnose import faults_text
+    return faults_text() + "\n" + FEATURES_HINT
+
+
 FEATURES_HINT = (
     "Beyond rules, a rewrite may change how the loop around the decider works. All of these exist; use the one the diagnosis calls for:\n"
     "- count: { kind: count, in: <grid read id>, symbol: \"<char>\", minus: \"<char>\" } → an integer: cells holding symbol, less cells holding minus. "
@@ -982,7 +992,7 @@ FEATURES_HINT = (
     "A turn gate goes here, next to any menu check: act_when: [ { read: mode, equals: \"1P\" }, { read: turn, equals: 0 } ].\n"
     "- settle: screen_change waits for the screen to change after an action; settle_ticks: N caps that wait. tick_hz: decisions per second.\n"
     "- reflex: { read, equals|in|not|gte|lte } (or a list): when it holds the rules act on the decider's last answers without waiting for a new one "
-    "(a move that must land before the decider can answer). A rule may carry unless: { read, … } (or a list): it does not apply when one holds.\n"
+    "(a move that must land before the decider can answer; the answer to a late_move fault, never a slower tick_hz or settle). A rule may carry unless: { read, … } (or a list): it does not apply when one holds.\n"
     "- tetris read options: lookahead: true ranks each landing by the best result after the preview piece too; top_k: N landings offered.\n"
     "- go read options: playouts: N random playouts per candidate (win rate and margin on each), playouts_top: M, playouts_top_n: K.\n"
     "- slide read (2048) option depth: N; a question may take criteria_from: <read> to offer that read's ranked list as its options.\n"
@@ -991,13 +1001,13 @@ FEATURES_HINT = (
 
 REVISION_RULES_V2 = (
     "Revise the pack so the DIAGNOSED cause cannot recur, without a model being trained. Fix the cause the diagnosis names, "
-    "with the kind of change that addresses it: a turn or timing fault needs a read and a gate (act_when) or a timing setting, "
-    "not a strategy rule; an instruction that contradicts the ranking needs the paragraph or question rewritten; a missing "
+    "with the feature the diagnosis's fault kind names: a late move needs a reflex (not a slower loop); a turn fault needs "
+    "a read and a gate (act_when), not a strategy rule; an instruction that contradicts the ranking needs the paragraph or question rewritten; a missing "
     "compiler feature needs that option turned on; a wrong read needs the read fixed. Keep everything that is not part of the "
     "fix as it is. Do not remove or re-colour existing options, do not change zones, never remove a rule that fired correctly, "
     "and every rule and gate must only name reads that exist. A rule must generalise: never test the exact cell of a located read. "
     "The change will be checked on the recorded frames: at the evidence ticks the pack must now act differently (a rule "
-    "excludes the move, the gate holds the agent back, the ranking changes, or the decider re-asked under the new paragraph "
+    "excludes the move, the gate holds the agent back, the reflex fires, the ranking changes, or the decider re-asked under the new paragraph "
     "answers differently), the other recorded decisions must stay allowed, and every new read must parse on every recorded "
     "frame. Then it plays a real game and stays only if it plays no worse. Return the whole pack.yaml in one fenced yaml block.")
 
@@ -1013,6 +1023,13 @@ def _gate_ok(pack: Pack, values: dict[str, Any]) -> bool:
     from .loop import Agent
     g = pack.raw.get("act_when")
     return not g or all(Agent._cond(c, values) for c in (g if isinstance(g, list) else [g]))
+
+
+def _reflex_fires(pack: Pack, values: dict[str, Any]) -> bool:
+    """Would the pack's reflex act on the decider's last answers on this frame (rules there to act with)?"""
+    from .loop import Agent
+    r = pack.raw.get("reflex")
+    return bool(r) and bool(pack.rules) and all(Agent._cond(c, values) for c in (r if isinstance(r, list) else [r]))
 
 
 def _sigs(pack: Pack, ag, answers: dict[str, Any], values: dict[str, Any]) -> tuple[str, str]:
@@ -1155,7 +1172,7 @@ def evidence_decisions(inc: Incident, diag: dict[str, Any] | None) -> list[int]:
 
 def verify_v2(candidate: Pack, incumbent: Pack, inc: Incident, diag: dict[str, Any] | None = None, threshold: float = 0.7, max_overblock: float = 0.34,
               others: list[Incident] | None = None, successes: list[Incident] | None = None, holdout: list[Decision] | None = None,
-              sensor=None, min_gate_open: float = 0.2, log=lambda m: None) -> dict[str, Any]:
+              sensor=None, min_gate_open: float = 0.2, max_reflex: float = 0.5, log=lambda m: None) -> dict[str, Any]:
     """The checks a rewrite passes before it may play: (1) new reads parse on every recorded frame; (2) it reads the
     incident screens as well as the incumbent; (3) at the evidence ticks the diagnosis names it acts differently: a rule
     changes the decision, the gate holds the agent back, the ranking changes what a label means, a new read makes the
@@ -1179,11 +1196,19 @@ def verify_v2(candidate: Pack, incumbent: Pack, inc: Incident, diag: dict[str, A
     gate_open = (1 - sum(open_all) / len(open_all)) if open_all else 1.0
     if open_all and gate_open < min_gate_open:
         return {"ok": False, "why": f"its act_when holds on only {int(gate_open * 100)}% of the {len(open_all)} recorded frames; the agent would hardly play", "reads": rc["reads"]}
+    # a reflex must fire where the diagnosis says the move came too late, and not so often that the decider is hardly asked
+    reflex_changed = json.dumps(candidate.raw.get("reflex"), sort_keys=True) != json.dumps(incumbent.raw.get("reflex"), sort_keys=True)
+    if reflex_changed and candidate.raw.get("reflex"):
+        fire_all = [_reflex_fires(candidate, v) for v in replay2(candidate, every, same)["values"]]
+        if fire_all and sum(fire_all) / len(fire_all) > max_reflex:
+            return {"ok": False, "why": f"its reflex holds on {int(100 * sum(fire_all) / len(fire_all))}% of the {len(fire_all)} recorded frames; the decider would hardly be asked", "reads": rc["reads"]}
     ev = evidence_decisions(inc, diag)
     how: dict[int, str] = {}
     for k in ev:
         if c["gated"][k] and not i["gated"][k]:
             how[k] = "the gate holds the agent back"
+        elif reflex_changed and _reflex_fires(candidate, c["values"][k]) and not _reflex_fires(incumbent, i["values"][k]):
+            how[k] = "the reflex fires: the rules act on the last answers without waiting for the decider"
         elif c["label"][k] != i["label"][k]:
             how[k] = f"the rules change it ({i['label'][k]} → {c['label'][k]})"
         elif c["resolved"][k] != i["resolved"][k]:
@@ -1260,7 +1285,7 @@ def improve_v2(chat, pack: Pack, inc: Incident, diag: dict[str, Any], recs: list
     repair round. Returns {pack|None, verdict, yaml, features, attempts: [{round, fix_kinds, outcome, why}]}."""
     from .author import _b64, extract_yaml
     from .diagnose import diagnosis_text, episode_digest
-    text = (REVISION_RULES_V2 + "\n\n" + diagnosis_text(diag, history) + "\n\n" + PACK_SCHEMA_HINT + "\n" + FEATURES_HINT + ("\n\n" + hints if hints else "")
+    text = (REVISION_RULES_V2 + "\n\n" + diagnosis_text(diag, history) + "\n\n" + PACK_SCHEMA_HINT + "\n" + features_hint() + ("\n\n" + hints if hints else "")
             + "\n\n" + episode_digest(pack, recs, max_chars=14000) + "\n\n```yaml\n" + shown_pack(pack) + "\n```")
     parts: list[dict[str, Any]] = [{"type": "text", "text": text}]
     n = len(inc.decisions)
@@ -1299,7 +1324,7 @@ def improve_v2(chat, pack: Pack, inc: Incident, diag: dict[str, Any], recs: list
                     problem = f"checking it on the recorded frames: {v['why']}"
                 else:
                     feats = revision_features(v, cand, pack)
-                    if sensor is not None and holdout and not set(kinds) <= {"gate", "timing"}:
+                    if sensor is not None and holdout and not set(kinds) <= {"gate", "timing", "reflex"}:
                         # a gate or a timing change does not change what the decider is told, so re-asking it can
                         # only measure its own noise (Snake: 80% of keep/turn answers flip on a second asking)
                         ho = holdout_check(sensor, cand, holdout, log)
@@ -1325,23 +1350,29 @@ def improve_v2(chat, pack: Pack, inc: Incident, diag: dict[str, Any], recs: list
         if keep_rejected is not None and y:
             keep_rejected.mkdir(parents=True, exist_ok=True)
             (keep_rejected / f"rejected-{time.strftime('%H%M%S')}-{rnd}.yaml").write_text(y)
-        messages = messages + [{"role": "assistant", "content": text_out}, {"role": "user", "content": f"That revision was rejected: {problem}.\n{PACK_SCHEMA_HINT}\n{FEATURES_HINT}\nReturn the whole corrected pack.yaml in one fenced yaml block."}]
+        messages = messages + [{"role": "assistant", "content": text_out}, {"role": "user", "content": f"That revision was rejected: {problem}.\n{PACK_SCHEMA_HINT}\n{features_hint()}\nReturn the whole corrected pack.yaml in one fenced yaml block."}]
     return {"pack": None, "verdict": last_verdict, "yaml": last_yaml, "features": None, "attempts": attempts}
 
 
-FITS = {"timing": {"gate", "timing", "read"}, "turn_order": {"gate", "timing", "read"}, "perception": {"read"},
+FITS = {"timing": {"gate", "timing", "read", "reflex"}, "turn_order": {"gate", "timing", "read"}, "perception": {"read"},
         "instruction": {"paragraph", "question"}, "compiler": {"compiler_option", "read"}}
 
 
 def fits_diagnosis(kinds: list[str], diag: dict[str, Any] | None) -> str:
-    """'' when the rewrite makes a kind of change that can address the diagnosed cause, else why not. A strategy (or
-    unknown) cause takes any change; a turn-order cause is not fixed by a strategy rule, which is what the first loop
-    proposed eight times over."""
-    cat = (diag or {}).get("category")
-    need = FITS.get(str(cat))
+    """'' when the rewrite makes a kind of change that can address the diagnosed cause, else why not. A named fault
+    kind needs its feature (a late move needs a reflex, not a slower loop); without one the category decides. A
+    strategy (or unknown) cause takes any change; a turn-order cause is not fixed by a strategy rule, which is what the
+    first loop proposed eight times over."""
+    from .diagnose import FAULTS
+    fault = FAULTS.get(str((diag or {}).get("fault")))
+    if fault is not None:
+        need, what = fault["needs"], f"a {diag['fault']} fault"
+    else:
+        need, what = FITS.get(str((diag or {}).get("category"))), f"a {(diag or {}).get('category')} fault"
     if not need or set(kinds) & need:
         return ""
-    return f"the diagnosis is a {cat} fault, which needs a {' or '.join(sorted(need))} change; this rewrite only changes {', '.join(kinds) or 'nothing'}"
+    return (f"the diagnosis is {what}, which needs a {' or '.join(sorted(need))} change"
+            + (f" ({fault['fix'].rstrip('.')})" if fault is not None else "") + f"; this rewrite only changes {', '.join(kinds) or 'nothing'}")
 
 
 def change_kinds(candidate: Pack, incumbent: Pack) -> list[str]:
@@ -1361,6 +1392,17 @@ def change_kinds(candidate: Pack, incumbent: Pack) -> list[str]:
         out.append("paragraph")
     if json.dumps(candidate.questions, sort_keys=True) != json.dumps(incumbent.questions, sort_keys=True):
         out.append("question")
-    if any(json.dumps(candidate.raw.get(k), sort_keys=True) != json.dumps(incumbent.raw.get(k), sort_keys=True) for k in ("tick_hz", "settle", "settle_ticks", "reflex", "ask", "ask_when", "budget_ms", "frames")):
+    if any(json.dumps(candidate.raw.get(k), sort_keys=True) != json.dumps(incumbent.raw.get(k), sort_keys=True) for k in ("tick_hz", "settle", "settle_ticks", "ask", "ask_when", "budget_ms", "frames")):
         out.append("timing")
+    if json.dumps(candidate.raw.get("reflex"), sort_keys=True) != json.dumps(incumbent.raw.get("reflex"), sort_keys=True):
+        out.append("reflex")
     return out
+
+
+PLAY_ONLY_KINDS = {"timing", "reflex"}
+
+
+def timing_only(kinds: list[str]) -> bool:
+    """A change only play can judge (how fast or on what the loop acts, not what it decides): it gets a longer trial,
+    judged on the game's own score."""
+    return bool(kinds) and set(kinds) <= PLAY_ONLY_KINDS

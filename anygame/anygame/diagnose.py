@@ -14,7 +14,50 @@ from typing import Any
 from .pack import Pack
 
 CATEGORIES = ("timing", "turn_order", "perception", "strategy", "instruction", "compiler", "other")
-FIX_KINDS = ("rule", "read", "gate", "paragraph", "question", "compiler_option", "timing")
+FIX_KINDS = ("rule", "read", "gate", "paragraph", "question", "compiler_option", "timing", "reflex")
+
+# What each kind of fault looks like in the record, and the pack feature that answers it. The diagnosis names one of
+# these, and the rewrite check insists on a change of the matching kind: the loop knew the features existed but not
+# which fault each one answers (on Snake it diagnosed slow reactions and slowed the loop down instead of using reflex).
+FAULTS: dict[str, dict[str, Any]] = {
+    "late_move": {"category": "timing", "needs": {"reflex"},
+                  "when": "the right move was known (the rules or an earlier answer had it) but the decider's answer landed after the "
+                          "game had already moved on: the decider's latency is longer than the time to the danger",
+                  "fix": "reflex: { read, lte|equals|… } on the read that says danger is one step away, so the rules act on the "
+                         "decider's last answers at once; give a rule unless: where the reflex move would be wrong. "
+                         "Never slow the loop (tick_hz, settle) for this: waiting longer makes a late move later."},
+    "out_of_turn": {"category": "turn_order", "needs": {"gate"},
+                    "when": "the agent acted while it was not its turn, or on a frame taken before the game answered its previous "
+                            "move (marks or pieces that should alternate do not)",
+                    "fix": "a read that says whose turn it is (a count read: our marks minus theirs) and an act_when gate on it"},
+    "stale_frame": {"category": "timing", "needs": {"timing", "gate"},
+                    "when": "the agent acted on a frame that did not yet show its own previous action, so it repeated or "
+                            "contradicted it",
+                    "fix": "settle: screen_change (or settle_ticks), or an act_when gate on a read that shows the action landed"},
+    "short_sighted": {"category": "compiler", "needs": {"compiler_option"},
+                      "when": "the compiler ranks the options and the agent took a well-ranked one that looked fine now but led "
+                              "to a bad position a move or two later",
+                      "fix": "lookahead: true on a tetris read, depth: N on a slide read (rank by the result after the next piece or move)"},
+    "unsure_ranking": {"category": "compiler", "needs": {"compiler_option"},
+                       "when": "the ranking is a static heuristic and fails in tactical positions where simulating the game would tell",
+                       "fix": "playouts: N on a go read (win rate and margin per candidate), shown to the decider"},
+    "contradicting_text": {"category": "instruction", "needs": {"paragraph", "question"},
+                           "when": "the play paragraph or a question tells the decider to prefer something the compiler's ranking "
+                                   "does not score, so it skips the top-ranked option",
+                           "fix": "rewrite the paragraph or the question so it agrees with the ranking"},
+    "misread": {"category": "perception", "needs": {"read"},
+                "when": "a read disagrees with what the frame shows",
+                "fix": "fix the read (zone, colours, threshold, kind)"},
+    "bad_choice": {"category": "strategy", "needs": set(),
+                   "when": "the reads were right, nothing was late or out of turn, and the decision was simply poor",
+                   "fix": "a rule that excludes the bad move, or a clearer paragraph"},
+}
+
+
+def faults_text() -> str:
+    """The catalog as the diagnosis and the rewrite see it."""
+    return "FAULT KINDS (name one) and the feature that fixes each:\n" + "\n".join(
+        f"- {k} [{f['category']}]: when {f['when']}. Fix: {f['fix'].rstrip('.')}." for k, f in FAULTS.items())
 
 
 def _trim(v: Any, n: int = 300) -> str:
@@ -167,7 +210,7 @@ def history_text(history: list[dict[str, Any]], sig: str) -> str:
     lines = ["EARLIER DIAGNOSES (oldest first; reuse a cause_id when this loss has the same cause):"]
     for h in history[-12:]:
         tried = "; ".join(f"{t.get('fix_kind')}: {t.get('outcome')}" + (f" ({str(t.get('why'))[:90]})" if t.get("why") else "") for t in h.get("tried") or []) or "nothing tried"
-        lines.append(f"- episode {h.get('episode')}: {h.get('cause_id')} [{h.get('category')}] {str(h.get('cause'))[:160]} → {tried}")
+        lines.append(f"- episode {h.get('episode')}: {h.get('cause_id')} [{h.get('fault') or h.get('category')}] {str(h.get('cause'))[:160]} → {tried}")
     if same:
         lines.append(f"THIS LOSS REPEATS: episodes {', '.join(str(h.get('episode')) for h in same)} ended with the same last decisions (signature {sig}).")
     return "\n".join(lines)
@@ -180,15 +223,17 @@ DIAGNOSE_RULES = (
     "a play paragraph, questions, and compiler features that rank or time moves. Read the WHOLE episode: the fatal move "
     "is often fine and the fault is earlier. Check, in this order: (1) timing and turn order: did the agent act on a frame "
     "taken before the game had answered its previous move (marks or pieces that should alternate do not; a move landed "
-    "while it was not the agent's turn; an action seemed to be ignored)? (2) perception: does a read disagree with the "
+    "while it was not the agent's turn; an action seemed to be ignored), or did the decider's answer land too late (its "
+    "latency is longer than the time to the danger, though the right move was clear)? (2) perception: does a read disagree with the "
     "frames? (3) instruction: does the play paragraph or a question tell the agent something that contradicts the "
     "compiler's ranking or the rules (look at how often it took the first-ranked option and why it skipped it)? "
     "(4) compiler: would a feature the pack does not use (lookahead, a count read, a reflex, playouts) have changed the "
     "outcome? (5) strategy: was a decision bad given correct reads? Name ONE cause, with the ticks that show it. "
     "If the loss repeats and the cause you would name was already diagnosed and its fixes were rejected, or kept without "
     "the score improving, that cause is not what loses the game: name the next one on the list instead.\n"
+    + "\n" + faults_text() + "\n"
     "Answer with one JSON object, no prose around it:\n"
-    '{"cause_id": "<short-kebab-id, reuse an earlier one if this is the same cause>", "category": "<' + "|".join(CATEGORIES) + '>", '
+    '{"cause_id": "<short-kebab-id, reuse an earlier one if this is the same cause>", "fault": "<' + "|".join(FAULTS) + '>", "category": "<' + "|".join(CATEGORIES) + '>", '
     '"cause": "<one sentence>", "evidence": [{"tick": <n>, "what": "<what the record shows at that tick>"}], '
     '"first_bad_tick": <n>, "fix_kind": "<' + "|".join(FIX_KINDS) + '>", "fix": "<one sentence: the change to the pack>"}')
 
@@ -203,7 +248,8 @@ def parse_diagnosis(text: str) -> dict[str, Any] | None:
         return None
     if not isinstance(d, dict) or not d.get("cause"):
         return None
-    d["category"] = d.get("category") if d.get("category") in CATEGORIES else "other"
+    d["fault"] = d.get("fault") if d.get("fault") in FAULTS else None
+    d["category"] = d.get("category") if d.get("category") in CATEGORIES else (FAULTS[d["fault"]]["category"] if d["fault"] else "other")
     d["fix_kind"] = d.get("fix_kind") if d.get("fix_kind") in FIX_KINDS else "rule"
     d["cause_id"] = re.sub(r"[^a-z0-9-]+", "-", str(d.get("cause_id") or d["category"]).lower()).strip("-")[:48] or d["category"]
     ev = []
@@ -241,14 +287,16 @@ def diagnose(chat, pack: Pack, recs: list[dict[str, Any]], frames: list[tuple[in
              "first_bad_tick": last.get("tick"), "fix_kind": "rule", "fix": "", "parsed": False}
     d["signature"] = sig
     d["repeats"] = sum(1 for h in (history or []) if h.get("signature") == sig or h.get("cause_id") == d["cause_id"])
-    log(f"diagnose: {d['cause_id']} [{d['category']}] {d['cause'][:160]} · evidence ticks {[e['tick'] for e in d['evidence']]} · fix {d['fix_kind']}: {str(d.get('fix'))[:120]}"
+    log(f"diagnose: {d['cause_id']} [{d['category']}{'/' + d['fault'] if d.get('fault') else ''}] {d['cause'][:160]} · evidence ticks {[e['tick'] for e in d['evidence']]} · fix {d['fix_kind']}: {str(d.get('fix'))[:120]}"
         + (f" · seen {d['repeats']}× before" if d["repeats"] else ""))
     return d
 
 
 def diagnosis_text(d: dict[str, Any], history: list[dict[str, Any]] | None = None) -> str:
     """The diagnosis as the revision prompt's first section, with what was tried before for the same cause."""
-    lines = [f"DIAGNOSIS (from reading the whole episode): cause {d['cause_id']} [{d['category']}]: {d['cause']}",
+    f = FAULTS.get(str(d.get("fault")))
+    lines = [f"DIAGNOSIS (from reading the whole episode): cause {d['cause_id']} [{d['category']}]: {d['cause']}"
+             + (f"\nFault kind: {d['fault']}. The feature that fixes it: {f['fix']}" + (f" The rewrite must make a {' or '.join(sorted(f['needs']))} change." if f["needs"] else "") if f else ""),
              "Evidence: " + "; ".join(f"tick {e['tick']}: {e['what']}" for e in d.get("evidence") or []),
              f"Proposed fix ({d.get('fix_kind')}): {d.get('fix')}"]
     before = [t for h in (history or []) if h.get("cause_id") == d["cause_id"] or h.get("signature") == d.get("signature") for t in (h.get("tried") or [])]

@@ -220,3 +220,43 @@ def test_a_timing_change_goes_to_play_without_re_asking_the_decider():
     s = Sensor()
     v = verify_v2(variant(base, tick_hz=2), base, inc, sensor=s)
     assert v["ok"] and "only play can judge it" in v["why"] and s.calls == 0
+
+
+def no_reflex():
+    raw = yaml.safe_load(dump_pack(full().raw))
+    raw.pop("reflex", None)
+    return load_pack_text(dump_pack(raw), "snake-noreflex")
+
+
+def test_a_late_move_fault_needs_a_reflex_not_a_slower_loop():
+    from anygame.learn import fits_diagnosis, timing_only
+    d = parse_diagnosis('{"cause": "the turn landed after the step", "fault": "late_move", "evidence": [{"tick": 20, "what": "x"}]}')
+    assert d["fault"] == "late_move" and d["category"] == "timing"
+    assert "late_move" in diagnosis_text(d) and "reflex" in diagnosis_text(d)
+    slower = variant(no_reflex(), tick_hz=1)
+    kinds = change_kinds(slower, no_reflex())
+    assert kinds == ["timing"] and fits_diagnosis(kinds, d).startswith("the diagnosis is a late_move fault, which needs a reflex change")
+    kinds = change_kinds(full(), no_reflex())
+    assert kinds == ["reflex"] and fits_diagnosis(kinds, d) == "" and timing_only(kinds)
+    assert fits_diagnosis(["gate", "read"], {"fault": "out_of_turn"}) == "" and fits_diagnosis(["rule"], {"fault": "short_sighted"})
+    assert parse_diagnosis('{"cause": "x", "fault": "nonsense"}')["fault"] is None
+
+
+def test_a_reflex_passes_where_it_fires_at_the_fatal_tick_and_fails_where_it_never_does():
+    inc = snake_incident()
+    v = verify_v2(full(), no_reflex(), inc)
+    assert v["ok"] and "the reflex fires" in v["why"], v
+    always = variant(no_reflex(), reflex={"read": "status", "equals": "playing"})
+    assert not verify_v2(always, no_reflex(), inc)["ok"]
+    never = variant(no_reflex(), reflex={"read": "status", "equals": "paused"})
+    v2 = verify_v2(never, no_reflex(), inc)
+    assert not v2["ok"] and "acts exactly as before" in v2["why"], v2
+
+
+def test_a_timing_trial_is_judged_on_the_game_score_first():
+    l = {"won": False, "lost": True, "tasks_done": 0, "ticks": 50}
+    alive = {"won": False, "lost": False, "tasks_done": 0, "ticks": 400}
+    trial, inc = [dict(l, score=120)] * 3 + [dict(alive, score=90)] * 2, [dict(alive, score=60)] * 3 + [dict(l, score=40)] * 2
+    assert trial_verdict(trial, inc)[0] is False                     # more deaths: worse by outcome
+    keep, why = trial_verdict(trial, inc, by_score=True)
+    assert keep and "median score 120" in why
