@@ -1,6 +1,36 @@
-# Go rounds two and three: playout results for Jev's candidate moves (2026-10-03)
+# Go rounds two to four: playout results for Jev's candidate moves (2026-10-03)
 
-## Round three: a fixed white and focused playouts (the current pack)
+## Round four: follow the playout leader past a 0.06 gap (the current pack)
+
+Only the pack paragraph changed: when the move with the highest `win` beats the first `best` move's `win` by 0.06 or
+more, play it even if its `worth` is lower; below 0.06, keep the first `best` move. The 0.06 comes from rechecking all
+432 round-three positions where the two tops differed with 512 playouts each:
+
+| In-game win gap (leader minus `worth` top) | Positions | Leader better | Leader worse |
+|---|---|---|---|
+| under 0.03 | 124 | 14 | 10 |
+| 0.03 to 0.06 | 77 | 25 | 11 |
+| 0.06 to 0.10 | 109 | 43 | 6 |
+| 0.10 to 0.15 | 51 | 20 | 2 |
+| 0.15 and up | 71 | 53 | 4 |
+
+Below 0.06 the leader is close to a coin flip; from 0.06 it was better 116 times and worse 12. How far the leader
+trailed on `worth` made no difference.
+
+Same 16 seeds, same fixed white (`ai=mc&playouts=400`):
+
+| Pack | Won | Lost | Mean final lead | Median | Cost |
+|---|---|---|---|---|---|
+| v3, no playouts | 3 | 13 | −6.5 | −5.5 | $0.064 |
+| v5, focused playouts | 8 | 8 | +12.5 | +0.5 | $0.077 |
+| **v6, follow the leader past 0.06** | **9** | **7** | **+17.0** | **+10.5** | $0.078 |
+
+Jev now follows the rule more often: where the gap was 0.06 or more, it played the leader 132 of 234 times (v5:
+78 of 231), and it took the `worth` top 454 of 628 free choices (v5: 517). It is still not mechanical: 102 times it
+kept a lower-`win` move past the gap. One more win than v5 is within noise; the median lead moved most (+0.5 to
++10.5). Kept, since it did not do worse. Logs: `/mnt/project-files/anygame/go-run-logs/v6-follow-leader/`.
+
+## Round three: a fixed white and focused playouts
 
 - White can now play a fixed number of playouts a move (`go.html?ai=mc&playouts=400`) instead of 500 ms of
   thinking, so it plays the same on any machine and the same seed replays the same game for the same black moves.
