@@ -51,7 +51,10 @@ def outcome(recs: list[dict[str, Any]], n: int, version: int, score_read: str | 
         # a dotted path into the typed frame (piece.lines_cleared), the last value read: the last record is often
         # the game-over screen, where the read is gone (not the largest: one OCR misread would be the score)
         seen = [_get_path(r.get("screen") or {}, score_read) for r in recs]
-        nums = [x for x in seen if isinstance(x, (int, float)) and not isinstance(x, bool)]
+        # where the page reports its own state (ANYGAME_LOG_TRUTH), the game's own score beats an OCR read of it
+        truth = [_get_path(r.get("truth") or {}, score_read.split(".")[-1]) for r in recs if isinstance(r.get("truth"), dict)]
+        truth = [x for x in truth if isinstance(x, (int, float)) and not isinstance(x, bool)]
+        nums = truth or [x for x in seen if isinstance(x, (int, float)) and not isinstance(x, bool)]
         s = nums[-1] if nums else None
     return {"n": n, "ticks": len(recs), "decisions": len(dec), "reason": reason, "score": s if isinstance(s, (int, float)) else None,
             "won": bool(WON.search(reason)) and not LOST.search(reason), "lost": bool(LOST.search(reason)),

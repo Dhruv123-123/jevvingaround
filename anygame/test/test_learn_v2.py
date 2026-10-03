@@ -260,3 +260,10 @@ def test_a_timing_trial_is_judged_on_the_game_score_first():
     assert trial_verdict(trial, inc)[0] is False                     # more deaths: worse by outcome
     keep, why = trial_verdict(trial, inc, by_score=True)
     assert keep and "median score 120" in why
+
+
+def test_the_page_s_own_score_beats_an_ocr_read_of_it():
+    recs = [{"tick": 1, "screen": {"score": 100}, "truth": {"score": 10}}, {"tick": 2, "screen": {"score": 1660}, "truth": {"score": 160}},
+            {"tick": 3, "action": "stop", "reason": "status is dead", "screen": {}}]
+    assert outcome(recs, 1, 1, "score")["score"] == 160
+    assert outcome([{k: v for k, v in r.items() if k != "truth"} for r in recs], 1, 1, "score")["score"] == 1660
