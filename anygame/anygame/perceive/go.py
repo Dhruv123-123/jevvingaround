@@ -19,7 +19,9 @@ stones, an atari white cannot escape earns twice the stones and one it can escap
 only means something once the board is settled; `estimate` is the mid-game guess.
 `playouts` (opt-in, `playouts: n`): each `best` move and each capture or save is played out n times to the end by
 both sides moving at random (never filling an own eye, never suicide, the same policy as the page's `ai=mc` white),
-and gets our win rate and mean final margin after komi. Seeded from the board, so the same board reads the same.
+and gets our win rate, mean final margin after komi and the games played (`n`). `playouts_top: k` with
+`playouts_top_n: m` plays the k best of that first pass on to m games each. Seeded from the board, so the same board
+reads the same.
 Cells are c<col>r<row> as in every grid read; r1 is the top row."""
 from __future__ import annotations
 import re
@@ -254,33 +256,52 @@ def _playout(g: list[int], p: int, rng: Any, nb: list[list[int]], dg: list[list[
     return s[1] - s[2]
 
 
-_PLAYOUT_CACHE: dict[str, dict[str, dict[str, float]]] = {}
+_PLAYOUT_CACHE: dict[str, dict[str, list[float]]] = {}
 
 
 def playouts(b: dict[Pt, str], cands: list[Pt], us: str, them: str, w: int, h: int, empty: str, komi: float,
-             n: int) -> dict[str, dict[str, float]]:
+             n: int, top: int = 0, top_n: int = 0) -> dict[str, dict[str, float]]:
     """For each candidate move of ours: n random games from the board after it (white to move), our win rate and mean
-    margin after komi. Cached per board, and seeded from it, so a board that has not changed costs nothing."""
+    margin after komi. With `top`, the `top` best by that first pass are played on to `top_n` games each, so the
+    close contenders separate. Cached per board, and seeded from it, so a board that has not changed costs nothing."""
     import random
     flat = [1 if b.get((c, r)) == us else 2 if b.get((c, r)) == them else 0 for r in range(1, h + 1) for c in range(1, w + 1)]
-    key = f"{w}x{h}:{n}:{komi}:" + "".join(map(str, flat))
-    out = _PLAYOUT_CACHE.get(key, {})
-    todo = [p for p in cands if cell(p) not in out]
-    if todo:
-        nb, dg = _geometry(w, h)
-        for p in todo:
+    key = f"{w}x{h}:{komi}:" + "".join(map(str, flat))
+    runs = _PLAYOUT_CACHE.setdefault(key, {})
+    if len(_PLAYOUT_CACHE) > 64:
+        _PLAYOUT_CACHE.clear()
+        _PLAYOUT_CACHE[key] = runs
+    geo: list[Any] = []
+    starts: dict[str, list[int] | None] = {}
+
+    def more(p: Pt, upto: int) -> None:
+        k = cell(p)
+        got = runs.setdefault(k, [])
+        if len(got) >= upto:
+            return
+        if k not in starts:
             res = play(b, p, us, them, w, h, empty)
-            if res is None:
-                continue
-            g = [1 if res[0].get((c, r)) == us else 2 if res[0].get((c, r)) == them else 0
-                 for r in range(1, h + 1) for c in range(1, w + 1)]
-            rng = random.Random(key + cell(p))
-            margins = [_playout(g, 2, rng, nb, dg) - komi for _ in range(n)]
-            out[cell(p)] = {"win": round(sum(1 for m in margins if m > 0) / n, 2), "margin": round(sum(margins) / n, 1)}
-        if len(_PLAYOUT_CACHE) > 64:
-            _PLAYOUT_CACHE.clear()
-        _PLAYOUT_CACHE[key] = out
-    return {cell(p): out[cell(p)] for p in cands if cell(p) in out}
+            starts[k] = None if res is None else [1 if res[0].get((c, r)) == us else 2 if res[0].get((c, r)) == them else 0
+                                                    for r in range(1, h + 1) for c in range(1, w + 1)]
+        if starts[k] is None:
+            return
+        if not geo:
+            geo.extend(_geometry(w, h))
+        rng = random.Random(f"{key}{k}{len(got)}")      # seeded by the games it already has: same board, same games
+        got.extend(_playout(starts[k], 2, rng, geo[0], geo[1]) - komi for _ in range(upto - len(got)))
+
+    def summary(k: str) -> dict[str, float]:
+        m = runs[k]
+        return {"win": round(sum(1 for x in m if x > 0) / len(m), 2), "margin": round(sum(m) / len(m), 1), "n": len(m)}
+
+    for p in cands:
+        more(p, n)
+    done = [p for p in cands if runs.get(cell(p))]
+    if top and top_n > n:
+        lead = sorted(done, key=lambda p: (-summary(cell(p))["win"], -summary(cell(p))["margin"]))[:top]
+        for p in lead:
+            more(p, top_n)
+    return {cell(p): summary(cell(p)) for p in done}
 
 
 def cell(p: Pt) -> str:
@@ -379,7 +400,8 @@ def read(src: Any, r: dict[str, Any]) -> dict[str, Any] | None:
     if n_po > 0:
         pts = {cell(p): p for p in order}
         cands = list(dict.fromkeys(best + captures + saves))
-        extra["playouts"] = playouts(b, [pts[c] for c in cands], us, them, w, h, empty, komi, n_po)
+        extra["playouts"] = playouts(b, [pts[c] for c in cands], us, them, w, h, empty, komi, n_po,
+                                     int(r.get("playouts_top", 0)), int(r.get("playouts_top_n", 0)))
     return {
         **extra,
         "legal": legal, "good": good, "captures": captures, "saves": saves, "self_atari": self_atari, "eyes": eyes,

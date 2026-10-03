@@ -55,7 +55,9 @@ read:
     them: W
     empty: .
     komi: 6.5
-    playouts: 64
+    playouts: 32
+    playouts_top: 3
+    playouts_top_n: 160
 act:
 - id: place
   kind: tap
@@ -83,12 +85,14 @@ play: 'Go on a 9x9 board. We are B (black), the page is W (white); komi 6.5, are
   (ladders, chases): `danger` lists our stones white can chase down if it moves first, `doomed` moves that white could then
   chase down (rated far down), and an atari white cannot escape counts double; `estimate.lead` is black''s rough lead after
   komi, `score.lead` the exact area count once the board is settled. `playouts` gives each `best` move (and each
-  capture or save) the result of 64 games played out from it to the end by random moves on both sides: `win` is black''s
-  win rate (0 to 1), `margin` black''s mean final lead after komi. It sees the whole board to the end, which `worth` does not;
-  `worth` reads ladders and chases exactly, which random games do not. Weigh both: a clearly higher `win` (by 0.1 or more)
-  or `margin` (by 5 or more) is a better move unless its `worth` is far lower. Priorities: capture the most stones; else save our chains
-  in atari; else play the `best` move that is strongest on `worth` and `playouts` together, preferring one that keeps our
-  stones connected. Never pass
+  capture or save) the result of games played out from it to the end by random moves on both sides: `win` is black''s
+  win rate (0 to 1), `margin` black''s mean final lead after komi, `n` the games played. Every candidate gets 32 games;
+  the three leading ones get 160, so their `win` is about twice as exact (a gap of 0.06 between two of them is real,
+  a gap on 32 games is rough). It sees the whole board to the end, which `worth` does not; `worth` reads ladders and chases exactly, which random
+  games do not. Rule: when the move with the highest `win` beats the first
+  `best` move''s `win` by 0.06 or more, play it, even if its `worth` is lower; below 0.06 the two are a coin flip, so
+  keep the first `best` move. Priorities: capture the most stones; else save our chains
+  in atari; else play the `best` move the rule above picks. Never pass
   while `good` lists a move.
 
   '

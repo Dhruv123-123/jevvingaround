@@ -42,7 +42,8 @@ const step=()=>{if(passes>=2||moves>=MAX)end();turn=over?turn:3-turn;render();if
 // move that neither fills its own eye nor puts itself in atari, mildly preferring points next to stones; pass when
 // nothing is left. ai=mc: the same heuristic picks a capture or a save outright; otherwise its top candidates each
 // get quick random playouts to the end, round robin for `think` ms (default 500), and the best win rate is played.
-const AI=q.get("ai")||"heuristic",THINK=Number(q.get("think")||500);
+// playouts=N (with ai=mc): exactly N playouts a move instead of `think` ms, so white plays the same on any machine
+const AI=q.get("ai")||"heuristic",THINK=Number(q.get("think")||500),PLAYOUTS=Number(q.get("playouts")||0);
 const playout=(g,p)=>{g=g.slice();let pass=0,n=0;const empties=[];
  while(pass<2&&n<150){empties.length=0;for(let i=0;i<N*N;i++)if(!g[i])empties.push(i);let moved=false;
   for(let k=empties.length;k>0;k--){const j=(rnd()*k)|0,i=empties[j];empties[j]=empties[k-1];if(eye(g,i,p))continue;
@@ -56,7 +57,7 @@ const ai=()=>{if(over||turn!==2)return;const cands=[];for(let i=0;i<N*N;i++){con
   scored.push([r.taken*100+(inAtari&&r.libs>=2?60:0)+(r.libs===1&&!r.taken?-1000:0)+(nb(i).some(n=>grid[n])?3:0)+rnd()*8,i,r])}
  scored.sort((a,b)=>b[0]-a[0]);let best=scored.length&&scored[0][0]>-500?scored[0]:null;
  if(best&&AI==="mc"&&best[0]<60){const top=scored.filter(c=>c[0]>-500).slice(0,12),wins=top.map(()=>0),runs=top.map(()=>0);const t0=performance.now();
-  for(let k=0;performance.now()-t0<THINK;k++){const c=k%top.length;runs[c]++;if(playout(top[c][2].h,1))wins[c]++}
+  for(let k=0;PLAYOUTS?k<PLAYOUTS:performance.now()-t0<THINK;k++){const c=k%top.length;runs[c]++;if(playout(top[c][2].h,1))wins[c]++}
   let bi=0;for(let c=1;c<top.length;c++)if(wins[c]/runs[c]>wins[bi]/runs[bi])bi=c;best=top[bi];window.__mc={runs:runs.reduce((a,b)=>a+b,0),rate:wins[bi]/runs[bi]}}
  if(!best){passes++;moves++;last=-1}else commit(best[2],best[1],2);step()};
 window.__play=(i)=>{if(over||turn!==1)return false;const r=tryPlay(grid,i,1);if(!r)return false;commit(r,i,1);step();return true};
