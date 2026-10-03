@@ -109,7 +109,7 @@ def _save_png(pb, path: Path) -> None:
 
 
 def run_one(suite: dict[str, Any], gid: str, decider: str, seed: int, out: Path, standin: StandIn | None = None,
-            scale: float = 1.0, fetch: bool = True, pack_name: str | None = None) -> dict[str, Any]:
+            scale: float = 1.0, fetch: bool = True, pack_name: str | None = None, goals: bool = True) -> dict[str, Any]:
     from anygame.device.pyboy import PyBoyDevice
     from anygame.loop import Agent
     from anygame.pack import load_pack
@@ -143,6 +143,12 @@ def run_one(suite: dict[str, Any], gid: str, decider: str, seed: int, out: Path,
         pack = load_pack(work / "pack")
         sensor = open_decider(decider, seed, standin)
         agent = Agent(pack, device, sensor, None, background=False)
+        gb = getattr(agent, "goalbook", None)
+        if gb is not None and goals and os.environ.get("ANYGAME_LLM_BASE"):
+            # a pack that writes goals from dialogue gets the chat model (Azure, ANYGAME_LLM_*), exactly as `anygame play`
+            # gives it; it reads what the game said and never presses a button
+            from anygame.chat import Chat
+            gb.chat = Chat(timeout=90)
         grader = Grader(game)
         pb = device._pb                          # the grader's view; the agent only ever gets device.frame()
         mem = pb.memory.__getitem__
@@ -194,6 +200,7 @@ def run_one(suite: dict[str, Any], gid: str, decider: str, seed: int, out: Path,
         row.update(score=round(grader.score, 4), reached=list(grader.reached), reached_at=grader.reached, stop=stop,
                    steps=steps, presses=presses, frames=device.frames, wall_s=round(time.perf_counter() - t0, 1),
                    decider_calls=calls, cost_usd=round(agent.total_cost, 6), sensor_errors=agent.errors,
+                   goal_writer=(gb.report() if gb is not None and gb.chat is not None else None),
                    distinct_screens=len(screens), unchanged_screen_rate=round(noop / max(1, steps), 3),
                    stalled_before=(nxt or {}).get("desc"),
                    frames_since_progress=device.frames - (last["frame"] if last else 0))
@@ -210,6 +217,7 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--games", help="comma-separated game ids (default: every game in suite.yaml)")
     ap.add_argument("--seeds", help="comma-separated seeds (default: suite.yaml)")
     ap.add_argument("--pack", help="the agent's pack (default: suite.yaml's); a different pack is reported as its own column, <pack>+<decider>")
+    ap.add_argument("--no-goals", action="store_true", help="do not give a goal-writing pack its chat model (generic goal only)")
     ap.add_argument("--out", help="output folder (default: runs/<decider>)")
     ap.add_argument("--scale", type=float, default=1.0, help="multiply the frame/press/time/call budget (a quick check: 0.1)")
     ap.add_argument("--no-fetch", action="store_true", help="never download a ROM; use only what is in the cache")
@@ -228,7 +236,7 @@ def main(argv: list[str] | None = None) -> None:
     try:
         for gid in games:
             for seed in seeds:
-                row = run_one(suite, gid, a.decider, seed, out, standin, a.scale, fetch=not a.no_fetch, pack_name=a.pack)
+                row = run_one(suite, gid, a.decider, seed, out, standin, a.scale, fetch=not a.no_fetch, pack_name=a.pack, goals=not a.no_goals)
                 with open(out / "runs.jsonl", "a") as f:
                     f.write(json.dumps(row) + "\n")
                 brief = {k: row.get(k) for k in ("game", "decider", "seed", "score", "reached", "stop", "presses", "wall_s", "skipped") if row.get(k) is not None}
