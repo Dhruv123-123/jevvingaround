@@ -471,7 +471,7 @@ In 3e696e6, "lost" means the game had a position and lost it, so an endless scre
 
 **No top-pick run hits the clock any more, cold or warm.** Every Renegade Rush cold run now ends on the 1,500-press budget.
 
-Its explores happen as often as before (25–40 per 100 steps), but they are cheap now: about 1 s each, down from 3–12 s. That is because they return "not a menu" before the grid pass and the play-outs.
+Its explores happen as often as before (25–40 per 100 steps), but they are cheap now: about 1 s each, down from 2.5–12 s. That is because they return "not a menu" before the grid pass and the play-outs.
 
 The two Jev runs that still hit the clock were at 1,345 and 1,271 of their 1,500 presses, close to the press budget. At 80–90 presses per wall-minute, Jev runs are now limited by Jev's own pace (one call per press) more than by the agent.
 
