@@ -320,6 +320,19 @@ class PyBoyDevice(Device):
             after_ = ram(self._pb.memory)
             self.discoverer.press(b, before, after_, full=hold is None or hold >= 8, continues=True)
 
+    def hold_keys(self, keys: list[str], frames: int) -> None:
+        """Hold several buttons together for `frames` frames; they stay down (across calls) until release_keys.
+        For learning what combinations do (run + jump); the discoverer is not taught from these."""
+        self._at = None
+        for k in keys:
+            self._pb.button_press(self._button(k))
+        self._tick(int(frames))
+
+    def release_keys(self, keys: list[str]) -> None:
+        self._at = None
+        for k in keys:
+            self._pb.button_release(self._button(k))
+
     def key(self, name, hold_ms=0, **_):
         if hold_ms:
             self.press(name, hold=max(1, int(hold_ms / 1000 * 60)))     # the Game Boy runs ~60 frames a second

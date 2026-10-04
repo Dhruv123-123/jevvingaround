@@ -416,3 +416,18 @@ def test_pyboy_snapshot_is_reused_until_the_game_moves():
         assert d.snapshot() is a and d.frames == a[1]
     finally:
         d.close()
+
+
+def test_pyboy_holds_several_buttons_together():
+    pytest.importorskip("pyboy")
+    from anygame.device import open_device
+    d = open_device("pyboy://" + os.path.join(ROOT, "roms", "2048gb", "2048.gb") + "?boot=60&clock=game&step=2", None)
+    try:
+        f0 = d.frames
+        a = d.snapshot()
+        d.hold_keys(["a", "right"], 6)
+        d.hold_keys(["a", "right"], 4)                  # still down: held 10 frames in all
+        d.release_keys(["a", "right"])
+        assert d.frames == f0 + 10 and d.snapshot() is not a
+    finally:
+        d.close()
