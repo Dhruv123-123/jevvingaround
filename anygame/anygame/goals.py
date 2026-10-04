@@ -204,8 +204,9 @@ class GoalBook:
     def impose(self, goal: dict[str, Any], tick: int, values: dict[str, Any], source: str = "upkeep") -> bool:
         """A goal from the run itself, not the writer (a number to get back up, anygame/upkeep.py): set unless the
         current goal already checks the same condition. Returns whether it was set."""
-        if self.current is not None and self.current.get("done") == goal.get("done"):
-            return False
+        if self.current is not None and (self.current.get("done") == goal.get("done") or
+                                         self.current.get("source") == source):
+            return False        # one upkeep goal at a time: two names for one number must not swap goals every tick
         if self.current is not None:
             self._close(self.current, "replaced", tick)
         self._set({**goal, "source": source}, tick, values)

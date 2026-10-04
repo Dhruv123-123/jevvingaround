@@ -459,6 +459,8 @@ def test_upkeep_advice_becomes_the_goal_and_menus_put_exits_first(monkeypatch):
     goal = {"instruction": "Get HP back up", "done": {"number": {"name": "HP", "share_at_least": 0.9}}, "target": None}
     assert gb.impose(goal, 5, walk) and gb.current["source"] == "upkeep"
     assert not gb.impose(goal, 6, walk)
+    other = {**goal, "done": {"number": {"name": "HP (2)", "share_at_least": 0.9}}}
+    assert not gb.impose(other, 7, walk) and len(gb.goals) == 1          # not a new goal every tick
     tr = MenuTracker({"kind": "menu"})
     tr.leave = True
     from anygame.upkeep import rank_exits
