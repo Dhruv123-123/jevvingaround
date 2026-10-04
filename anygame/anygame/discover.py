@@ -95,6 +95,8 @@ class Discoverer:
         self.follows_pos = z()           # changed back by the step back: drawn around the player, not the map
         self._from, self._to, self._old = np.full(N, -1, np.int64), np.full(N, -1, np.int64), z()
         self._hist = np.zeros(N, np.uint64)
+        self._seen = np.zeros((N, 256), bool)   # the values each byte has taken after a press
+        self.n_values = z()
         self.full_any = z()              # changed by a whole press (not a probe from a save state)
         self.other_presses = 0
         self.walks = 0
@@ -116,12 +118,33 @@ class Discoverer:
         return {(ax, w): {"n": 0, "agree": z(), "moved": z(), "n_other": 0, "still": z()} for ax in "xy" for w in (1, 2)}
 
     # ---- evidence --------------------------------------------------------------------------------------
-    def press(self, button: str, before: np.ndarray, after: np.ndarray, full: bool = True) -> None:
+    def press(self, button: str, before: np.ndarray, after: np.ndarray, full: bool = True, continues: bool = False) -> None:
         """A press with work RAM before and after. `full`: a whole step was played (not a short probe from a save
-        state), so the position change is what one step does and teaches the step size."""
+        state), so the position change is what one step does and teaches the step size. `continues`: the game goes
+        on from `after`, so the press is judged by the RAM just before whatever comes next: a tap starts a step
+        that Pokemon finishes (and writes the position) after the press is over."""
         if self.trace is not None:
-            self.trace.append(("p", button, _z(before), _z(after), full))
+            self.trace.append(("p", button, _z(before), _z(after), full, continues))
+        if getattr(self, "_pending", None):
+            self._pending[2] = before                   # where the game had got to when the next press came
+        self._settle()
+        if continues:
+            self._pending = [button, before, after, full]
+        else:
+            self._press(button, before, after, full)
+
+    def _settle(self) -> None:
+        if getattr(self, "_pending", None):
+            button, before, after, full = self._pending
+            self._pending = None
+            self._press(button, before, after, full)
+
+    def _press(self, button: str, before: np.ndarray, after: np.ndarray, full: bool) -> None:
         d = DIRS.get(button)
+        v = after.astype(np.intp) & 0xFF
+        new = ~self._seen[np.arange(N), v]
+        self._seen[np.arange(N), v] = True
+        self.n_values += new
         if "x" in self.found and "y" in self.found:
             c = after != before
             if d and (d[0] or d[1]):
@@ -282,7 +305,9 @@ class Discoverer:
             sc = self._score(self.st[(ax, w)])
             if sc is None:
                 continue
-            score = sc[0] * (sc[1] > MOVED)
+            # a position walks through many values; the direction the player faces or last pressed (a sprite's
+            # step vector: -1, 0, 1) follows the d-pad as well when presses turn the player more than they move him
+            score = sc[0] * (sc[1] > MOVED) * (self.n_values >= 4)
             for s in self.segs + [self.seg]:
                 v = self._score(s[(ax, w)])
                 if v is None or not self._walked(s):

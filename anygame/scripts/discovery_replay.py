@@ -33,7 +33,7 @@ d = Discoverer()
 rows = []
 for ev in trace:
     if ev[0] == "p":
-        d.press(ev[1], _unz(ev[2]), _unz(ev[3]), *(ev[4:5] or [True]))
+        d.press(ev[1], _unz(ev[2]), _unz(ev[3]), *(ev[4:] or [True]))
     else:
         now = _unz(ev[2])
         d.frame(now, ev[1])
