@@ -69,6 +69,12 @@ area" can be met, and Viridian City will be another join.
 
 ## Call sites (long-horizon thread: `perceive/world.py`, the runner's walk)
 
+The exact change is in `pokemon-red/world-places.patch`, applied from the repo root with `git apply`. It changes
+`world.py` and replaces one test in `test_longhorizon.py`, whose old test checked the permanent alias. The full suite
+passes with it applied (152 passed, 4 skipped). Only a walk step's own read passes `moves`. Other reads (the
+loop's read, held walks offered by the menu) pass none, so a name change with movement on those reads counts as a
+door, not a rename.
+
 1. `World.__init__`: `self.book = PlaceBook()`.
 2. `World.tile_of`: replace `return self._place(t, stepping)` with
    `pid = self.book.see(t[0], t[1], t[2], moves=<directions pressed since the last read>, walking=stepping)`, then
