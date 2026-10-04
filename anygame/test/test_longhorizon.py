@@ -536,3 +536,17 @@ def test_upkeep_need_without_a_refill_place_asks_the_writer_how():
     g = gb.current
     assert g["instruction"] == "Talk to Mom at home" and g["done"] == goal["done"] and g["target"] == {"place": 3}
     assert g["source"] == "upkeep" and not gb.impose(goal, 6, walk)
+
+
+def test_upkeep_tracks_come_back_from_a_checkpoint_with_their_sets(tmp_path):
+    """JSON stores a Track's set of drop sizes as a list; a resumed run adds to it, so it must be a set again."""
+    import types
+    from anygame.memory import load_checkpoint
+    from anygame.upkeep import Upkeep, Track
+    t = Track("HP")
+    t.drops.add(3)
+    (tmp_path / "run.json").write_text(json.dumps({"tick": 9, "worlds": {}, "upkeep": {"HP": dict(t.__dict__, drops=[3])}}))
+    agent = types.SimpleNamespace(device=object(), worlds={}, keep=Upkeep())
+    load_checkpoint(agent, str(tmp_path))
+    agent.keep.tracks["HP"].drops.add(5)
+    assert agent.keep.tracks["HP"].drops == {3, 5}

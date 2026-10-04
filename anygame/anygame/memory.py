@@ -156,7 +156,11 @@ def load_checkpoint(agent, path: str) -> dict[str, Any]:
         from .upkeep import Track
         for n, td in d["upkeep"].items():
             t = Track(n)
+            fresh = dict(t.__dict__)
             t.__dict__.update(td)
+            for k, v in fresh.items():      # JSON keeps sets as lists: put back the type a new Track has
+                if isinstance(v, set) and isinstance(getattr(t, k), list):
+                    setattr(t, k, set(getattr(t, k)))
             t.since_low = [tuple(x) for x in t.since_low]
             agent.keep.tracks[n] = t
     if d.get("glyphs"):
