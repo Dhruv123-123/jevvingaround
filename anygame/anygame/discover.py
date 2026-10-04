@@ -243,10 +243,25 @@ class Discoverer:
                     # back through a door to a place seen before: its id comes back, a landing spot's tiles rarely
                     self.returned += back | self._prev_back
             else:
-                self.by_other += c                      # a cutscene after a talk can move the player to another map
+                # a button that moves the player far and redraws the screen (fainting back to the last town, a
+                # teleport, a cutscene that ends in another map) goes through the same map change a door does; a
+                # cutscene that walks the player across the same map redraws nothing
+                p0 = (self.decode(before, "x"), self.decode(before, "y"))
+                p1 = (self.decode(after, "x"), self.decode(after, "y"))
+                cell = self.found.get("cell") or 1
+                # (a position of zero on both axes is cleared memory, a reset or a title screen, not a place)
+                warp = None not in p0 + p1 and abs(p1[0] - p0[0]) + abs(p1[1] - p0[1]) > 2 * cell and \
+                    self.transitions != getattr(self, "_trans_seen", 0) and p1 != (0, 0)
+                if real and warp:
+                    self.by_warp += c | self._prev_c
+                    self.warps += 1
+                    self.returned += back | self._prev_back
+                else:
+                    self.by_other += c
                 self.other_presses += 1
             if real:
                 self._prev_c, self._prev_back = c, back
+                self._trans_seen = self.transitions
             if real:
                 self.full_any += c
                 self.full_w += c
