@@ -540,3 +540,22 @@ Logs with the grader's map: `longhorizon/pk-jev-poweron/lab-door-loop/gaps-{s860
     arrival.
 
 Logs: `longhorizon/pk-jev-poweron/lab-door-loop/gaps-{s8600,poweron}-ad08a46-full.jsonl`.
+
+**The 35.6% came from the save's old discovery file.** Since 0c60afa, a save loads its own discovery file. The tick-8600
+save's file was written under an older map rule, and it held the real map byte out in favour of a came-from byte
+(emulator thread's trace). Re-run on ad08a46 with `ANYGAME_REDISCOVER=1`, which is like for like with the 0cab0e1 run:
+
+| run | returns known again | wrong place (mixed) | maps sharing one signature |
+|---|---|---|---|
+| from the 8600 save, rediscovered, 1,500 steps | 2 of 4 | 0.4% | 0: Route 1 315 and Oak's lab 78 reads, early on, kept apart by position |
+
+- **Signature mixing per 300 steps:** 29% in steps 0–300, while discovery is still settling. After that it was 0–1%
+  on Route 1, Route 22 and Viridian. Only 4 returns, because the stand-in left town early.
+- **Go-back, Pallet back to Oak's lab, after:** with the goal given at step 93 (still inside those first 300 steps),
+  the route was offered on 15 steps and the player walked into the lab after 264 steps. The goal never checked as
+  reached: the lab came back under Pallet's place id, because its map signature had not settled yet.
+- **Go-back, before:** no arrival. With the goal given at step 150, the stand-in was already on Route 1 in both runs,
+  no route was known, and neither arrived.
+
+So in this run the only mixing is in the first ~300 steps after a cold start, which is where these go-back tests
+fall. Logs: `longhorizon/pk-jev-poweron/lab-door-loop/gaps-s8600-ad08a46-rediscover-full.jsonl`.
