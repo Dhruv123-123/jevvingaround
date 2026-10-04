@@ -89,6 +89,8 @@ class WorldTracker:
         self.warps: dict[tuple, Tile] = {}              # (map, x, y, dir) → where it put us
         self.inspected: set[tuple] = set()
         self.walls_at: dict[Any, set[tuple[int, int]]] = {}   # tiles a step into was refused: not a place to explore
+        self.moves: dict[str, dict] = {}         # label → {keys, hold, line}: inputs that do more than a step (motion.py)
+        self.motion_at: set = set()               # places where what each button does was learned
         self.stuck: dict[tuple, int] = {}       # (tile, plan) → times walking that plan from that tile ended back on it
         self._pending: tuple | None = None
         self.steps = 0                                  # steps tried over the run: the clock blocked edges age by
@@ -381,6 +383,10 @@ class WorldTracker:
             for k in dead:      # walked twice from here and came back here: not offered again from this tile
                 plans.pop(k)
                 opts.pop(k, None)
+        for k, mv in self.moves.items():
+            # a jump, a dash, a run: offered next to the walks, as what learning the buttons found it does
+            plans[k] = [f"hold:{'+'.join(mv['keys'])}:{mv['hold']}"]
+            opts[k] = mv["line"]
         if self.stale >= int(self.r.get("stale_after", 12)):
             # nothing new for a while: a button not tried in this stretch (a menu, a map, a mode) may be what the game
             # is waiting for. Offered first, each button once until something new turns up
@@ -437,6 +443,22 @@ class WorldTracker:
                 device.press(interact, hold=4, after=after)
                 done.append("A")
                 continue
+            if step.startswith("hold:"):
+                _, ks, h = step.split(":")
+                keys = ks.split("+")
+                if hasattr(device, "hold_keys"):
+                    device.hold_keys(keys, int(h))
+                    device.release_keys(keys)
+                else:
+                    for k in keys:
+                        device.press(k, hold=int(h), after=0)
+                device.wait(int(self.r.get("settle_after_hold", 16)))
+                t2 = self.tile_of(look())
+                self.steps += 1
+                if t2 is not None and t2 != here:
+                    self.visit(t2)
+                done.append(f"{ks} held {h} → " + (f"({t2[1]},{t2[2]})" if t2 is not None else "?"))
+                continue
             if step.startswith("button:"):
                 b = step[7:]
                 self.buttons_tried.add(b)
@@ -466,6 +488,31 @@ class WorldTracker:
         self.last_option = label
         return f"{label}: " + " ".join(done)
 
+    def learn_motion(self, device, place: Any = None) -> list[str] | None:
+        """What each button does here (anygame/motion.py), once per place: inputs that move the player more than a
+        step of the plain direction does (a dash, a run) or that jump become options. Returns the description."""
+        if place in self.motion_at or not hasattr(device, "snapshot"):
+            return None
+        self.motion_at.add(place)
+        from .. import motion
+        try:
+            m = motion.learn(device)
+        except Exception:  # noqa: BLE001
+            return None
+        lines = motion.describe(m)
+        longest = max((x["hold"] for x in m["moves"]), default=0)
+        plain = {tuple(x["keys"]): x for x in m["moves"] if x["hold"] == longest and len(x["keys"]) == 1}
+        for x, line in zip([x for x in m["moves"] if x["hold"] == longest], lines):
+            keys = tuple(x["keys"])
+            if all(k in DIRS for k in keys):
+                continue
+            d = next((plain[(k,)] for k in keys if k in DIRS and (k,) in plain), None)
+            reach = abs(x["reach_x"]) + abs(x["reach_y"])
+            base = abs(d["reach_x"]) + abs(d["reach_y"]) if d is not None else 0.0
+            if x["kind"] == "jump" or (reach >= 4 and reach > 1.5 * max(base, 1.0)):
+                self.moves["move_" + "_".join(keys)] = {"keys": list(keys), "hold": x["hold"], "line": f"hold {line}"}
+        return lines
+
     # ---- persistence ----------------------------------------------------------------------------------
     def dump(self) -> dict[str, Any]:
         return {"visited": {json.dumps(m): sorted(v) for m, v in self.visited.items()},
@@ -473,7 +520,8 @@ class WorldTracker:
                 "warps": [[list(k), list(w)] for k, w in self.warps.items()],
                 "inspected": [list(k) for k in self.inspected], "steps": self.steps,
                 "walls_at": {json.dumps(m): sorted(v) for m, v in self.walls_at.items()},
-                "alias": [[k, v] for k, v in self.alias.items()], "places": sorted(self.places, key=str)}
+                "alias": [[k, v] for k, v in self.alias.items()], "places": sorted(self.places, key=str),
+                "moves": self.moves, "motion_at": sorted(self.motion_at, key=str)}
 
     def load(self, d: dict[str, Any]) -> None:
         self.visited = {json.loads(m): {tuple(p) for p in v} for m, v in (d.get("visited") or {}).items()}
@@ -484,3 +532,5 @@ class WorldTracker:
         self.walls_at = {json.loads(m): {tuple(p) for p in v} for m, v in (d.get("walls_at") or {}).items()}
         self.alias = {k: v for k, v in d.get("alias") or []}
         self.places = set(d.get("places") or []) | set(self.visited)
+        self.moves = dict(d.get("moves") or {})
+        self.motion_at = set(d.get("motion_at") or [])

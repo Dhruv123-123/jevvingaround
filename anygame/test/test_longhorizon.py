@@ -383,3 +383,22 @@ def test_the_writer_is_not_asked_again_without_news():
     assert q["id"].startswith("explore") and gb.calls == 1
     m.observe(5, 0, {**walk, "map": 2, "screen": "text"}, "An old man waits by the river north of town", (0, 0))
     assert gb.update(6, {**walk, "map": 2})["instruction"] == "find the old man" and gb.calls == 2
+
+
+def test_a_button_that_jumps_becomes_an_option(monkeypatch):
+    """Learning the buttons: an input that jumps or goes further than the plain direction is offered as a plan."""
+    from anygame import motion
+    from anygame.perceive.world import WorldTracker
+    mv = lambda keys, kind="move", rx=0.0, ry=0.0: {"keys": keys, "hold": 32, "kind": kind, "reach_x": rx, "reach_y": ry,
+                                                    "dx": rx, "dy": ry, "dx_held": rx, "air_samples": 6}
+    m = {"moves": [mv(["right"], rx=16), mv(["b"], "jump", ry=-45), mv(["right", "a"], rx=40), mv(["right", "b"], rx=16)],
+         "every": 2}
+    monkeypatch.setattr(motion, "learn", lambda device: m)
+    class Dev:
+        def snapshot(self): return None
+    w = WorldTracker({"kind": "world", "pos": ["x", "y"]})
+    assert w.learn_motion(Dev(), 0)
+    assert set(w.moves) == {"move_b", "move_right_a"}
+    assert w.learn_motion(Dev(), 0) is None                     # once per place
+    out = w.read({"map": 0, "x": 1, "y": 1})
+    assert w.plans["move_b"] == ["hold:b:32"] and "jumps" in out["landings"]["move_b"]

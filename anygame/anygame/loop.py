@@ -1,6 +1,7 @@
 """The play loop: frame → reads → state → Jev → action → device, at tick_hz. One audit line per tick."""
 from __future__ import annotations
 import hashlib
+import sys
 import json
 import os
 import time
@@ -500,6 +501,13 @@ class Agent:
                 tgt = dict((self.quest or {}).get("target") or {}) or None
                 if tgt is not None:
                     tgt.setdefault("label", self.quest["id"])
+                if r.get("motion") and values.get("x") is not None:
+                    # once per place: what each button does (a jump, a dash), offered next to the walks
+                    w_ = self.worlds[rid]
+                    lines = w_.learn_motion(self.device, w_.here[0] if w_.here is not None else None) \
+                        if len(w_.motion_at) < int(r.get("motion_places", 40)) else None
+                    if lines:
+                        print("motion: " + "; ".join(lines), file=sys.stderr)
                 values[rid] = self.worlds[rid].read(values, tgt)
         for rid, r in pack.reads.items():
             if r.get("kind") == "predict":
