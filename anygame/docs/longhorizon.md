@@ -19,7 +19,7 @@ The Jev run hit the target, leaving Pallet Town with a starter. In order, it:
 - fought the rival's CHARMANDER and lost;
 - left the lab and walked onto Route 1;
 - won wild battles against Rattata and Pidgey, which took Bulbasaur to level 6 with $1,500;
-- walked home to Red's house.
+- fought on until Bulbasaur fainted and blacked out ("RED is out of useable POKéMON", "RED blacked out"), which sent it back to Red's house. It did not walk home. Part 3 started at 1/24 HP, so healing when HP is low is the next gap (C9).
 
 The run went from power-on to tick 700, then continued from its tick-700 checkpoint on a menu fix (logs in two parts). Pokemon Jev spend across every run today is about $0.15, including the runs that stalled.
 
