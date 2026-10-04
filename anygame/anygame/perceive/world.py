@@ -302,7 +302,7 @@ class WorldTracker:
                         p = self.path_to(tree, door) + [k[3]]
                         plans["goal"] = p
                         opts["goal"] = f"walk {len(p)} steps through the known door toward {why} ({len(chain)} door(s) away)"
-                elif self._route_option(here, gm, tree, why, plans, opts):
+                elif self.r.get("goback") and self._route_option(here, gm, tree, why, plans, opts):
                     pass                # the place book knows a way back (joins walked, doors taken both ways)
                 elif goal.get("toward"):
                     # a direction hint for a map not reached yet: explore that way
