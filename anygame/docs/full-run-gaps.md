@@ -500,3 +500,25 @@ Go-back checks:
 
 These are findings for the emulator thread. Logs with the grader's map:
 `longhorizon/pk-jev-poweron/lab-door-loop/gaps-{s8600,poweron}-90fb48a-full.jsonl`.
+
+**Re-measured on the stairs and sprite-byte fixes (0cab0e1, which includes 497dc14 and 25abd77).** These are live
+stand-in runs, not replays of a recorded trace.
+
+| run | returns known again | wrong place (mixed) | maps sharing one name |
+|---|---|---|---|
+| fresh power-on, 1,500 steps | 20 of 24 (83%; 79% without door memory) | 7.9% | Red's 1F and 2F (129174661), 85 and 149 reads |
+| from the 8600 save, 1,500 steps | 126 of 131 (96%; 95% without) | 18.1% | Route 1, Pallet, Red's 1F and 2F (512); Red's 1F, Pallet and Blue's house (338); Pallet and Blue's house (7, 8995) |
+
+Signature mixing over time, per 300 steps:
+- From the save, it was 10% for steps 0–300, 52% for steps 300–600 and 12% for steps 600–900, around Pallet and
+  the houses. It was 0–1% from step 900 on, once Red reached Route 1, Route 22 and Viridian. So the real map byte
+  does arrive, but only after leaving the town.
+- From power-on, mixing was 0–2% through Oak's lab. In the last 300 steps, back home, it was 28%, because Red's 1F
+  and 2F came back under one name.
+
+Go-back checks:
+- From power-on to Red's house 1F: no arrival before or after.
+- From the save, Pallet back to Oak's lab: no arrival before. After, the player arrived in 144 steps, but the goal
+  never checked as reached, because the lab came back under a new name.
+
+Logs with the grader's map: `longhorizon/pk-jev-poweron/lab-door-loop/gaps-{s8600,poweron}-0cab0e1-full.jsonl`.
