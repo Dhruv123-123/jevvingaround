@@ -99,6 +99,7 @@ class WorldTracker:
         self.chained: set = set()                 # goal ids a chain search was tried for
         self.stuck: dict[tuple, int] = {}       # (tile, plan) → times walking that plan from that tile ended back on it
         self._pending: tuple | None = None
+        self._last_off: tuple | None = None      # (tile, direction) of a step that went 'off' (maybe a door mid-fade)
         self.steps = 0                                  # steps tried over the run: the clock blocked edges age by
         self.here: Tile | None = None
         self.macros: dict[str, list[str]] = {}
@@ -426,6 +427,11 @@ class WorldTracker:
             self.macros = {k: list(v) for k, v in self.plans.items()}
             return {"here": None, "explored": None, "blocked_around": [],
                     "landings": {f"explore_{d}": f"walk {COMPASS[d]} 3 steps (where you are is not known yet)" for d in order}}
+        lo, self._last_off = self._last_off, None
+        if lo is not None and lo[0][0] != here[0] and (lo[0][0], lo[0][1], lo[0][2], lo[1]) not in self.warps:
+            # the step went 'off' (the reads mid-fade said little) and the next position is on another map: that step
+            # was a door. Learned, so the tile past it stops looking unexplored and is not walked into again and again
+            self.warps[(lo[0][0], lo[0][1], lo[0][2], lo[1])] = here
         self.here = here
         self.visit(here)
         self.goal_target = goal
@@ -565,6 +571,8 @@ class WorldTracker:
                     done.append(f"{step} → stop: {kind} on screen")
                     break
             out = self.learn(here, step, t2)
+            if out == "off":
+                self._last_off = (here, step)
             done.append(step if out == "moved" else f"{step} ({out})")
             if out != "moved":
                 break

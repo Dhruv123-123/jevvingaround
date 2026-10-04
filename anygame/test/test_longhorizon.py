@@ -644,3 +644,17 @@ def test_said_and_talks_still_count_once_the_dialogue_is_full():
     assert gb._holds({"talks": 1}, g, {})
     m2 = RunMemory(max_lines=5); m2.load(m.dump())
     assert m2.count == m.count
+
+
+def test_a_step_that_went_off_and_then_another_map_is_learned_as_a_door():
+    from anygame.perceive.world import WorldTracker
+    w = WorldTracker({"x": "x", "y": "y", "map": "map"})
+    w.read({"map": 11, "x": 13, "y": 6, "screen": "walk"})
+    town = w.here[0]
+    w._last_off = ((town, 13, 6), "up")         # the step's reads came mid-fade
+    w._moves, w._walking = ["up"], True
+    w.read({"map": 42, "x": 2, "y": 7, "screen": "walk"})
+    assert w.here[0] != town and (town, 13, 6, "up") in w.warps
+    w._moves, w._walking = ["down"], True
+    w.read({"map": 11, "x": 13, "y": 7, "screen": "walk"})
+    assert w.plans["explore_up"][:2] != ["up", "up"]      # explores round the door, not into it
