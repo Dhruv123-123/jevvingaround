@@ -84,7 +84,9 @@ class PlaceBook:
     def _move(self, to: Place, kind: str, **why) -> None:
         if self.here is not None and to is not self.here:
             self.here.left_at = self.reads
-            if kind == "door" and not why.get("forced") and self._from is not None:
+            # a "door" that leaves the player on the very tile they stood on is the map's name switching under them,
+            # not a way through: recorded, it sends routes back into the room just left
+            if kind == "door" and not why.get("forced") and self._from is not None and tuple(self._from) != tuple(self._xy):
                 a, b = (self.here.id, *self._from), (to.id, *self._xy)
                 d = self._pressed
                 self.doors[a] = (*b, d)
@@ -192,6 +194,9 @@ class PlaceBook:
             if k[0] == gone.id:
                 self.joins.setdefault((into.id, k[1]), self.joins[k])
                 del self.joins[k]
+        for k, v in list(self.doors.items()):
+            if self.canonical(k[0]) == self.canonical(v[0]):     # both ends are one place now: not a door
+                del self.doors[k]
         self.events.append({"read": self.reads, "kind": "merge", "from": gone.id, "to": into.id})
         self.here = into
 
@@ -335,7 +340,8 @@ class PlaceBook:
             q.trial = None if t is None else {**t, "tiles": {tuple(x) for x in t["tiles"]}}
             b.places.append(q)
         b.joins = {(p, dd): q for p, dd, q in d.get("joins") or []}
-        b.doors = {tuple(a): tuple(c) for a, c in d.get("doors") or []}
+        # same-tile "doors" saved before they were refused are name switches: dropped on load
+        b.doors = {tuple(a): tuple(c) for a, c in d.get("doors") or [] if tuple(a[1:]) != tuple(c[1:3])}
         b.here = None if d.get("here") is None else b.places[d["here"]]
         b._last = tuple(_hashable(v) for v in d["last"]) if d.get("last") else None
         b.reads = d.get("reads", 0)

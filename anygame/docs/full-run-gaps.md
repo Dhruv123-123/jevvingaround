@@ -459,13 +459,16 @@ thread, the blocker: a map signature that stays one value per map from the first
 |---|---|---|
 | fresh power-on, 1,500 steps (17e108c; e80b499 the same) | 16 of 22 (73%) | 5.1% |
 | from long-horizon's tick-8600 save, ticks 8931–9324 (after the map byte settled) | 32 of 34 (94%) | — |
-| from the 8600 save, all 724 steps | 32 of 36 (89%) | 4.7% |
+| from the 8600 save, all 1,500 steps (17e108c) | 124 of 130 (95%) | 15.1% |
 
 From power-on the first 1,500 steps still read Pallet Town as 7 values and Red's house 2F as 10. The map locks
 only at the first revisit (the emulator thread's limit). e80b499 changes nothing here; it helps after a faint.
 
-On the save, once the byte has settled, the place book knows 94% of returns again. Door memory adds nothing there,
-because the name alone is enough.
+On the save, the place book knows 94–95% of returns again, and door memory adds nothing there because the name
+alone is enough. But the reading did not stay put. After about tick 9300 the signature moved from 7 to 34895 and
+33360, and Oak's lab and Pallet Town read the same two values (lab: 33360 ×261, 34895 ×93; Pallet: 34895 ×378,
+33360 ×94). Over the whole run, 15.1% of reads sit in a place that is mostly another map. That is a finding for the
+emulator thread: a settled signature that two maps share again later.
 
 Go-back checks:
 - From power-on, Pallet Town to Red's house 1F and 2F: no arrival in 2 tries before and 2 tries after, on either
@@ -478,3 +481,81 @@ A door known from another place on the very same tiles (`door_any`) raised retur
 76%, and on fresh runs from 80% to 84%. It also raised mixing by 0.3 to 0.7 points, so it is off.
 
 First-visit place naming is being built on the emulator side (05:45Z). These checks are re-run on its commit.
+
+**Re-measured on first-visit naming (90fb48a).**
+
+| run | returns known again | wrong place (mixed) | maps sharing one name |
+|---|---|---|---|
+| fresh power-on, 1,500 steps | 53 of 56 (95%; 91% without door memory) | 5.1% | Pallet and Blue's house (768); Oak's lab and Red's 2F (129174661) |
+| from the 8600 save, 1,500 steps | 124 of 126 (98%) | 37.5% | Red's 1F, Red's 2F and Pallet (512) |
+
+Returns look known because maps now share names. On the save, 37.5% of reads sit in a place that is mostly another
+map, against 15.1% on 17e108c.
+
+Go-back checks:
+- From power-on to Red's house 1F, before and after: the target place was the place the player stood in (Pallet
+  and the house merged), so there was nothing to measure.
+- From the save, Pallet back to Oak's lab: the player reached the lab after 268 steps before and 144 after. In
+  neither run did the goal check as reached, because the lab came back under a new name.
+
+These are findings for the emulator thread. Logs with the grader's map:
+`longhorizon/pk-jev-poweron/lab-door-loop/gaps-{s8600,poweron}-90fb48a-full.jsonl`.
+
+**Re-measured on the stairs and sprite-byte fixes (0cab0e1, which includes 497dc14 and 25abd77).** These are live
+stand-in runs, not replays of a recorded trace.
+
+| run | returns known again | wrong place (mixed) | maps sharing one name |
+|---|---|---|---|
+| fresh power-on, 1,500 steps | 20 of 24 (83%; 79% without door memory) | 7.9% | Red's 1F and 2F (129174661), 85 and 149 reads |
+| from the 8600 save, 1,500 steps | 126 of 131 (96%; 95% without) | 18.1% | Route 1, Pallet, Red's 1F and 2F (512); Red's 1F, Pallet and Blue's house (338); Pallet and Blue's house (7, 8995) |
+
+Signature mixing over time, per 300 steps:
+- From the save, it was 10% for steps 0–300, 52% for steps 300–600 and 12% for steps 600–900, around Pallet and
+  the houses. It was 0–1% from step 900 on, once Red reached Route 1, Route 22 and Viridian. So the real map byte
+  does arrive, but only after leaving the town.
+- From power-on, mixing was 0–2% through Oak's lab. In the last 300 steps, back home, it was 28%, because Red's 1F
+  and 2F came back under one name.
+
+Go-back checks:
+- From power-on to Red's house 1F: no arrival before or after.
+- From the save, Pallet back to Oak's lab: no arrival before. After, the player arrived in 144 steps, but the goal
+  never checked as reached, because the lab came back under a new name.
+
+Logs with the grader's map: `longhorizon/pk-jev-poweron/lab-door-loop/gaps-{s8600,poweron}-0cab0e1-full.jsonl`.
+
+**Re-measured on the lab-door fix (ad08a46).** These are the same live stand-in runs as for 0cab0e1.
+
+| run | returns known again | wrong place (mixed) | maps sharing one signature |
+|---|---|---|---|
+| fresh power-on, 1,500 steps | 4 of 7 (57%; 43% without door memory) | 1.4% (was 7.9%) | Red's 1F and 2F, only a few reads each |
+| from the 8600 save, 1,500 steps | 130 of 139 (94%) | 35.6% (was 18.1%) | 0: Oak's lab 310, Red's 1F 111, Pallet 69, Blue's house 38; 37: Pallet 514, Red's 2F 80 |
+
+- **Power-on is clean now.** It has only 7 returns, because the stand-in stayed in the lab for most of the run.
+- **The save run is worse.** This time the stand-in stayed in town and never reached Route 1. Mixing per 300 steps
+  was 2%, 35%, 50%, 11% and 4%.
+- **Go-back:**
+  - From the save, Pallet back to Oak's lab: the player arrived within 10 to 13 steps, before and after. The goal
+    never checked as reached, because the "lab" place the book held was mostly Pallet reads (136 Pallet, 3 lab).
+  - From power-on, Pallet to Red's 1F: before arrived in 68 steps, but the goal was not reached. After, there was no
+    arrival.
+
+Logs: `longhorizon/pk-jev-poweron/lab-door-loop/gaps-{s8600,poweron}-ad08a46-full.jsonl`.
+
+**The 35.6% came from the save's old discovery file.** Since 0c60afa, a save loads its own discovery file. The tick-8600
+save's file was written under an older map rule, and it held the real map byte out in favour of a came-from byte
+(emulator thread's trace). Re-run on ad08a46 with `ANYGAME_REDISCOVER=1`, which is like for like with the 0cab0e1 run:
+
+| run | returns known again | wrong place (mixed) | maps sharing one signature |
+|---|---|---|---|
+| from the 8600 save, rediscovered, 1,500 steps | 2 of 4 | 0.4% | 0: Route 1 315 and Oak's lab 78 reads, early on, kept apart by position |
+
+- **Signature mixing per 300 steps:** 29% in steps 0–300, while discovery is still settling. After that it was 0–1%
+  on Route 1, Route 22 and Viridian. Only 4 returns, because the stand-in left town early.
+- **Go-back, Pallet back to Oak's lab, after:** with the goal given at step 93 (still inside those first 300 steps),
+  the route was offered on 15 steps and the player walked into the lab after 264 steps. The goal never checked as
+  reached: the lab came back under Pallet's place id, because its map signature had not settled yet.
+- **Go-back, before:** no arrival. With the goal given at step 150, the stand-in was already on Route 1 in both runs,
+  no route was known, and neither arrived.
+
+So in this run the only mixing is in the first ~300 steps after a cold start, which is where these go-back tests
+fall. Logs: `longhorizon/pk-jev-poweron/lab-door-loop/gaps-s8600-ad08a46-rediscover-full.jsonl`.
