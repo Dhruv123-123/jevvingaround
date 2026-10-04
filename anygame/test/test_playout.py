@@ -78,3 +78,11 @@ def test_a_game_that_never_asks_stops_at_the_cap():
     g.PAGES = ["..."] * 50
     r = play_out(g, ["a"], lambda img: g.text(), step=5, max_frames=300)
     assert r["end"] == "cap" and r["frames"] >= 300
+
+
+def test_a_screen_where_neither_a_nor_a_direction_does_anything_waits():
+    g = Game()
+    g.PAGES = []
+    g.press = lambda k, hold=4, after=10: setattr(g, "frames", g.frames + hold + after)    # every button ignored
+    r = play_out(g, [], lambda img: "PAUSE START: exit", step=5, max_frames=600)
+    assert r["end"] == "waits" and r["frames"] < 600 and "waits for another button" in describe(r)

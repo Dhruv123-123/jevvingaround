@@ -190,3 +190,17 @@ in a 400-press run against OCR's 0.93, at 0.75 ms a read instead of 217 ms.
 Enemy BULBASAUR used TACKLE!" then back at the menu, and RUN reads "No! There's no running from a trainer battle!".
 In Aevilia, a character pick plays out through the narrator to "Use the d-pad to move around.". The call site is
 `menu.py`'s `_outcome` (the long-horizon thread's).
+
+## Built third: gap 3, numbers
+
+`anygame/numbers.py`, see `docs/numbers.md`. Numbers are read with their labels from the exact text and bound to the
+RAM that follows them after three distinct values. In the rival battle, Squirtle's HP was bound to two places
+(the battle copy and the party copy) with no addresses given. A goal condition `{number: {name, at_least | ...}}`
+checks them.
+
+## Built fourth: gap 4, using things
+
+`anygame/chains.py`, see `docs/chains.md`. A breadth-first search over menu chains, each pick played out, toward an
+outcome the goal names: Pokemon's "Withdrew POTION." from Red's PC was found in 19 tries and replays exactly. On
+Aevilia it mapped the pause menu, which lists buttons rather than a cursor. A line that tells of a gain reopens the
+walls the world tracker had given up on.
