@@ -2,6 +2,7 @@
 player, beside what happened (a blackout, the run's end). The grader's map is read only to name places here.
 
     python scripts/upkeep_replay.py <log.jsonl> [<log.jsonl> ...]     # several logs are one run, in order
+    python scripts/upkeep_replay.py --names <log.jsonl> ...           # every fraction under its own name, as live
 
 Numbers come from each read's text with numbers.parse. On these OCR logs a label is unreliable ("HP" one read,
 "BULBASAUR" the next), so the replay takes the first "#/#" on a line as one number; a live run with exact text keeps
@@ -23,8 +24,8 @@ from place_check import moves_of  # noqa: E402
 LOSS = re.compile(r"bla.ked|out o. useable|game over|you die", re.I)   # for the report only, never shown to Upkeep
 
 
-def replay(paths: list[str]) -> dict:
-    book, keep = PlaceBook(), Upkeep()
+def replay(paths: list[str], names: bool = False, keep=None) -> dict:
+    book, keep = PlaceBook(), keep or Upkeep()
     truth_of = collections.defaultdict(collections.Counter)
     prev_action, active, out = None, None, []
     losses, last_tick = [], None
@@ -45,8 +46,13 @@ def replay(paths: list[str]) -> dict:
                                walking=bool(mv), idle=str(prev_action or "").startswith("auto: wait"))
                 moved = not mv and any(e["kind"] in ("door", "join") for e in book.events[n0:])
                 truth_of[pid][(r.get("truth") or {}).get("map")] += 1
-            fr = [d for d in parse(text) if d.get("of") and not d["name"].endswith(")")]
-            nums = {"#/#": {"value": fr[0]["value"], "of": fr[0]["of"]}} if fr else {}
+            if names:
+                # every fraction under the name the live run's NumberBook gives it (label + shape, "(2)" for a
+                # repeat): move PP, the other side's numbers and one HP under several labels all arrive
+                nums = {d["name"]: {"value": d["value"], "of": d["of"]} for d in parse(text) if d.get("of")}
+            else:
+                fr = [d for d in parse(text) if d.get("of") and not d["name"].endswith(")")]
+                nums = {"#/#": {"value": fr[0]["value"], "of": fr[0]["of"]}} if fr else {}
             keep.see(tick, nums, place=pid, screen=s.get("screen"), moved=moved)
             a = keep.advice()
             key = None if a is None else (a["goal"].get("target") or {}).get("place")
@@ -61,7 +67,9 @@ def replay(paths: list[str]) -> dict:
 
 
 def main() -> None:
-    r = replay(sys.argv[1:])
+    args = sys.argv[1:]
+    names = "--names" in args
+    r = replay([a for a in args if a != "--names"], names=names)
     print("losses (from the text, for this report):", r["losses"], "end:", r["end"])
     for e in r["events"]:
         print(" ", e)
