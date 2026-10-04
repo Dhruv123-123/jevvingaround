@@ -54,6 +54,11 @@ def cmd_play(a):
         print(f"HUD on http://localhost:{a.hud}", file=sys.stderr)
     agent = Agent(pack, device, jev, hud, log_path=a.log, max_ticks=a.max_ticks, record_dir=a.record)
     _start_fresh(device)
+    grader = _attach_grader(agent, device, getattr(a, "saves", None))
+    _long_horizon(agent, device, grader, a)
+    if getattr(a, "live", None):
+        from .live import attach
+        attach(agent, a.live, a.live_every, grader, getattr(grader, "game", None) or pack.name)
     if a.fallback:
         from .fallback import VLMFallback
         agent.fallback = VLMFallback()
@@ -68,7 +73,16 @@ def cmd_play(a):
         last = agent.run()
     finally:
         device.close()
-    summary = {"game": pack.name, "fallback_calls": agent.fallback_calls, "mode": agent.mode, "ticks": agent.tick, "last": last.get("action"), "reason": last.get("reason"), "sensor_errors": agent.errors,
+    if getattr(a, "checkpoint", None):
+        from .memory import save_checkpoint
+        save_checkpoint(agent, a.checkpoint)
+    summary = {"game": pack.name, "grade": grader.report() if grader else None, "goals": agent.goal_log, "auto_ticks": agent.auto_ticks, "decisions": getattr(agent, "top_asked", 0), "agreed_with_top": getattr(agent, "top_agreed", 0),
+               "goal_writer": agent.goalbook.report() if agent.goalbook is not None else None,
+               "dialogue_lines": len(agent.memory.dialogue) if agent.memory is not None else None,
+               "places": len(agent.memory.places) if agent.memory is not None else None,
+               "audit": agent.auditor.report() if agent.auditor is not None else None,
+               "decider": getattr(jev, "model", a.sensor), "decider_calls": sum(1 for h in agent.history if h.get("choice") not in ("auto", None)),
+               "emulated_frames": getattr(device, "frames", None), "fallback_calls": agent.fallback_calls, "mode": agent.mode, "ticks": agent.tick, "last": last.get("action"), "reason": last.get("reason"), "sensor_errors": agent.errors,
                "total_cost_usd": round(agent.total_cost, 6), "final_screen": {k: v for k, v in (last.get("screen") or {}).items() if not isinstance(v, dict)}}
     print(json.dumps(summary, indent=1))
     if a.record:
@@ -138,6 +152,72 @@ def cmd_eval(a):
         failed += 0 if ok else 1
     print(f"  {len(pack.tests) - failed} passed, {failed} failed")
     sys.exit(1 if failed else 0)
+
+
+def _attach_grader(agent, device, saves: str | None = None):
+    """A ROM a grader knows (anygame/graders) is graded every tick from RAM the agent never reads; each new milestone
+    is logged beside the tick (`grader`, never in the decider's state) and, with --saves, kept as a save state."""
+    rom = getattr(device, "rom", None)
+    if not rom:
+        return None
+    from .graders import for_rom
+    g = for_rom(rom)
+    if g is None:
+        return None
+    prev = agent.on_record
+
+    def on_record(rec, frame):
+        new = g.update(device.memory, when=getattr(device, "frames", None))
+        # the grader's map and position beside the tick, for checking what the agent discovered (the log only)
+        rec["truth"] = {k: g.last.get(k) for k in ("map", "x", "y") if k in (g.last or {})}
+        if new:
+            rec["grader"] = new
+            print(f"milestone: {', '.join(new)} at tick {rec.get('tick')} ({getattr(device, 'frames', 0) / 3600:.1f} game-min)", file=sys.stderr)
+            if saves and hasattr(device, "save_state"):
+                for m in new:
+                    device.save_state(str(Path(saves) / f"{g.game}-{m}.state"))
+        if prev is not None:
+            prev(rec, frame)
+    agent.on_record = on_record
+    return g
+
+
+def _long_horizon(agent, device, grader, a) -> None:
+    """Goals written from dialogue by the chat model (Azure), the Jev audit, checkpoints and resume."""
+    gb = agent.goalbook
+    if gb is not None and not getattr(a, "no_writer", False):
+        if os.environ.get("ANYGAME_LLM_BASE") and os.environ.get("ANYGAME_LLM_MODEL"):
+            from .chat import Chat
+            gb.chat = Chat(timeout=90)
+        else:
+            print("goals: no chat model configured (ANYGAME_LLM_*): the generic goal only (find a place not entered yet)", file=sys.stderr)
+        if a.log:
+            glog = open(str(a.log) + ".goals.jsonl", "a")
+            def _gl(e, f=glog):
+                f.write(json.dumps(e) + "\n")
+                f.flush()
+                print(f"goal writer at tick {e['tick']}: {e.get('result')}", file=sys.stderr)
+            gb.log = _gl
+    if getattr(a, "audit", 0):
+        from .audit import Auditor
+        agent.auditor = Auditor(horizon=int(a.audit), grader=grader, max_audits=getattr(a, "audit_max", None))
+    if getattr(a, "resume", None):
+        from .memory import load_checkpoint
+        d = load_checkpoint(agent, a.resume)
+        print(f"resumed from {a.resume} at tick {d.get('tick')}", file=sys.stderr)
+        if grader is not None:
+            grader.update(device.memory, when=getattr(device, "frames", None))
+    every = int(getattr(a, "checkpoint_every", 0) or 0)
+    if every and getattr(a, "checkpoint", None):
+        from .memory import save_checkpoint
+        prev = agent.on_record
+
+        def on_record(rec, frame):
+            if prev is not None:
+                prev(rec, frame)
+            if agent.tick % every == 0 and (agent.auditor is None or not agent.auditor.busy):
+                save_checkpoint(agent, a.checkpoint)
+        agent.on_record = on_record
 
 
 def _start_fresh(device):
@@ -797,6 +877,14 @@ def cmd_render(a):
     print(f"wrote {a.out} ({len(frames)} frames at {a.fps} fps)")
 
 
+def cmd_usage(a):
+    """Chat-model calls, tokens and estimated dollars from the usage ledger (see anygame/chat.py)."""
+    from .chat import ledger_path, summarize
+    from pathlib import Path
+    path = Path(a.log) if a.log else ledger_path()
+    print(json.dumps({"ledger": str(path), **summarize(path, a.since)}, indent=1))
+
+
 def cmd_record(a):
     import cv2
     from .device import open_device
@@ -819,7 +907,15 @@ def main(argv=None):
     p = argparse.ArgumentParser(prog="anygame", description="One paragraph, any game.")
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("packs").set_defaults(fn=cmd_packs)
-    pl = sub.add_parser("play"); pl.add_argument("pack"); pl.add_argument("--device", default=os.environ.get("DEVICE", "adb")); pl.add_argument("--sensor", default="jev", help="jev | none | random[:seed] | llm:<model>")
+    pl = sub.add_parser("play"); pl.add_argument("pack"); pl.add_argument("--device", default=os.environ.get("DEVICE", "adb")); pl.add_argument("--sensor", default="jev", help="jev | none | random[:seed] | llm:<model>"); pl.add_argument("--saves", default=None, help="a directory: a save state at each graded milestone (emulator devices)")
+    pl.add_argument("--audit", type=int, default=0, help="Jev audit: play Jev's pick and the top-ranked pick this many decisions forward from a save state when they differ")
+    pl.add_argument("--audit-max", dest="audit_max", type=int, default=None, help="at most this many audits played out")
+    pl.add_argument("--checkpoint", default=None, help="a directory: the run's state (emulator, world, memory, goals) saved there")
+    pl.add_argument("--checkpoint-every", dest="checkpoint_every", type=int, default=0, help="save a checkpoint every N ticks")
+    pl.add_argument("--resume", default=None, help="a checkpoint directory to continue a run from")
+    pl.add_argument("--live", default=None, help="a directory: the screen (frame.png) and status.json written every --live-every ticks, with index.html to watch them")
+    pl.add_argument("--live-every", dest="live_every", type=int, default=10, help="ticks between live frames")
+    pl.add_argument("--no-writer", dest="no_writer", action="store_true", help="no chat-model goal writer: the generic goal only")
     pl.add_argument("--fallback", nargs="?", const="yes", default=None, help="VLM fallback on screens the pack cannot read; optional path for the learned pack (default <pack>/pack.learned.yaml)")
     pl.add_argument("--goal", default=None, help="what the game is about, for the fallback")
     pl.add_argument("--hud", type=int, default=int(os.environ.get("HUD_PORT", "8080"))); pl.add_argument("--no-hud", dest="hud", action="store_const", const=0); pl.add_argument("--log", default="anygame.log.jsonl")
@@ -875,6 +971,10 @@ def main(argv=None):
     bn.add_argument("--seeds", default="1,2,3"); bn.add_argument("--max-ticks", type=int, default=200); bn.add_argument("--score-read", default=None)
     bn.add_argument("--out", default="bench"); bn.add_argument("--append", default=None, help="append the summary row to this jsonl")
     bn.set_defaults(fn=cmd_bench)
+    rs = sub.add_parser("ramscan", help="find a game's position bytes in RAM by walking the player (an emulator device)")
+    rs.add_argument("device", help="pyboy://<rom>?state=<a save state in the overworld>"); rs.add_argument("--presses", type=int, default=60); rs.add_argument("--seed", type=int, default=0)
+    rs.set_defaults(fn=lambda a: __import__("anygame.ramscan", fromlist=["main"]).main(a))
+    us = sub.add_parser("usage", help="chat-model (Azure) calls, tokens and estimated dollars from the usage ledger"); us.add_argument("--since", default=None, help="ISO time, e.g. 2026-10-04"); us.add_argument("--log", default=None); us.set_defaults(fn=cmd_usage)
     rc = sub.add_parser("record"); rc.add_argument("--device", required=True); rc.add_argument("--out", required=True); rc.add_argument("--seconds", type=int, default=20); rc.add_argument("--hz", type=float, default=2); rc.add_argument("--pack"); rc.set_defaults(fn=cmd_record)
     a = p.parse_args(argv)
     a.fn(a)

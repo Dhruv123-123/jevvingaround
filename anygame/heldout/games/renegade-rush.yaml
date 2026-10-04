@@ -1,0 +1,13 @@
+# Renegade Rush (Quinn Painter, 2021): top-down car combat on a scrolling road; ram other cars, dodge, fire missiles.
+# MIT (github.com/QuinnPainter/Renegade-Rush). distance.asm: DistanceTravelled is 3-byte little-endian BCD in road
+# lines, followed by BestDistance, CurrentArea and NextAreaBoundary ($001600), which is how it was found: the
+# boundary bytes 00 16 00 sit 7 bytes after it. Areas change at 1600, 3600 and 5400.
+id: renegade-rush
+kind: action
+rom: { url: https://hh3.gbdev.io/static/database-gb/entries/renegade-rush/RenegadeRush.gb, sha256: 0511a3de1bb59a5bd8bcf4e1463df7ea03a2aae66f30542b85ee51aa25f527a6, license: MIT }
+milestones:
+  - { id: driving,  desc: "started a run",              when: { bcd: 0xC5F1, bytes: 3, ge: 1 } }
+  - { id: d800,     desc: "drove 800 road lines",        when: { bcd: 0xC5F1, bytes: 3, ge: 800 } }
+  - { id: area1,    desc: "reached the second area (1600 lines)", when: { u8: 0xC5F7, ge: 1 } }
+  - { id: area2,    desc: "reached the third area (3600 lines)",  when: { u8: 0xC5F7, ge: 2 } }
+  - { id: area3,    desc: "reached the last area (5400 lines)",   when: { u8: 0xC5F7, ge: 3 } }

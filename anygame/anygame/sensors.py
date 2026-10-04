@@ -4,6 +4,8 @@ a key (`random`).
 
   jev            TypeSafe Jev (anygame.jev.Jev)
   random         uniform choices, nouls at 0.5: the floor every model must beat
+  top            the first option of every choice: where the compiler ranks options best first, this is "take the
+                 compiler's top pick", the offline stand-in that says how much of a result is the ranking's
   llm:<model>    any OpenAI-compatible chat model answering in JSON (wherever ANYGAME_LLM_BASE points)
 """
 from __future__ import annotations
@@ -27,12 +29,31 @@ def open_sensor(spec: str | None, timeout: float | None = None):
         from .jev import Jev
         base = spec[4:] if spec.startswith("clm:") else os.environ.get("CLM_BASE_URL", "http://127.0.0.1:8700")
         return Jev(api_key=os.environ.get("CLM_API_KEY", "local"), base_url=base, model=os.environ.get("CLM_MODEL", "clm-latest"), timeout=timeout)
+    if spec == "top":
+        return TopSensor()
     if spec == "random" or spec.startswith("random:"):
         return RandomSensor(int(spec.split(":", 1)[1]) if ":" in spec else 0)
     if spec.startswith("llm:"):
         # a chat model answers in seconds, not milliseconds: the pack's Jev timeout would only make it fall back to rules
         return LLMSensor(spec[4:], timeout=max(float(timeout or 0), float(os.environ.get("ANYGAME_LLM_TIMEOUT", "60"))))
-    raise SystemExit(f"unknown sensor '{spec}': jev | clm[:<base url>] | none | random | llm:<model>")
+    raise SystemExit(f"unknown sensor '{spec}': jev | clm[:<base url>] | none | top | random | llm:<model>")
+
+
+class TopSensor:
+    """Takes the first criterion of every choice question (nouls at 0.5): the compiler's ranking, with no judgment."""
+    model = "top"
+
+    def ask(self, state, questions: dict) -> dict:
+        answers = {}
+        for k, q in questions.items():
+            if q["type"] == "noul":
+                answers[k] = {"type": "noul", "noul": 0.5}
+            elif q["type"] == "choice":
+                crit = list(q["criteria"])
+                answers[k] = {"type": "choice", "choice": crit[0], "probabilities": {c: (1.0 if i == 0 else 0.0) for i, c in enumerate(crit)}, "confidence": 1.0}
+            else:
+                answers[k] = {"type": "score", "score": 0}
+        return {"answers": answers, "latency_ms": 0, "input_tokens": 0, "cost_usd": 0.0, "model": "top"}
 
 
 class RandomSensor:

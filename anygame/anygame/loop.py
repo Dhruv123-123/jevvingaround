@@ -1,6 +1,8 @@
 """The play loop: frame → reads → state → Jev → action → device, at tick_hz. One audit line per tick."""
 from __future__ import annotations
 import hashlib
+import re
+import sys
 import json
 import os
 import time
@@ -75,6 +77,34 @@ class Agent:
         self.trackers: dict[str, Any] = {}
         self.pressed_at: dict[str, float] = {}      # action id → when its key last went down (for again_ms)
         self.locked: tuple[str, float] | None = None   # (action id, until): no other key before then (lock_ms)
+        if hasattr(device, "use_pack"):
+            device.use_pack(pack.raw, str(pack.path.parent))    # an emulator's RAM map, clock and discovery come from the pack
+        # the long-horizon layer: world memory survives mode changes (a dialogue, a battle), goals are sticky
+        self.worlds: dict[str, Any] = {}
+        self.goals_done: set[str] = set()
+        self.quest: dict[str, Any] | None = None       # the current goal
+        self.goal_log: list[dict[str, Any]] = []       # {id, tick, frames}: when each goal was reached
+        self.remembered: dict[str, list[str]] = {}    # `remember:` reads → their last distinct values (what was said)
+        self.last_fp = None
+        self.auto_ticks = 0                            # ticks a routine screen was handled by an auto rule, no decider
+        # run memory (dialogue with where it was said, places), goals written from it, and the per-decision audit of
+        # the decider against the top-ranked pick (anygame/memory.py, goals.py, audit.py): set up by the caller
+        self.memory = None
+        self.goalbook = None
+        self.auditor = None
+        from .stuck import Stuck
+        self.stuck = Stuck()                     # the same few screens and actions with nothing new: a stall
+        self._avoid: tuple[int, set[str]] | None = None
+        if pack.raw.get("goals_from") == "dialogue":
+            from .memory import RunMemory
+            from .goals import GoalBook
+            self.memory = RunMemory()
+            self.goalbook = GoalBook(self.memory, None, pack.raw.get("goals_cfg"))
+            from .numbers import NumberBook
+            self.numbers = NumberBook()          # numbers the game prints, bound to RAM once they change
+            from .upkeep import Upkeep
+            self.keep = Upkeep()                 # a number falling toward a fatal floor: leave, go back to the refill
+            self._book_seen = 0
         if pack.raw.get("frames") == "stream" and hasattr(device, "stream"):
             device.stream()             # frames from the browser's screencast: ~10 ms a frame instead of a 40 ms screenshot
         # the hybrid: which screen is this, does the pack understand it, and who decides when it does not
@@ -187,6 +217,10 @@ class Agent:
                     c = {k: v for k, v in qs[pq]["criteria"].items() if k != val}
                     if c:
                         qs[pq] = {**qs[pq], "criteria": c}
+                    elif pq.endswith("__option") and len(qs["action"]["criteria"]) > 1:
+                        # every option of this action changed nothing: the action itself is not offered until the
+                        # screen changes (a title screen where walking does nothing and only a button will)
+                        qs["action"] = {**qs["action"], "criteria": {k: v for k, v in qs["action"]["criteria"].items() if k != aid}}
         for rl in self.pack.rules:
             for pq, read in (rl.get("only") or {}).items():
                 cells = _get(values, read) or []
@@ -270,6 +304,11 @@ class Agent:
         if a.kind == "macro":
             label = answers.get(f"{a.id}__option", {}).get("choice")
             tracker = self.trackers.get(p["options"].split(".")[0])
+            if tracker is not None and label and hasattr(tracker, "run"):
+                # the tracker plays its own plan, one step at a time, looking after each (a path through a world)
+                probe = next((r for r in self.pack.reads.values() if r.get("kind") == "probe"), None)
+                classify = (lambda: self._probe(probe)) if probe is not None else None
+                return tracker.run(self.device, label, self._look, classify=classify)
             keys = tracker.macros.get(label) if (tracker and label) else None
             if not keys:
                 return f"{a.id} (no option)"
@@ -415,6 +454,143 @@ class Agent:
                 if r.get("kind") in ("locate", "head") and isinstance(cur, str) and isinstance(self.prev_distinct[rid], str):
                     values[f"{rid}_moving"] = _direction(self.prev_distinct[rid], cur)
                     values[f"{rid}_reverse"] = {"up": "down", "down": "up", "left": "right", "right": "left"}.get(values[f"{rid}_moving"], "none")
+        if self.base.raw.get("goals"):
+            self._goals_update(values)
+        probes = [rid for rid, r in pack.reads.items() if r.get("kind") == "probe"]
+        for rid in probes:
+            values[rid] = self._probe(pack.reads[rid], values)
+        if probes:
+            # reads gated on what the probe found (OCR of text only when there is text) are read now
+            for rid, r in pack.reads.items():
+                w = r.get("when")
+                if w and any(c.get("read") in probes for c in (w if isinstance(w, list) else [w])):
+                    v, _, _ = read_all(pack, frame, only={rid}, tick=self.tick, state=state, given=values)
+                    values[rid] = v.get(rid)
+        if self.memory is not None and pack is self.base:
+            w = next((t for t in self.worlds.values() if hasattr(t, "tile_of")), None)
+            t = w.tile_of(values) if w is not None else None
+            placed = {**values, "map": t[0]} if t else dict(values)      # the place as the world memory names it
+            if getattr(self, "numbers", None) is not None:
+                ram = None
+                if hasattr(self.device, "memory"):
+                    from .discover import ram as work_ram
+                    ram = work_ram(self.device.memory)
+                txt = values.get(self.base.raw.get("dialogue_read", "text"))
+                self.numbers.observe(txt if isinstance(txt, str) else "", ram)
+                placed["numbers"] = self.numbers.values(ram)
+                if w is not None:
+                    if getattr(self, "gains", None) is None:
+                        from .chains import Gains
+                        self.gains = Gains(w)        # a line telling of a gain makes given-up walls worth a bump
+                    self.gains.see(txt if isinstance(txt, str) else "")
+            self.memory.observe(self.tick, getattr(self.device, "frames", None), placed,
+                                values.get(self.base.raw.get("dialogue_read", "text")), (t[1], t[2]) if t else None)
+            if getattr(self, "keep", None) is not None and "numbers" in placed:
+                # upkeep (anygame/upkeep.py): a tracked number falling toward a floor the game has shown to be fatal
+                forced = False
+                if w is not None and hasattr(w, "book"):
+                    evs = w.book.events
+                    forced = any(e.get("forced") for e in evs[self._book_seen:])
+                    self._book_seen = len(evs)
+                self.keep.see(self.tick, placed["numbers"], place=t[0] if t else None, screen=values.get("screen"),
+                              moved=forced)
+            if self.goalbook is not None:
+                self.quest = self.goalbook.update(self.tick, placed, w, getattr(self.device, "frames", None))
+                adv = self.keep.advice() if getattr(self, "keep", None) is not None else None
+                met = self.goalbook.need_met
+                if met is not None:
+                    # the way to refill it was taken (a rest given) but the number is not on screen: wait for a reading
+                    n = ((met.get("done") or {}).get("any") or [{}])[0].get("number", {}).get("name") or \
+                        (met.get("done") or {}).get("number", {}).get("name")
+                    tr_ = self.keep.tracks.get(n)
+                    self._held = (n, tr_.reads if tr_ else 0)
+                    self.goalbook.need_met = None
+                held = getattr(self, "_held", None)
+                er = getattr(self, "_errand", None)
+                if er is not None and self.goalbook.current is None and self.goalbook.goals and \
+                        self.goalbook.goals[-1].get("source") == "errand":
+                    last = self.goalbook.goals[-1]
+                    g = er.next() if last.get("outcome") == "reached" else None
+                    self._errand = None if g is None else er
+                    if g is not None:
+                        self.goalbook.impose(g, self.tick, placed, source="errand", ask=False)
+                        self.quest = self.goalbook.quest()
+                # a number not read for a while (health off the battle screen) is not known to be low any more: its
+                # advice waits for the next reading instead of sending the player after it for ever
+                stale = int(self.base.raw.get("upkeep_stale", 0) or 0)
+                if adv and stale:
+                    tr_ = self.keep.tracks.get(adv["number"])
+                    seen = self._read_at.get(adv["number"]) if hasattr(self, "_read_at") else None
+                    if tr_ is not None:
+                        if seen is None or seen[0] != tr_.reads:
+                            self._read_at = {**getattr(self, "_read_at", {}), adv["number"]: (tr_.reads, self.tick)}
+                        elif self.tick - seen[1] > stale:
+                            adv = None
+                            if (self.goalbook.current or {}).get("source") == "upkeep":
+                                self.goalbook._close(self.goalbook.current, "stale", self.tick)
+                                self.quest = self.goalbook.quest()
+                if held and adv and adv["number"] == held[0]:
+                    tr_ = self.keep.tracks.get(held[0])
+                    if tr_ is not None and tr_.reads == held[1]:
+                        adv = None
+                    else:
+                        self._held = None
+                for tr in self.worlds.values():
+                    if hasattr(tr, "leave"):
+                        tr.leave = bool(adv and adv.get("leave"))
+                if adv and (adv["goal"].get("target") or {}).get("place") is not None:
+                    pl = self.goalbook.memory.places.get(str(adv["goal"]["target"]["place"])) or {}
+                    if int(pl.get("last_tick") or -1) < int(getattr(self.goalbook.memory, "since", 0) or 0):
+                        # a refill place named before a reload: the name may mean nothing now, so ask the writer how
+                        adv = {**adv, "goal": {**adv["goal"], "target": None}}
+                if adv and self.goalbook.impose(adv["goal"], self.tick, placed, world=w):
+                    print(f"upkeep at tick {self.tick}: {adv['why']}", file=sys.stderr)
+                    self.quest = self.goalbook.quest()
+        for rid, r in pack.reads.items():
+            if r.get("kind") == "menu":
+                if rid not in self.worlds:
+                    from .perceive.menu import MenuTracker
+                    self.worlds[rid] = MenuTracker(r)
+                if getattr(self.worlds[rid], "screen_kind", None) is None:
+                    # also for a tracker a checkpoint made: what an entry's play-out ends on, for leaving a fight
+                    pr = next((x for x in pack.reads.values() if x.get("kind") == "probe"), None)
+                    if pr is not None:
+                        self.worlds[rid].screen_kind = lambda pr=pr: self._probe(pr)
+                self.trackers[rid] = self.worlds[rid]
+                # a screen with no word on it is not a menu to explore (a platformer's play screen answers the probe
+                # like a choice: a direction changes it, no position is known): exploring it costs seconds a step
+                wordless = int(r.get("needs_words", 0)) > 0 and values.get("screen") == "choice" and \
+                    len(re.findall(r"[A-Za-z]{2,}", str(values.get(r.get("text_read", "text")) or ""))) < int(r["needs_words"])
+                if (r.get("when") and not self._task_ok(r["when"], values)) or wordless:
+                    self.worlds[rid].see(self.device.screen(), values.get("text"))   # where a choice may lead back to
+                    values[rid] = None
+                    continue
+                pos = [str(x) for x in (r.get("pos") or [])]
+                look_pos = (lambda: tuple(_get(self.device.state() or {}, p_) for p_ in pos)) if pos else None
+                values[rid] = self.worlds[rid].read(self.device, self.device.screen(), look_pos)
+            if r.get("kind") == "world":
+                if rid not in self.worlds:
+                    from .perceive.world import WorldTracker
+                    self.worlds[rid] = WorldTracker(r)
+                self.trackers[rid] = self.worlds[rid]
+                cur = getattr(getattr(self, "goalbook", None), "current", None)
+                said = (cur or {}).get("done", {}).get("said") if isinstance((cur or {}).get("done"), dict) else None
+                # a goal that waits for the game to tell of something (an item got, a move learned): a chain of menu
+                # picks found by playing them out (anygame/chains.py) is offered once the walk has stalled
+                self.worlds[rid].wants = (cur["id"], [str(x) for x in said]) if said else None
+                if getattr(self.worlds[rid], "chain_fn", None) is None:
+                    self.worlds[rid].chain_fn = self._chain
+                tgt = dict((self.quest or {}).get("target") or {}) or None
+                if tgt is not None:
+                    tgt.setdefault("label", self.quest["id"])
+                if r.get("motion") and values.get("x") is not None:
+                    # once per place: what each button does (a jump, a dash), offered next to the walks
+                    w_ = self.worlds[rid]
+                    lines = w_.learn_motion(self.device, w_.here[0] if w_.here is not None else None) \
+                        if len(w_.motion_at) < int(r.get("motion_places", 40)) else None
+                    if lines:
+                        print("motion: " + "; ".join(lines), file=sys.stderr)
+                values[rid] = self.worlds[rid].read(values, tgt)
         for rid, r in pack.reads.items():
             if r.get("kind") == "predict":
                 # where a located thing will be when the action lands: its cell shifted by its last displacement,
@@ -475,6 +651,7 @@ class Agent:
                 self.pack.rules = edit["rules"]
                 self.last_answers = None
         frame = self.device.frame()
+        self._hold_position()
         state = self.device.state() if hasattr(self.device, "state") else None   # a game that tells us its state
         self.last_state = state
         fp = fingerprint(frame)
@@ -493,6 +670,11 @@ class Agent:
         t_perc = (time.perf_counter() - t0) * 1000
         h = stable_hash({k: v for k, v in values.items() if not k.endswith("_prev")})
         changed = h != self.last_hash
+        if self.pack.raw.get("change") == "screen" and self.last_fp is not None:
+            # the reads do not see everything (a title screen, a menu): a frame that looks different is a change too
+            from .fingerprint import distance as _fpd
+            changed = changed or _fpd(fp, self.last_fp) > float(self.pack.raw.get("change_min", 3))
+        self.last_fp = fp
         if changed:
             self.noops = []
         elif self.history and self.history[-1].get("key") and self.history[-1]["key"] not in self.noops:
@@ -506,6 +688,23 @@ class Agent:
                                "mode": self.mode, "support": round(support, 2), "known": known}
         if self.last_state is not None and os.environ.get("ANYGAME_LOG_TRUTH"):
             rec["truth"] = self.last_state   # the page's own state beside the pixel reads, to check perception offline
+        for rid in self.base.raw.get("remember") or []:
+            # what the game said: the last few distinct readings of a text read, a line typed out letter by letter
+            # kept once (the longer reading replaces the prefix it grew from)
+            v = values.get(rid)
+            mem = self.remembered.setdefault(rid, [])
+            if isinstance(v, str) and v.strip():
+                v = v.strip()
+                if mem and (v.startswith(mem[-1]) or mem[-1].startswith(v)):
+                    mem[-1] = max(v, mem[-1], key=len)
+                elif v not in mem[-3:]:
+                    mem.append(v)
+                del mem[: -int(self.base.raw.get("remember_lines", 6))]
+            if mem:
+                state[f"recent_{rid}"] = list(mem)
+        if self.quest is not None:
+            state["goal"] = self.quest["instruction"]
+            rec["goal"] = self.quest["id"]
         if self.mode == "main" and self.base.tasks:
             self._tasks_tick(values, rec)
             if self.task is not None:
@@ -601,6 +800,24 @@ class Agent:
             rec["reason"] = f"{stop['read']} is {_get(values, stop['read'])}"
             self._emit(rec, frame, dets, None)
             return rec
+        for rl in self.base.raw.get("auto") or []:
+            if self._task_ok(rl["if"], values):
+                # a routine screen (text to page through, a transition): handled without asking the decider
+                if "key" in rl:
+                    self.device.key(rl["key"], int(rl.get("hold_ms", 0) or 0))
+                    rec["action"] = f"auto: key {rl['key']}"
+                else:
+                    if hasattr(self.device, "wait"):
+                        self.device.wait(int(rl["wait"]))
+                    else:
+                        time.sleep(int(rl["wait"]) / 60)
+                    rec["action"] = f"auto: wait {rl['wait']}"
+                rec["reason"] = rl.get("why") or "auto: " + ", ".join(f"{c['read']}={_get(values, c['read'])}" for c in (rl["if"] if isinstance(rl["if"], list) else [rl["if"]]))
+                self.auto_ticks += 1
+                self.last_hash = h
+                self.history.append({"tick": self.tick, "action": rec["action"], "choice": "auto", "key": "auto"})
+                self._emit(rec, frame, dets, None)
+                return rec
         gate = self.pack.raw.get("act_when")
         if gate and not self._cond(gate, values):
             rec["action"] = "wait"
@@ -623,13 +840,18 @@ class Agent:
             return rec
         if changed:
             self.settling = 0
-        if not changed and self.history and self.history[-1]["action"] == "wait":
+        if not changed and self.history and self.history[-1]["action"] == "wait" and getattr(self.device, "clock", "wall") != "game":
             rec["action"] = "wait"
             rec["reason"] = "screen unchanged"
             self.last_hash = h
             self._emit(rec, frame, dets, None)
             return rec
         qs = self.questions(values)
+        if self._avoid is not None:
+            if self.tick > self._avoid[0]:
+                self._avoid = None
+            else:
+                qs = _without(qs, self._avoid[1])
         budget = float(self.pack.raw.get("budget_ms") or 0)
         expected = t_perc + self.sensor_ewma_ms
         reflex = self.pack.raw.get("reflex")
@@ -718,6 +940,9 @@ class Agent:
             action = self.pack.action(choice)
         except Exception:
             action = Action("wait", "wait")
+        if self.auditor is not None and "sensor" not in rec:
+            # Jev's pick against the top-ranked one, both played forward from this moment: did the pick matter
+            rec["audit"] = self.auditor.check(self, qs, answers, values)
         done = self.act(action, answers)
         if getattr(self.device, "coach", False):
             done = "suggest: " + done            # coach mode: shown, never performed
@@ -729,11 +954,111 @@ class Agent:
                     "nouls": {k: round(v["noul"], 2) for k, v in answers.items() if v.get("type") == "noul"},
                     "choices": {k: v.get("choice") for k, v in answers.items() if v.get("type") == "choice" and k != "action"},
                     "jev_ms": res["latency_ms"], "tokens": res["input_tokens"], "cost_usd": round(res["cost_usd"], 7), "total_cost_usd": round(self.total_cost, 6)})
+        # the compiler's top pick next to the decider's, so the decider's contribution can be measured (and replayed
+        # from a save state both ways)
+        top = {k: next(iter(q["criteria"]), None) for k, q in qs.items() if q.get("type") == "choice" and q.get("criteria")}
+        if top and "sensor" not in rec:
+            rec["top"] = top
+            rec["top_agrees"] = all(answers.get(k, {}).get("choice") == v for k, v in top.items())
+            self.top_asked = getattr(self, "top_asked", 0) + 1
+            self.top_agreed = getattr(self, "top_agreed", 0) + rec["top_agrees"]
         self.last_hash = h
         param = next((answers[k]["choice"] for k in (f"{choice}__cell", f"{choice}__target", f"{choice}__slot", f"{choice}__option") if k in answers), None)
         self.history.append({"tick": self.tick, "action": done, "choice": choice, "key": f"{choice}→{param}" if param else choice})
         self._emit(rec, frame, dets, answers)
         return rec
+
+    def _look(self) -> dict[str, Any]:
+        """The pack's reads on the current screen and state, without advancing a game that waits for us and without
+        touching per-run history: what a multi-step plan checks between its steps."""
+        frame = self.device.screen() if hasattr(self.device, "screen") else self.device.frame()
+        st = self.device.state() if hasattr(self.device, "state") else None
+        values, _, _ = read_all(self.pack, frame, tick=self.tick, previous=self.last_values, state=st)
+        return self._present(values, self.pack)
+
+    def _chain(self, device, words: list[str]) -> str:
+        """Menu chains from now until the game tells of a gain naming one of `words`; the first found is played."""
+        from .chains import replay, says, search
+        r = next((x for x in self.base.reads.values() if x.get("kind") == "tiletext"), None)
+        if r is not None:
+            from .perceive import tiletext
+            read_text = lambda img: tiletext.reader(r, str(self.base.assets_dir())).read(img)[0]
+        else:
+            from .perceive.ocr import _text
+            read_text = lambda img: _text(img, 0.67)
+        tests = [says(w) for w in words]
+        found = search(device, read_text, lambda d, res, ln: any(t(d, res, ln) for t in tests),
+                       max_tries=int(self.base.raw.get("chain_tries", 60)))
+        if not found["found"]:
+            return f"no menu chain told of {', '.join(words)} in {found['tries']} tries"
+        replay(device, found["trace"])
+        return "played " + " > ".join("+".join(s["keys"]) for s in found["steps"]) + ": " + " | ".join(found["lines"])[:120]
+
+    def _probe(self, r: dict[str, Any], values: dict[str, Any] | None = None) -> str | None:
+        """What kind of screen is this, found by trying, with no knowledge of the game: branch from a save state and
+        play each of wait, A and the four directions for the same number of frames, then put the game back.
+
+          walk    a direction moved the player's position (`pos`: state paths of the discovered x and y)
+          choice  no position moved, but a direction changed the screen: a cursor or a selection, a choice to make
+          text    no direction did anything, A did: something to page through
+          none    nothing responds (a cutscene, a transition): wait
+
+        A blinking arrow or scrolling clouds are the same in every branch, so only what an input caused differs.
+        `when_any`: only probe on screens where one of these holds (else `otherwise`)."""
+        conds = r.get("when_any")
+        if conds and values is not None and not any(self._cond(c, values) for c in conds):
+            return r.get("otherwise")
+        if not hasattr(self.device, "branch"):
+            return None
+        import numpy as _np
+        dirs = list(r.get("keys") or ["down", "up", "left", "right"])
+        buttons = list(r.get("buttons") or ["a", "start", "b"])
+        # directions are held long enough to walk a step: a tap only turns the player in some games (Pokemon)
+        hold = int(r.get("hold", 16))
+        res = self.device.branch({"wait": [], **{k: [k] for k in buttons}, **{k: [f"{k}:{hold}"] for k in dirs}}, frames=int(r.get("frames", 48)))
+        disc = getattr(self.device, "discoverer", None)
+        held = (getattr(self, "_pos_lock", None) or {}).get("locked")
+        if disc is not None and res["wait"].get("ram") is not None and not held:
+            # each direction against waiting, from the same moment: what the press changed and nothing else, which is
+            # what finding the position needs (a timer or an animation changes in both and cancels out)
+            # not once the position has held (pos_lock, kept across a resume, beside discovery's own a3d5429): in a
+            # battle menu the cursor byte follows up/down and stays on left/right like a position (Rattata, tick 5730)
+            for k in dirs:
+                disc.press(k, res["wait"]["ram"], res[k]["ram"], full=False)
+        base = res["wait"]["screen"].astype(_np.int16)
+        thr = float(r.get("min_change", 0.05))   # the emulator is deterministic: a few letters more is a real difference
+        differs = {k: float(_np.abs(v["screen"].astype(_np.int16) - base).mean()) > thr for k, v in res.items() if k != "wait"}
+        pos = [str(x) for x in (r.get("pos") or [])]
+        def at(k):
+            st = res[k]["state"] or {}
+            return tuple(_get(st, p_) for p_ in pos)
+        moved = [k for k in dirs if pos and None not in at("wait") and at(k) != at("wait")]
+        self.last_probe = {"moved": moved, "changed": [k for k, v in differs.items() if v]}
+        if moved:
+            return "walk"
+        if any(differs[k] for k in dirs):
+            return "choice"
+        if differs["a"]:
+            return "text"
+        if any(differs.get(k) for k in buttons):
+            return "button"             # only START or B does something: a choice of button
+        return "none"
+
+    last_probe: dict[str, Any] = {}
+
+    def _goals_update(self, values: dict[str, Any]) -> None:
+        """Goals are an ordered list of milestones, each done when its condition holds; once done, done for good.
+        The current goal is the first not done whose `when` holds: it goes to the decider and to the navigator."""
+        for g in self.base.raw.get("goals") or []:
+            if g["id"] not in self.goals_done and g.get("done") and self._task_ok(g["done"], values):
+                self.goals_done.add(g["id"])
+                self.goal_log.append({"id": g["id"], "tick": self.tick, "frames": getattr(self.device, "frames", None)})
+                if self.on_goal is not None:
+                    self.on_goal(g, self)
+        self.quest = next((g for g in self.base.raw.get("goals") or [] if g["id"] not in self.goals_done
+                           and (not g.get("when") or self._task_ok(g["when"], values))), None)
+
+    on_goal = None                  # (goal, agent) when a goal is reached: a run saves its state there
 
     def _apply_rules(self, answers: dict[str, Any], values: dict[str, Any]) -> list[str]:
         """Pack rules turn beliefs (or compiled reads) into policy inside the same tick.
@@ -901,7 +1226,63 @@ class Agent:
                     out[rid] = ["".join(str(v.get(f"c{c}r{rr}", "?"))[:1] for c in range(1, cols + 1)) for rr in range(1, rows + 1)]
         return out
 
+    def _start_errand(self, v: dict[str, Any], s: dict[str, Any]) -> None:
+        """A stall on a walking screen where the game named someone met elsewhere: go there, talk, come back
+        (anygame/landmarks.py Errand). Only while no other errand runs and the goal is not upkeep's."""
+        gb = getattr(self, "goalbook", None)
+        if gb is None or v.get("screen") != "walk" or getattr(self, "_errand", None) is not None or \
+                getattr(gb, "marks", None) is None or (gb.current or {}).get("source") == "upkeep":
+            return
+        from .landmarks import errand_from
+        e = errand_from(gb.marks, gb.memory.dialogue, here=v.get("map"), since=int(s.get("since") or 0))
+        if e is not None and gb.impose(e.goal(), self.tick, v, source="errand", ask=False):
+            self._errand = e
+            self.quest = gb.quest()
+            print(f"errand at tick {self.tick}: {e.goal()['instruction'][:100]}", file=sys.stderr)
+
+    def _hold_position(self) -> None:
+        """`pos_lock`: ticks after which a found x and y that have not changed are kept. A byte that follows walking
+        just as well (a map view's scroll, a menu cursor) can outscore the position on a stretch of door-heavy walking
+        or menus, and the world memory, keyed by position, is lost when it does; one that held for thousands of ticks
+        is the position. Until discovery itself refuses such swaps, the run puts the held pair back."""
+        n = int(self.base.raw.get("pos_lock", 0) or 0)
+        disc = getattr(self.device, "discoverer", None)
+        if not n or disc is None or not isinstance(getattr(disc, "found", None), dict):
+            return
+        now = tuple((disc.found.get(ax) or {}).get("addr") for ax in "xy")
+        lk = getattr(self, "_pos_lock", None)
+        if lk is not None and lk["locked"]:
+            if now != lk["addrs"]:
+                for ax in "xy":
+                    disc.found[ax] = dict(lk["found"][ax])
+                lk["restored"] += 1
+                if lk["restored"] == 1:
+                    print(f"position held at tick {self.tick}: discovery moved to {now}, kept {lk['addrs']}", file=sys.stderr)
+            return
+        if None in now:
+            self._pos_lock = None
+            return
+        if lk is None or lk["addrs"] != now:
+            self._pos_lock = {"addrs": now, "since": self.tick, "locked": False, "restored": 0,
+                              "found": {ax: dict(disc.found[ax]) for ax in "xy"}}
+        elif self.tick - lk["since"] >= n:
+            lk["locked"] = True
+
     def _emit(self, rec, frame, dets, answers):
+        if getattr(self, "stuck", None) is not None and rec.get("action") is not None:
+            v = rec.get("screen") or {}
+            pos = (v.get("x"), v.get("y"), v.get("map")) if v.get("x") is not None else None
+            s = self.stuck.see(self.tick, rec["action"], kind=v.get("screen"), text=str(v.get("text") or "")[:120],
+                               pos=pos, frame=frame)
+            if s:
+                # break it: B once (backs out of most menus and talks), then the repeated choices are left out of
+                # the next questions while the detector stays quiet, so the decider takes something else
+                rec["stuck"] = s
+                self._avoid = (self.tick + self.stuck.quiet, set(s["repeated"]))
+                print(f"stall at tick {self.tick}: {s['counts']} since {s['since']}", file=sys.stderr)
+                if hasattr(self.device, "press"):
+                    self.device.press("b", hold=4, after=8)
+                self._start_errand(v, s)
         if self.on_record is not None:
             self.on_record(rec, frame)
         if self.log:
@@ -948,3 +1329,16 @@ class Agent:
                     time.sleep(period - dt)
         finally:
             self.close()
+
+
+def _without(qs: dict[str, Any], avoid: set[str]) -> dict[str, Any]:
+    """The questions with the options a stall kept taking left out, where some other option remains."""
+    out = {}
+    for k, q in qs.items():
+        c = q.get("criteria") if isinstance(q, dict) else None
+        if q.get("type") == "choice" and isinstance(c, dict):
+            keep = {o: t for o, t in c.items() if o not in avoid}
+            if keep and len(keep) < len(c):
+                q = {**q, "criteria": keep}
+        out[k] = q
+    return out
