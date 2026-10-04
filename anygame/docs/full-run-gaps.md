@@ -217,3 +217,10 @@ the menu reader's choice of when to explore.
 and y are found in memory (the sprite table is preferred), and each input is described: a step of one tile, a walk
 while held, a jump with its height, a dash. On Pokemon a tap is a whole tile; on Aevilia movement is continuous; on
 Tobu Tobu Girl B is a jump and A with a direction a dash; on Renegade Rush left and right steer.
+
+## Gap 7: when to ask the goal writer
+
+`anygame/goalgate.py`, see `docs/goal-budget.md`. Of 412 logged writer calls, three quarters bought a goal the program
+would have had anyway: the same goal kept, rewritten as itself, or the generic one. The gate asks only on text the
+run has not seen before, when a goal ends after news was kept over, or once after a give-up, from a budget that grows
+with game time. Replayed on two Pokemon runs, it makes 13-14 calls where 34 were made.
