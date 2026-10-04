@@ -529,7 +529,7 @@ def test_upkeep_need_without_a_refill_place_asks_the_writer_how():
                       "done": {"talks": 1}, "target": {"place": 3}, "ticks": 200}})
     chat = FakeChat([ans])
     gb = GoalBook(m, chat)
-    walk = {"map": 1, "x": 0, "y": 0, "screen": "walk", "numbers": {"HP": {"value": 1, "of": 14}}}
+    walk = {"map": 1, "x": 0, "y": 0, "screen": "walk"}           # HP is not on a walking screen
     goal = {"instruction": "Get HP back up", "done": {"number": {"name": "HP", "share_at_least": 0.9}}, "target": None}
     assert gb.impose(goal, 5, walk)
     assert chat.seen[0]["need"]["done"] == goal["done"]

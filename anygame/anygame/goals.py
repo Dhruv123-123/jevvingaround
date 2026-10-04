@@ -297,7 +297,7 @@ class GoalBook:
             if need is not None:
                 goal = {**goal, "done": need["done"]}      # how is the writer's; what counts as done is the run's
             err = None if goal.get("instruction") else "no instruction"
-            err = err or check(goal.get("done"), places, numbers=set(values.get("numbers") or {})) or check_target(goal.get("target"), places, len(self.memory.dialogue))
+            err = err or check(goal.get("done"), places, numbers=set(values.get("numbers") or {}) | _need_numbers(need)) or check_target(goal.get("target"), places, len(self.memory.dialogue))
             if err:
                 self.failures += 1
                 entry["result"] = f"rejected: {err}"
@@ -343,6 +343,12 @@ class GoalBook:
         return {"calls": self.calls, "rejected_or_failed": self.failures, "gate": self.gate.report(),
                 "median_ms": sorted(self.latency_ms)[len(self.latency_ms) // 2] if self.latency_ms else None,
                 "goals": [{k: g.get(k) for k in ("id", "instruction", "done", "target", "source", "set_tick", "closed_tick", "outcome")} for g in self.goals]}
+
+
+def _need_numbers(need: dict[str, Any] | None) -> set[str]:
+    """The number a run's own need is about counts as known even while the screen does not show it (a walk)."""
+    n = ((need or {}).get("done") or {}).get("number") or {}
+    return {n["name"]} if n.get("name") else set()
 
 
 def _as_map(k: Any) -> Any:
