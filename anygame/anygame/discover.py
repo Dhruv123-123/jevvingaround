@@ -407,6 +407,8 @@ class Discoverer:
 
     def load(self, d: dict[str, Any]) -> None:
         for k in ("x", "y", "map", "cell"):
+            if k == "map" and d.get(k) and "doors" not in d[k]:
+                continue                        # a signature found by the older burst rule (screen tiles): not kept
             if d.get(k):
                 self.found[k] = d[k]            # a starting point: what this run sees can replace or drop it
 

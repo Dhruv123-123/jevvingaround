@@ -357,3 +357,19 @@ def test_graders_read_milestones_the_agent_never_sees():
     m2 = bytearray(0x10000)
     m2[0xC3C4] = 2
     assert a.update(m2) == ["tutorial"]
+
+
+def test_discoverer_drops_a_map_signature_from_the_older_rule():
+    """A checkpoint from before door steps carries a signature of screen tiles (no "doors"): it is dropped, not
+    kept or compared against the new one."""
+    from anygame.discover import Discoverer, LO, N
+    d = Discoverer()
+    d.load({"x": {"addr": 0xD362, "type": "u8"}, "y": {"addr": 0xD361, "type": "u8"}, "cell": 1,
+            "map": {"addrs": [0xC5AC, 0xC5AD, 0xC5C4, 0xC5C5], "transitions": 109}})
+    mem = np.zeros(N, np.int32)
+    for _ in range(10):
+        before = mem.copy()
+        mem[0xD362 - LO] += 1
+        d.press("right", before, mem.copy())
+        d.frame(mem.copy(), blank=False)
+    assert d.found["map"]["addrs"] == [] and d.state(mem)["map"] == 0
