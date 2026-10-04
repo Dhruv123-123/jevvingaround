@@ -211,6 +211,18 @@ class MenuTracker:
                         break       # the cursor stopped (an end of the list) or came round again (a wrapping list)
                     entries.append(([d] * n, img))
                     prev = img
+            # a grid (a battle's FIGHT / PKMN / ITEM / RUN): from each place one axis reached, the other axis too
+            for keys0, _ in [e for e in entries if e[0] and e[0][0] in ("down", "up")]:
+                for d in ("right", "left"):
+                    device.restore(snap)
+                    prev = self._play(device, keys0, total)
+                    for n in range(1, self.depth + 1):
+                        device.restore(snap)
+                        img = self._play(device, keys0 + [d] * n, total)
+                        if _same(img, prev) or any(_same(img, e[1]) for e in entries):
+                            break
+                        entries.append((keys0 + [d] * n, img))
+                        prev = img
             # what choosing each entry does, and what B does
             pos0 = pos() if pos else None
             outcomes = []
@@ -309,7 +321,8 @@ class MenuTracker:
         for i, e in enumerate(m["entries"]):
             lab = f"pick_{i + 1}"
             name = f"'{e['label']}'" if e["label"] else f"entry {i + 1} of {n}"
-            where = "where the cursor is now" if not e["keys"] else f"{len(e['keys'])} x {e['keys'][0]}"
+            where = "where the cursor is now" if not e["keys"] else \
+                ", ".join(f"{e['keys'].count(k)} x {k}" for k in dict.fromkeys(e["keys"]))
             landings[lab] = f"{name} ({where}) → {self._said(e)}"
             plans[lab] = e["keys"] + ["a"]
         b = m["back"]

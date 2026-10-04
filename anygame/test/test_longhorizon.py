@@ -480,3 +480,41 @@ def test_a_walk_pushed_back_after_a_talk_counts_as_stuck():
         w.read({"map": 0, "x": 5, "y": 6, "screen": "text"})      # stepped once, then the talk
     w.read({"map": 0, "x": 5, "y": 5, "screen": "walk"})          # pushed back
     assert w.stuck.get((w.here, ("down", "down"))) == 2
+
+
+class GridMenu(MenuGame):
+    """A 2 x 2 battle menu (FIGHT PKMN / ITEM RUN): the cursor moves on both axes and stops at the edges."""
+
+    def __init__(self):
+        super().__init__()
+        self.s = {"r": 0, "c": 0, "open": True, "text": None}
+
+    def press(self, k, hold=4, after=8):
+        self.frames += hold + after
+        self.real_presses.append(k)
+        s = self.s
+        if k in ("down", "up"):
+            s["r"] = 1 if k == "down" else 0
+        elif k in ("right", "left"):
+            s["c"] = 1 if k == "right" else 0
+        elif k == "a":
+            s["text"] = ["FIGHT", "PKMN", "ITEM", "RUN"][s["r"] * 2 + s["c"]]
+
+    def screen(self):
+        img = np.full((432, 480, 3), 240, np.uint8)
+        y, x = 60 + 120 * self.s["r"], 30 + 220 * self.s["c"]
+        img[y:y + 30, x:x + 30] = 20
+        if self.s["text"]:
+            img[330:420, :] = {"FIGHT": 0, "PKMN": 60, "ITEM": 120, "RUN": 180}[self.s["text"]]
+        return img
+
+
+def test_a_grid_menu_reaches_its_corner(monkeypatch):
+    """RUN sits down and right of FIGHT: an entry reached on one axis is tried along the other too."""
+    import anygame.perceive.menu as menu
+    monkeypatch.setattr(menu, "_ocr_boxes", lambda img: [])
+    monkeypatch.setattr("anygame.perceive.ocr._text", lambda img, up=2.0: "", raising=False)
+    g = GridMenu()
+    t = MenuTracker({"depth": 3})
+    t.read(g, g.screen())
+    assert ["down", "right", "a"] in t.plans.values()
