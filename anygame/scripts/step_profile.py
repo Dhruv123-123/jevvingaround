@@ -26,6 +26,7 @@ def main():
     ap.add_argument("--out", required=True)
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--state", default=None)
+    ap.add_argument("--stuck", action="store_true", help="run anygame/stuck.py on every step, frames included, and log its raises")
     ap.add_argument("--shots", default=None, help="a folder: the screen of every 10th explored step")
     a = ap.parse_args()
     work = Path(tempfile.mkdtemp(prefix="stepprof-"))
@@ -52,6 +53,10 @@ def main():
         os.environ["ANYGAME_GLYPHS"] = str(book)     # the menu reader's cells use the same book, as in the held-out runs
     agent = Agent(load_pack(work / "pack"), device, open_sensor("top"), None, background=False)
     mt = None
+    stuck = None
+    if a.stuck:
+        from anygame.stuck import Stuck
+        stuck = Stuck()
     with open(a.out, "w") as log:
         for i in range(a.steps):
             if mt is None:
@@ -63,7 +68,12 @@ def main():
             if mt is None:
                 mt = _find_menu(agent)
             s = rec.get("screen") or {}
-            log.write(json.dumps({"step": i + 1, "wall_s": round(dt, 3), "frame": device.frames,
+            raised = None
+            if stuck is not None:
+                pos = (s.get("x"), s.get("y"), s.get("map")) if s.get("x") is not None else None
+                raised = stuck.see(i + 1, rec.get("action"), kind=s.get("screen"), text=s.get("text"), pos=pos,
+                                   frame=device.screen())
+            log.write(json.dumps({"stuck": raised, "text": (s.get("text") or "")[:80], "y": s.get("y"), "map": s.get("map"),"step": i + 1, "wall_s": round(dt, 3), "frame": device.frames,
                                   "action": str(rec.get("action")), "kind": s.get("screen"),
                                   "x": s.get("x"), "explored": (getattr(mt, "reads", 0) if mt else 0) > before,
                                   "entries": (s.get("menu") or {}).get("entries")}) + "\n")
