@@ -518,3 +518,21 @@ def test_a_grid_menu_reaches_its_corner(monkeypatch):
     t = MenuTracker({"depth": 3})
     t.read(g, g.screen())
     assert ["down", "right", "a"] in t.plans.values()
+
+
+def test_upkeep_need_without_a_refill_place_asks_the_writer_how():
+    """Upkeep knows HP must go back up but not where: the writer says how (talk to someone at home), the done
+    condition stays upkeep's, and the goal keeps upkeep as its source so upkeep does not set it again."""
+    m = RunMemory()
+    m.places = {"3": {"first_tick": 1, "entered": 2}}
+    ans = json.dumps({"why": "mom offered rest", "goal": {"instruction": "Talk to Mom at home",
+                      "done": {"talks": 1}, "target": {"place": 3}, "ticks": 200}})
+    chat = FakeChat([ans])
+    gb = GoalBook(m, chat)
+    walk = {"map": 1, "x": 0, "y": 0, "screen": "walk", "numbers": {"HP": {"value": 1, "of": 14}}}
+    goal = {"instruction": "Get HP back up", "done": {"number": {"name": "HP", "share_at_least": 0.9}}, "target": None}
+    assert gb.impose(goal, 5, walk)
+    assert chat.seen[0]["need"]["done"] == goal["done"]
+    g = gb.current
+    assert g["instruction"] == "Talk to Mom at home" and g["done"] == goal["done"] and g["target"] == {"place": 3}
+    assert g["source"] == "upkeep" and not gb.impose(goal, 6, walk)

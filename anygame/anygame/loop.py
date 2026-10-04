@@ -497,7 +497,7 @@ class Agent:
                 for tr in self.worlds.values():
                     if hasattr(tr, "leave"):
                         tr.leave = bool(adv and adv.get("leave"))
-                if adv and self.goalbook.impose(adv["goal"], self.tick, placed):
+                if adv and self.goalbook.impose(adv["goal"], self.tick, placed, world=w):
                     print(f"upkeep at tick {self.tick}: {adv['why']}", file=sys.stderr)
                     self.quest = self.goalbook.quest()
         for rid, r in pack.reads.items():
