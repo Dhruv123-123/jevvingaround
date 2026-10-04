@@ -354,3 +354,16 @@ def test_a_checkpoint_keeps_the_glyphs_learned(tmp_path):
     finally:
         tiletext._BOOKS.clear()
         tiletext._BOOKS.update(saved)
+
+
+def test_a_jump_that_does_not_happen_again_is_forgotten():
+    """A within-map jump learned from a misread position is dropped the first time walking that edge does not jump."""
+    from anygame.perceive.world import WorldTracker
+    w = WorldTracker({"kind": "world", "pos": ["x", "y"]})
+    assert w.learn((0, 3, 3), "left", (0, 9, 9)) == "warp"
+    assert (0, 3, 3, "left") in w.warps
+    assert w.learn((0, 3, 3), "left", (0, 2, 3)) == "moved"
+    assert (0, 3, 3, "left") not in w.warps
+    w.learn((0, 3, 3), "up", (0, 9, 9))
+    w.learn((0, 3, 3), "up", (0, 3, 3))           # bumped: not a jump either
+    assert (0, 3, 3, "up") not in w.warps

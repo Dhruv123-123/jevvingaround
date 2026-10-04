@@ -159,8 +159,13 @@ class WorldTracker:
         if after is None:
             return "off"
         dx, dy = DIRS[d]
+        k = (before[0], before[1], before[2], d)
+        w = self.warps.get(k)
+        if w is not None and after != w:
+            # a jump known from here did not happen this time: it was a misread position or a one-off push, not a
+            # door or a spinner. Forgotten, so no plan routes through it again (a real one is learned again below)
+            self.warps.pop(k)
         if after == before:
-            k = (before[0], before[1], before[2], d)
             seen = self.blocked.get(k, [0, 0])[0] + 1
             self.blocked[k] = [seen, self.steps]
             self.walls_at.setdefault(before[0], set()).add((before[1] + dx, before[2] + dy))
