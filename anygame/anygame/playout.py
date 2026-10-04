@@ -66,7 +66,8 @@ def play_out(device, keys: list[str], read_text: Callable[[np.ndarray], str], *,
     """Play `keys`, then run until the game asks again (end "asks"; "waits" when only another button does anything;
     "busy" when the screen never stands still for `restless` frames (0: never); "cap" at `max_frames`).
     Returns {lines, end, frames, pages,
-    numbers_before, numbers_after, text_after}. The game is put back as it was unless `restore` is False."""
+    numbers_before, numbers_after, text_after, screen_before, screen_after (grey, native size)}. The game is put back
+    as it was unless `restore` is False."""
     snap = device.snapshot()
     disc, device.discoverer = getattr(device, "discoverer", None), None     # trying keys must not teach discovery
     t0 = device.frames
@@ -74,7 +75,8 @@ def play_out(device, keys: list[str], read_text: Callable[[np.ndarray], str], *,
     pages = 0
     end = "cap"
     try:
-        before = read_text(device.screen())
+        shot0 = device.screen()
+        before = read_text(shot0)
         if delay:
             device.wait(delay)
         for k in keys:
@@ -123,8 +125,10 @@ def play_out(device, keys: list[str], read_text: Callable[[np.ndarray], str], *,
                     end = "waits"
                     break
             prev = device.screen()
-        after = read_text(device.screen())
-        out = {"lines": lines, "end": end, "frames": device.frames - t0, "pages": pages, "text_before": before,
+        shot1 = device.screen()
+        after = read_text(shot1)
+        out = {"screen_before": _small(shot0).astype(np.uint8), "screen_after": _small(shot1).astype(np.uint8),
+               "lines": lines, "end": end, "frames": device.frames - t0, "pages": pages, "text_before": before,
                "numbers_before": numbers(before), "numbers_after": numbers(after), "text_after": after}
     finally:
         if restore:

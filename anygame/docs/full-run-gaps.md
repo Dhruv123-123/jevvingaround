@@ -294,3 +294,24 @@ The labeller also runs in a background thread, so its seconds overlap play rathe
 wall time at all is what the held-out run with a kept book (`book-top`) measures. The lever that would matter is a
 book kept per game (Dhruv's decision card), or a deliberate first pass over the first text screen only. No measured
 policy turns a cold start into seconds.
+
+### C11 built: battle choice by the other side's bar
+
+`anygame/battle.py`, `docs/battle.md`. A menu's play-outs are compared by the bars on the screens they end on. The
+entry that leaves the other side's bar shortest ranks first, and the player's own bar is told apart by matching its
+shown number.
+- Rival, 20 fights each: 18 won by the bar, 15 always-TACKLE, 13 random.
+- Route 1 wild, 20 fights each: 19, 19, 14.
+- Silent on Aevilia, Renegade Rush, Tobu and GBHack.
+- Call site: `menu-battle.patch` for long-horizon.
+
+### Next speed item, noted, not built: "is this screen a menu"
+
+The held-out profile (coordinator, 2026-10-04) puts 91% of Tobu's wall time in menu explores. A platformer's play
+screen was explored as a menu on 75 of 112 steps, at 3.7 s each. Long-horizon is gating explores on screen kind.
+A general check would say whether a screen is a menu before exploring it, from three signals:
+- a cursor: a small shape that moves between text lines on the d-pad;
+- choice text: two or more short lines in a box;
+- a d-pad response without the world moving: the screen changes in one small region only.
+
+It would be a module with its own replay over the held-out logs. It is the next speed item after C11.
