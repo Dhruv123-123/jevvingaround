@@ -534,10 +534,15 @@ class WorldTracker:
             self._pending = None
         opts, plans = self.options(here, goal)
         dead = [k for k, p in plans.items() if self.stuck.get((here, tuple(p)), 0) >= 2]
-        if dead and len(dead) < len(plans):
-            for k in dead:      # walked twice from here and came back here: not offered again from this tile
-                plans.pop(k)
-                opts.pop(k, None)
+        for k in dead:          # walked twice from here and came back here: not offered again from this tile
+            plans.pop(k)
+            opts.pop(k, None)
+        if dead and not plans:
+            # every plan from here came back here (two options can share one plan: a goal's route and the frontier's):
+            # wander instead, which also tries the ground the plans kept stepping back from
+            d = list(DIRS)[(self.steps // 3) % 4]
+            plans["wander"] = [d] * 3
+            opts["wander"] = f"every plan from here came back here: wander {COMPASS[d]} 3 steps"
         if self.wants and self.chain_fn is not None and self.wants[0] not in self.chained and \
                 self.stale >= int(self.r.get("chain_after", 12)):
             plans["search_menus"] = ["chain"]

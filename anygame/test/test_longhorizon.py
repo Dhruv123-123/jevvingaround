@@ -767,3 +767,16 @@ def test_a_place_walked_long_with_nothing_new_offers_the_nearest_place_with_grou
     w._new_tile_at[town] = 990           # something new just now: no frontier option
     opts, _ = w.options((town, 3, 3), None)
     assert "frontier" not in opts
+
+
+def test_two_options_sharing_a_plan_that_comes_back_are_both_dropped():
+    from anygame.perceive.world import WorldTracker
+    w = WorldTracker({"x": "x", "y": "y", "map": "map"})
+    w.read({"map": 11, "x": 3, "y": 5, "screen": "walk"})
+    here = w.here
+    loop = ("down", "down", "up", "up")
+    w.options = lambda h, g: ({"goal": "back through the door", "frontier": "back through the door"},
+                              {"goal": list(loop), "frontier": list(loop)})
+    w.stuck[(here, loop)] = 2
+    w.read({"map": 11, "x": 3, "y": 5, "screen": "walk"})
+    assert "goal" not in w.plans and "frontier" not in w.plans and "wander" in w.plans
