@@ -44,6 +44,20 @@ def test_conditions_are_checked_before_a_goal_is_set():
     assert check_target({"line": 0}, set(), 1) is None and check_target({"line": 3}, set(), 1)
 
 
+def test_a_number_goal_checks_and_holds():
+    m = RunMemory()
+    chat = FakeChat([json.dumps({"goal": {"instruction": "heal up", "done": {"number": {"name": "SQUIRTLE #/#", "share_at_least": 0.8}}}})])
+    gb = GoalBook(m, chat)
+    low = {"map": 1, "x": 0, "y": 0, "screen": "walk", "numbers": {"SQUIRTLE #/#": {"value": 4, "of": 19, "share": 0.21}}}
+    assert gb.update(1, low)["instruction"] == "heal up"
+    assert chat.seen[0]["numbers"] == {"SQUIRTLE #/#": "4/19"}
+    gb.update(2, low)
+    assert gb.goals[0]["outcome"] is None
+    gb.update(3, {**low, "numbers": {"SQUIRTLE #/#": {"value": 19, "of": 19, "share": 1.0}}})
+    assert gb.goals[0]["outcome"] == "reached"
+    assert check({"number": {"name": "LEVEL", "at_least": 14}}, numbers={"SQUIRTLE #/#"})
+
+
 def test_goal_from_dialogue_then_reached_then_the_next_one():
     m = RunMemory()
     chat = FakeChat([
