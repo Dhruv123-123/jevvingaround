@@ -398,6 +398,63 @@ def test_discoverer_credits_a_tap_with_the_step_it_started():
     assert d.found["x"]["addr"] == 0xD362 and d.found["y"]["addr"] == 0xD361
 
 
+def test_discoverer_takes_the_map_id_from_warps_and_returns():
+    """Two outdoor maps joined by a seamless edge (y jumps 0 -> 35, no door) and a house: the game writes the map
+    id as the player steps onto the door and the new position only a press later; a 'last map' byte changes on
+    doors but not at the edge, and a landing spot's bytes take a new value on every warp. Only the id tells each
+    place apart and gives the same value on every visit."""
+    from anygame.discover import Discoverer, LO, N
+    rng = np.random.default_rng(5)
+    d = Discoverer()
+    mem = np.zeros(N, np.int32)
+    X, Y, ID, LAST, LAND = 0xD362 - LO, 0xD361 - LO, 0xD35E - LO, 0xD73C - LO, 0xC110 - LO
+    mem[X], mem[Y], mem[ID] = 8, 8, 0
+    places = {0: (2, 0, 14, 12), 12: (2, 20, 14, 35), 37: (1, 1, 7, 7)}
+    late: list = []                              # writes the game makes after the press is over
+    land = [0]
+    seen: dict = {}
+
+    def warp(to, pos, door):
+        late.append((ID, to)) if not door else None
+        if door:
+            mem[LAST] = mem[ID]
+            mem[ID] = to                         # written as the player steps onto the door
+        land[0] += 1
+        late.extend([(X, pos[0]), (Y, pos[1]), (LAND, land[0] % 256)])
+
+    for _ in range(900):
+        for a, v in late:
+            mem[a] = v
+        late.clear()
+        place = int(mem[ID])
+        if "x" in d.found and "y" in d.found and d.found.get("map", {}).get("addrs"):
+            seen.setdefault(place, set()).add(d.state(mem)["map"])
+        b = ["up", "down", "left", "right"][rng.integers(4)]
+        before = mem.copy()
+        x, y = int(mem[X]), int(mem[Y])
+        dx, dy = {"left": -1, "right": 1}.get(b, 0), {"up": -1, "down": 1}.get(b, 0)
+        x0, y0, x1, y1 = places[place]
+        if place == 0 and b == "up" and y == 0 and x in (9, 10):
+            warp(12, (x, 35), door=False)         # the seamless edge to the route
+        elif place == 12 and b == "down" and y == 35 and x in (9, 10):
+            warp(0, (x, 0), door=False)
+        elif place == 0 and b == "up" and (x, y) == (5, 6):
+            mem[Y] = 5
+            warp(37, (3, 7), door=True)
+        elif place == 37 and b == "down" and (x, y) == (3, 7):
+            warp(0, (5, 6), door=True)
+        elif x0 <= x + dx <= x1 and y0 <= y + dy <= y1:
+            late.extend([(X, x + dx), (Y, y + dy)])
+        # steer toward the exits now and then so every place is visited many times
+        d.press(b, before, mem.copy(), full=True, continues=True)
+        d.frame(mem.copy(), blank=False)
+        if rng.random() < 0.3:
+            target = {0: [(10, 0), (5, 6)][rng.integers(2)], 12: (10, 35), 37: (3, 7)}[place]
+            mem[X], mem[Y] = target
+    assert d.found["map"]["addrs"] == [0xD35E]
+    assert all(len(v) == 1 for v in seen.values() if v) and len(set().union(*seen.values())) == len(seen)
+
+
 def test_pyboy_snapshot_is_reused_until_the_game_moves():
     pytest.importorskip("pyboy")
     from anygame.device import open_device
