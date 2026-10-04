@@ -423,6 +423,36 @@ def test_chat_routes_azure_and_openai_compatible(monkeypatch):
     assert fv1.api == "azure" and fv1.url() == "https://myres.services.ai.azure.com/openai/v1/chat/completions" and fv1.headers()["api-key"] == "k"
 
 
+
+def test_chat_prices_every_call_and_appends_to_the_ledger(monkeypatch, tmp_path):
+    from anygame import chat as chatmod
+    monkeypatch.setenv("ANYGAME_LLM_KEY", "k")
+    monkeypatch.delenv("ANYGAME_LLM_PRICE_IN", raising=False)
+    monkeypatch.delenv("ANYGAME_LLM_PRICE_OUT", raising=False)
+    ledger = tmp_path / "usage.jsonl"
+    monkeypatch.setenv("ANYGAME_USAGE_LOG", str(ledger))
+    usage = {"prompt_tokens": 2000, "completion_tokens": 500, "prompt_tokens_details": {"cached_tokens": 1000},
+             "completion_tokens_details": {"reasoning_tokens": 300}}
+
+    class R:
+        status_code = 200
+        def json(self):
+            return {"choices": [{"message": {"content": "ok"}}], "usage": usage}
+
+    c = chatmod.Chat(model="gpt-5.6-luna", base_url="https://myres.services.ai.azure.com", api="azure")
+    monkeypatch.setattr(c.s, "post", lambda *a, **k: R())
+    c.complete([{"role": "user", "content": "hi"}])
+    c.complete([{"role": "user", "content": "hi"}])
+    one = (1000 * 0.22 + 1000 * 0.022 + 500 * 1.32) / 1e6
+    assert c.calls == 2 and c.tokens == {"prompt": 4000, "completion": 1000} and abs(c.cost - 2 * one) < 1e-9
+    rows = [json.loads(x) for x in ledger.read_text().splitlines()]
+    assert len(rows) == 2 and rows[0]["purpose"] == "other" and rows[0]["reasoning_tokens"] == 300 and "k" not in rows[0].values()
+    s = chatmod.summarize(ledger)
+    assert s["calls"] == 2 and s["completion_tokens"] == 1000 and abs(s["usd"] - 2 * one) < 1e-6
+    assert chatmod.summarize(ledger, since="2999-01-01")["calls"] == 0
+    monkeypatch.setenv("ANYGAME_USAGE_LOG", "off")
+    assert chatmod.ledger_path() is None
+
 # ---------- the Tetris compiler: candidates enumerated, consequences computed, a typed choice ----------
 
 def test_tetris_identify_drop_settle_and_features():
