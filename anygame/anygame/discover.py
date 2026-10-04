@@ -15,6 +15,7 @@ Nothing here knows any game. What it finds is a data file (`discovered.yaml`) th
 """
 from __future__ import annotations
 import json
+import os
 from typing import Any
 import numpy as np
 
@@ -42,6 +43,45 @@ def ram(mem) -> np.ndarray:
 def _z(a: np.ndarray) -> bytes:
     import zlib
     return zlib.compress(a.astype(np.uint8).tobytes(), 1)
+
+
+TRACE_MAGIC = b"ATR1"
+
+
+def append_trace(path: str, trace: list, done: int) -> int:
+    """Append trace[done:] to the file at `path` as one compressed chunk (a new file when `done` is 0, or when the
+    trace was swapped for a shorter one, as a branch put back does); returns how many events are written."""
+    import pickle
+    import struct
+    import zlib
+    if done > len(trace):
+        done = 0
+    if done and not os.path.exists(path):
+        done = 0
+    chunk = zlib.compress(pickle.dumps(trace[done:]), 1)
+    with open(path, "ab" if done else "wb") as f:
+        if not done:
+            f.write(TRACE_MAGIC)
+        f.write(struct.pack("<I", len(chunk)) + chunk)
+    return len(trace)
+
+
+def load_trace(path: str) -> list:
+    """A trace written by append_trace (or, older, one compressed pickle)."""
+    import pickle
+    import struct
+    import zlib
+    raw = open(path, "rb").read()
+    if not raw.startswith(TRACE_MAGIC):
+        return pickle.loads(zlib.decompress(raw))
+    out, i = [], len(TRACE_MAGIC)
+    while i + 4 <= len(raw):
+        n = struct.unpack("<I", raw[i:i + 4])[0]
+        if i + 4 + n > len(raw):
+            break                                   # a chunk cut short by a killed run
+        out += pickle.loads(zlib.decompress(raw[i + 4:i + 4 + n]))
+        i += 4 + n
+    return out
 
 
 def _unz(b: bytes) -> np.ndarray:
@@ -135,13 +175,15 @@ class Discoverer:
         that Pokemon finishes (and writes the position) after the press is over."""
         if self.trace is not None:
             self.trace.append(("p", button, _z(before), _z(after), full, continues))
+        if not continues:
+            # a lookahead from a save state (or a press from an older trace): judged now. It does not settle the
+            # press the game is still finishing: its RAM is a branch's, and a door's fade can outlast its wait
+            self._press(button, before, after, full, real=full)
+            return
         if getattr(self, "_pending", None):
             self._pending[2] = before                   # where the game had got to when the next press came
         self._settle()
-        if continues:
-            self._pending = [button, before, after, full]
-        else:
-            self._press(button, before, after, full, real=full)
+        self._pending = [button, before, after, full]
 
     def _settle(self) -> None:
         if getattr(self, "_pending", None):
@@ -205,6 +247,14 @@ class Discoverer:
             self.presses += 1
         if d is None or jump or self.blank:
             return
+        if full:
+            # a d-pad press in a battle menu or a text box moves a cursor (a few bytes); a step rewrites the
+            # sprites and the screen's tile map. A long battle would otherwise read as hundreds of presses
+            # that moved nothing, and the position would fall below the share it must move on
+            n = int((after != before).sum())
+            self._full_n = (getattr(self, "_full_n", []) + [n])[-200:]
+            if n < _split(self._full_n):
+                return
         if not full:
             # against waiting, a press that did little is no evidence either way: a text box ignores the d-pad but a
             # few bytes (the pad's own state) still differ, while a step rewrites far more (position, sprites, the
@@ -331,7 +381,11 @@ class Discoverer:
         recent map visit where something did follow the d-pad: the lowest visit score counts."""
         cands = []
         for w in (1, 2):
-            sc = self._score(self.st[(ax, w)])
+            # the share a byte must move on is judged over visits where the player walked: a long battle or a
+            # stretch of menus is d-pad presses that move no position, and would sink the real one
+            walked = [v[(ax, w)] for v in self.segs + [self.seg] if self._walked(v)]
+            total = {k: sum(v[k] for v in walked) for k in walked[0]} if walked else self.st[(ax, w)]
+            sc = self._score(total)
             if sc is None:
                 continue
             # a position walks through many values; the direction the player faces or last pressed (a sprite's
@@ -350,7 +404,7 @@ class Discoverer:
             cur = self.found.get(ax)
             if cur and (cur["type"] == "u8") == (w == 1) and score[cur["addr"] - LO] >= self.threshold:
                 held = (float(score[cur["addr"] - LO]), w, cur["addr"] - LO, float(sc[1][cur["addr"] - LO]))
-            keep = score >= top - 0.02
+            keep = (score >= top - 0.02) | ((score >= top - 0.12) & (sc[1] >= sc[1][int(score.argmax())] + 0.3))
             idx = np.where(keep)[0]
             # among equals, the bytes that moved on the most presses: a position changes on every step that lands, a
             # block or chunk coordinate on some; and the one already found is always looked at
@@ -359,8 +413,11 @@ class Discoverer:
                 cands.append((float(score[i]), w, int(i), float(sc[1][i])))
         if not cands:
             return None
-        best = max(c[0] for c in cands)
-        cands = [c for c in cands if c[0] >= best - 0.02]
+        top = max(cands, key=lambda c: (c[0], c[3]))
+        # a byte that moves on clearly more steps stays in the running a little below the best score: a block or
+        # map-view coordinate runs on smoothly across a map's edge (scoring higher on a short stretch with a few
+        # warps) but moves on every other step, the position on every step
+        cands = [c for c in cands if c[0] >= top[0] - 0.02 or (c[0] >= top[0] - 0.12 and c[3] >= top[3] + 0.3)]
         # a pair whose high byte stays small is a position past 255 (pixels); a byte copied into the sprite table
         # scores as well while the camera is still, so the pair wins a tie
         def pref(c):
@@ -400,6 +457,14 @@ class Discoverer:
                 del self.found[ax]                       # better unknown than wrong: the world memory walks blind
         if "x" in self.found and "cell" not in self.fixed:
             self.found["cell"] = self.found.get("cell") or 1
+        pos = tuple(self.found[ax]["addr"] if ax in self.found else None for ax in "xy")
+        if pos != getattr(self, "_warp_pos", pos):
+            # warps are judged by the position bytes: a wrong one (a menu cursor taken for y) jumps all over, so
+            # what it called warps is forgotten when the position changes hands
+            self.by_warp[:] = 0
+            self.returned[:] = 0
+            self.warps = 0
+        self._warp_pos = pos
         if "map" not in self.fixed and "x" in self.found and "y" in self.found:
             m = self._map()
             if m:
