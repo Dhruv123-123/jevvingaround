@@ -93,7 +93,7 @@ def read_all(pack: Pack, frame: np.ndarray, only: set[str] | None = None, tick: 
                 conf[rid] = 1.0 if cells else 0.0
             timings[rid] = 0.0
             continue
-        if kind in ("around", "tetris", "predict", "margin", "slide", "head", "gap", "world", "probe"):
+        if kind in ("around", "tetris", "predict", "margin", "slide", "head", "gap", "world", "probe", "menu"):
             continue  # derived in the loop (needs direction / history / per-run tracker state)
         if kind == "runs":
             values[rid] = runs_of(values.get(r["in"], {}), r)
@@ -103,6 +103,12 @@ def read_all(pack: Pack, frame: np.ndarray, only: set[str] | None = None, tick: 
             from . import go
             values[rid] = go.read(values.get(r["in"]), r)
             timings[rid] = 0.0
+            continue
+        if kind == "tiletext":
+            from . import tiletext
+            whole = Rect.parse([0, 0, 1, 1]) if "rect" not in r and "zone" not in r else rect_for(pack, r)
+            values[rid] = tiletext.read(frame, r, str(pack.assets_dir()), whole, None)
+            timings[rid] = round((time.perf_counter() - t0) * 1000, 1)
             continue
         zone = pack.zone(r["zone"]) if "zone" in r else None
         rect = rect_for(pack, r)

@@ -1,57 +1,66 @@
-# Any top-down Game Boy game, played through the emulator with nothing about the game written down: position, step
-# size and map found from RAM while playing (one discovered-<rom>.yaml per ROM beside this pack), the kind of screen
-# found by branching from save states, world memory and a navigator. The same pack as packs/aevilia minus its name
-# and fixture: a test of whether the long-horizon layer carries to games it never saw.
-#   anygame play packs/gameboy/pack.yaml --device pyboy://<rom.gb> --sensor top
+# Any top-down Game Boy game, with nothing about the game written down: the same pack plays Aevilia and Pokemon Red.
+# Position, step size and map signature are found from RAM while playing (one discovered-<rom>.yaml per ROM beside this
+# pack); the kind of each screen (walk, choice, text, button, none) is found by branching from save states; a menu's
+# entries and what each does are found by trying them from a save state (kind: menu); goals are written from what the
+# game says (goals_from: dialogue, a chat model that never presses a button); world memory and a navigator walk the
+# paths. The ROM is the only game input.
+#   anygame play packs/gameboy/pack.yaml --device pyboy://<rom.gb> --sensor jev --audit 10 --checkpoint runs/ck --checkpoint-every 100
 game: gameboy
 screen: { orientation: landscape, size: [480, 432] }       # 160x144 at 3x
 emulator: { clock: game, step: 4, hold: 8, after: 8 }
-discover: true          # position, step size and map signature are found from RAM while playing (anygame/discover.py)
+discover: true
+goals_from: dialogue
+pos_lock: 500       # a found position held this many ticks is kept (anygame/loop.py _hold_position)
+upkeep_stale: 300   # upkeep advice on a number not read for this many ticks waits for a new reading
+goals_cfg: { per_hour: 20, burst: 16, min_gap: 12, give_up: 250 }   # writer calls only on news, 16 + 20 per game hour (goalgate.py)
 read:
   x: { kind: json, path: found.x }
   y: { kind: json, path: found.y }
   map: { kind: json, path: found.map, default: 0 }
   cell: { kind: json, path: found.cell, default: 16 }
-  # what kind of screen this is, found by branching from a save state (walk, choice, text, button, none): no colours, no
-  # layout, nothing about this game
   screen: { kind: probe, pos: [found.x, found.y] }
-  text: { kind: ocr, rect_px: [0, 0, 480, 432], when: { read: screen, in: [text, choice] }, otherwise: "" }
-  world: { kind: world, map: map, x: x, y: y, cell: cell, step_hold: 16, after: 6, max_steps: 8, radius: 40,
+  # text from the screen's 8x8 cells, each glyph labelled once by the chat model; OCR while most of a screen is unknown
+  text: { kind: tiletext, size: [160, 144], cell: 8, fallback: ocr, when: { read: screen, in: [text, choice] }, otherwise: "" }
+  # a choice on screen: its entries and what choosing each does, found by trying them from a save state
+  menu: { kind: menu, needs_words: 1, when: { read: screen, in: [choice, button] }, pos: [found.x, found.y], depth: 5, settle: 90, text: tiletext, outcome: playout }
+  world: { kind: world, motion: true, goback: true, map: map, x: x, y: y, cell: cell, step_hold: 16, after: 6, max_steps: 8, radius: 40,
            learn_when: { read: x, not: null } }
-remember: [text]        # the last lines of dialogue go to the decider as recent_text: the story's instructions
+remember: [text]
 auto:
   - { if: { read: screen, equals: text }, key: a, why: "text with nothing to choose: page through it" }
   - { if: { read: screen, equals: none }, wait: 30, why: "nothing responds to any input: let it play" }
 act:
-  - { id: go, kind: macro, options: world, description: "walk one of the computed paths (goal, a door, inspect a thing, explore a direction)" }
+  - { id: pick, kind: macro, options: menu, description: "choose one entry of the menu or choice on screen" }
+  - { id: go, kind: macro, options: world, description: "walk one of the computed paths (the goal, a door, inspect a thing, explore a direction)" }
   - { id: confirm, kind: key, key: a, description: "press A: talk, inspect, choose the highlighted entry" }
-  - { id: cursor_down, kind: key, key: down, description: "move the cursor or selection down" }
-  - { id: cursor_up, kind: key, key: up, description: "move the cursor or selection up" }
-  - { id: cursor_left, kind: key, key: left, description: "move the cursor or selection left" }
-  - { id: cursor_right, kind: key, key: right, description: "move the cursor or selection right" }
   - { id: back, kind: key, key: b, description: "press B: back out of a menu" }
   - { id: menu, kind: key, key: start, description: "press START: open the menu" }
   - { id: wait, kind: wait, description: "do nothing this tick" }
 rules:
-  - { if: { read: screen, in: [choice, button] }, exclude: [go, wait] }   # a choice on screen: pick an entry, do not walk
-  - { if: { read: screen, not: choice }, exclude: [cursor_down, cursor_up, cursor_left, cursor_right] }
-change: screen         # a frame that looks different counts as a change, not only a different read
-tick_hz: 1000          # the game waits for us (clock: game); no wall-clock pacing
+  - { if: [{ read: screen, equals: choice }, { read: x, not: null }], exclude: [go, wait, confirm, back, menu] }   # a choice: one of its entries
+  # where you are is not known yet, so a screen that moves with the d-pad may be the world, not a menu: walking (go) is
+  # offered beside the entries, and walking is what finds the position
+  - { if: [{ read: screen, equals: choice }, { read: x, equals: null }], exclude: [wait, confirm, back, menu] }
+  - { if: { read: screen, equals: button }, exclude: [go, wait, confirm, back, menu] }   # only a button works: which one, by what it does
+  - { if: { read: screen, in: [walk, text, none] }, exclude: [pick] }
+change: screen
+tick_hz: 1000
 play: >
-  A game on a Game Boy, probably top-down. You walk the world one tile at a time, talk to people and inspect things with A,
-  and the story moves on when you find the right person or object. `world.landings` are the paths you can walk
-  now, best first: `goal` heads for the current goal when its place is known, `inspect_<dir>` faces a blocked tile
-  next to you and presses A (people, signs and objects block the way, walls do too), `explore_<dir>` walks toward
-  the nearest place not seen yet. A tutorial or a quest usually wants you to talk to or inspect something, so
-  inspect what is next to you before exploring further. Text boxes are paged through for you; `recent_text`
-  is what the game said lately, and when it tells you to press a button (START for the menu), do that. When
-  `screen` is `choice`, something on screen moves with the d-pad (a menu, a yes/no, a character select): pick.
+  A game on a Game Boy, probably a top-down RPG. You walk the world one tile at a time, talk to people and inspect things with A,
+  and the story moves on when you find the right person or object. `goal` is what to do now, written from what the
+  game has said; `recent_text` is what the game said lately. `world.landings` are the paths you can walk now, best
+  first: `goal` heads for the goal's place when it is known, `inspect_<n>` walks to a blocked tile and presses A at it
+  (people, signs and objects block the way as walls do), `explore_<dir>` walks toward the nearest place not seen yet,
+  `door_<n>` goes back through a door to a place little explored. Text boxes are paged through for you. When
+  `screen` is `choice` and `x` is known, `menu.landings` lists every entry with what choosing it does (found by trying it): pick the
+  one that serves the goal, a new game over a continue that does nothing, a fight's best move, yes to a quest. While
+  `x` is null the position is not known yet and a `choice` screen may be the world itself: walk (`go`) to find out. A
+  button that only reopens a menu you just closed is not progress.
 questions:
   - id: action
     type: choice
-    instructions: Which action now? On a choice screen, move the cursor to the entry you want and confirm; otherwise `go` with one of the computed paths almost always.
-    criteria: { go: "walk a computed path", confirm: "press A", cursor_down: "cursor down", cursor_up: "cursor up", cursor_left: "cursor left",
-                cursor_right: "cursor right", back: "press B", menu: "press START", wait: "do nothing" }
+    instructions: Which action now? On a choice screen, pick an entry; otherwise `go` with one of the computed paths almost always.
+    criteria: { pick: "choose a menu entry", go: "walk a computed path", confirm: "press A", back: "press B", menu: "press START", wait: "do nothing" }
 tests:   # a frame and state from Aevilia: the pack reads any game the same way
   - state: fixtures/tutorial.json
     frame: fixtures/tutorial.png
