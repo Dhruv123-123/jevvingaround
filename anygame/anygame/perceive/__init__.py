@@ -104,6 +104,12 @@ def read_all(pack: Pack, frame: np.ndarray, only: set[str] | None = None, tick: 
             values[rid] = go.read(values.get(r["in"]), r)
             timings[rid] = 0.0
             continue
+        if kind == "tiletext":
+            from . import tiletext
+            whole = Rect.parse([0, 0, 1, 1]) if "rect" not in r and "zone" not in r else rect_for(pack, r)
+            values[rid] = tiletext.read(frame, r, str(pack.assets_dir()), whole, None)
+            timings[rid] = round((time.perf_counter() - t0) * 1000, 1)
+            continue
         zone = pack.zone(r["zone"]) if "zone" in r else None
         rect = rect_for(pack, r)
         if kind == "bar":

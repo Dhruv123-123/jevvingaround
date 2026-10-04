@@ -89,6 +89,8 @@ class WorldTracker:
         self.warps: dict[tuple, Tile] = {}              # (map, x, y, dir) → where it put us
         self.inspected: set[tuple] = set()
         self.walls_at: dict[Any, set[tuple[int, int]]] = {}   # tiles a step into was refused: not a place to explore
+        self.stuck: dict[tuple, int] = {}       # (tile, plan) → times walking that plan from that tile ended back on it
+        self._pending: tuple | None = None
         self.steps = 0                                  # steps tried over the run: the clock blocked edges age by
         self.here: Tile | None = None
         self.macros: dict[str, list[str]] = {}
@@ -103,7 +105,7 @@ class WorldTracker:
         self._last: Tile | None = None
 
     # ---- memory ---------------------------------------------------------------------------------------
-    def tile_of(self, values: dict[str, Any]) -> Tile | None:
+    def tile_of(self, values: dict[str, Any], stepping: bool = False) -> Tile | None:
         if isinstance(self.r.get("cell"), str):
             c = _get(values, self.r["cell"])
             if isinstance(c, (int, float)) and c > 0:
@@ -115,9 +117,9 @@ class WorldTracker:
             t = (m if m is not None else 0, int(round(float(x) / self.cell)), int(round(float(y) / self.cell)))
         except (TypeError, ValueError):
             return None
-        return self._place(t)
+        return self._place(t, stepping)
 
-    def _place(self, t: Tile) -> Tile:
+    def _place(self, t: Tile, stepping: bool = False) -> Tile:
         """A discovered map signature can change without a transition (a byte in it is also a dialogue or animation
         state). A place changes only when the position jumps with it: a new signature that appears while the player
         stands where they stood, or one step away, is the same place under another name (an alias, for the run)."""
@@ -125,7 +127,12 @@ class WorldTracker:
         if m in self.alias:
             m = self.alias[m]
         elif m not in self.places and self._last is not None and self._last[0] != m:
-            if abs(t[1] - self._last[1]) + abs(t[2] - self._last[2]) <= 1:
+            # `stepping`: the change came with a step the agent took while walking (no text, no menu between), which
+            # is a door or stairs even when the position does not jump (Pokemon's stairs land on the same tile). A
+            # walking step that moved exactly one tile is still the same place: a door or stairs never lands on the
+            # very next tile, and a signature byte that changes as the player walks (scenery redrawn) does
+            moved = abs(t[1] - self._last[1]) + abs(t[2] - self._last[2])
+            if moved == 1 or (moved == 0 and not stepping):
                 self.alias[m] = self._last[0]
                 m = self._last[0]
         self.places.add(m)
@@ -287,10 +294,14 @@ class WorldTracker:
         # 3. explore, one option per direction
         toward = (goal or {}).get("_toward")
         explore = []
+        # tiles a step into is refused now: a refusal seen once or twice expires with its block (a person who moved,
+        # or a step misread while the place was misnamed), so a tile once refused is explored again later
+        walls = {(k[1] + DIRS[k[3]][0], k[2] + DIRS[k[3]][1]) for k in self.blocked
+                 if k[0] == here[0] and self.is_blocked((k[0], k[1], k[2]), k[3])}
         for d, (dx, dy) in DIRS.items():
             best = None
             for t, (_, _, dist) in tree.items():
-                if t == here or (t[1], t[2]) in vis or (t[1], t[2]) in self.walls_at.get(here[0], ()):
+                if t == here or (t[1], t[2]) in vis or (t[1], t[2]) in walls:
                     continue
                 ox, oy = t[1] - here[1], t[2] - here[2]
                 along = ox * dx + oy * dy
@@ -355,7 +366,16 @@ class WorldTracker:
         if known > self.known:
             self.buttons_tried = set()
         self.known = known
+        if self._pending is not None and self._pending[0] == here:
+            # the last plan from this very tile ended where it started (pushed back by a script, a talk, a ledge)
+            self.stuck[self._pending] = self.stuck.get(self._pending, 0) + 1
+        self._pending = None
         opts, plans = self.options(here, goal)
+        dead = [k for k, p in plans.items() if self.stuck.get((here, tuple(p)), 0) >= 2]
+        if dead and len(dead) < len(plans):
+            for k in dead:      # walked twice from here and came back here: not offered again from this tile
+                plans.pop(k)
+                opts.pop(k, None)
         if self.stale >= int(self.r.get("stale_after", 12)):
             # nothing new for a while: a button not tried in this stretch (a menu, a map, a mode) may be what the game
             # is waiting for. Offered first, each button once until something new turns up
@@ -385,6 +405,8 @@ class WorldTracker:
         plan = self.plans.get(label)
         if not plan:
             return f"{label}: no plan"
+        if self.here is not None:
+            self._pending = (self.here, tuple(plan))
         hold = int(self.r.get("step_hold", 16)) if hold is None else hold
         after = int(self.r.get("after", 4)) if after is None else after
         interact = self.r.get("interact", "a")
@@ -425,7 +447,7 @@ class WorldTracker:
                     self.learn(here, step, t2)
                 done.append(f"{step} → stop: left the overworld")
                 break
-            t2 = self.tile_of(v2)
+            t2 = self.tile_of(v2, stepping=True)
             if t2 == here and classify is not None:
                 # it did not move: a wall, or did the step open something (a text, a choice)? Ask by trying
                 kind = classify()

@@ -222,17 +222,25 @@ def test_discoverer_finds_position_and_map_from_ram_alone():
             mem[X] += {"left": -1, "right": 1}.get(b, 0)
             mem[Y] += {"up": -1, "down": 1}.get(b, 0)
         d.press(b, before, mem.copy())
+        d.frame(mem.copy(), blank=False)
     assert d.found["x"]["addr"] == 0xD362 and d.found["y"]["addr"] == 0xD361      # u8 or a pair with a zero high byte: the same value
-    # a door: the screen goes blank, the map byte changes and the position jumps
+    # a door: a step that lands elsewhere, with the map byte and the new map's tiles changed
     d.frame(mem.copy(), blank=False)
-    d.frame(mem.copy(), blank=True)
+    before = mem.copy()
     mem[MAP], mem[X], mem[Y] = 7, 3, 4
     mem[0xC400 - LO: 0xC600 - LO] = rng.integers(0, 256, 512)    # the new map's tiles and sprites loaded
+    d.press("up", before, mem.copy())
     for _ in range(20):
         d.frame(mem.copy(), blank=False)
+    for b in ["right"] * 8:                                         # the new map holds while the player walks on
+        before = mem.copy()
+        mem[X] += 1
+        d.press(b, before, mem.copy())
+        d.frame(mem.copy(), blank=False)
     assert 0xC0F0 not in d.found["map"]["addrs"]                    # the timer moves on every press: never the map
+    assert d.found["map"]["addrs"]
     st = d.state(mem)
-    assert st["x"] == 3 and st["y"] == 4 and st["map"] is not None
+    assert st["x"] == 11 and st["y"] == 4 and st["map"] is not None
 
 
 def test_discoverer_drops_a_copy_that_stops_following_and_keeps_the_map_steady():
@@ -262,9 +270,11 @@ def test_discoverer_drops_a_copy_that_stops_following_and_keeps_the_map_steady()
             d.frame(mem.copy(), blank=False)
 
     def door(new_map):
-        d.frame(mem.copy(), blank=True)
+        before = mem.copy()                          # the step through the door: the player lands elsewhere
         mem[MAP], mem[X], mem[Y], mem[TICK] = new_map, 20, 20, 0
         mem[0xC400 - LO: 0xC600 - LO] = np.random.default_rng(new_map).integers(0, 256, 512)   # the map's tiles, the same each time
+        d.press("up", before, mem.copy())
+        d.frame(mem.copy(), blank=True)
         d.frame(mem.copy(), blank=False)
 
     walk(60, copy_follows=True)
@@ -306,7 +316,8 @@ class BranchingGridGame(GridGame):
         for label, keys in seqs.items():
             self.restore(snap)
             for k in keys:
-                self.press(k, hold=8, after=0)
+                k, _, h = str(k).partition(":")
+                self.press(k, hold=int(h) if h else 8, after=0)
             out[label] = {"screen": self.screen(), "state": self.state(), "ram": None}
         self.restore(snap)
         return out
@@ -331,8 +342,12 @@ def test_graders_read_milestones_the_agent_never_sees():
     mem = bytearray(0x10000)
     g.update(mem)
     assert g.report()["reached"] == []                              # zeroed RAM before New Game is not Pallet Town
-    mem[pr.W_PLAYER_NAME] = 0x91                                    # "R": the game has started
+    mem[pr.W_PLAYER_NAME: pr.W_PLAYER_NAME + 6] = bytes(pr.NINTEN)  # the title demo's placeholder names, and
+    mem[pr.W_RIVAL_NAME: pr.W_RIVAL_NAME + 4] = bytes(pr.SONY)      # New Game sets Red's room before Oak's speech
     mem[pr.W_CUR_MAP] = 0x26
+    assert g.update(mem) == []
+    mem[pr.W_PLAYER_NAME] = 0x91                                    # "R..." and a rival named: the game has started
+    mem[pr.W_RIVAL_NAME] = 0x81
     assert g.update(mem) == ["intro_done"]
     mem[pr.W_CUR_MAP], mem[pr.W_PARTY_COUNT] = 0x0C, 1
     assert g.update(mem) == ["starter", "route_1"]
@@ -342,3 +357,19 @@ def test_graders_read_milestones_the_agent_never_sees():
     m2 = bytearray(0x10000)
     m2[0xC3C4] = 2
     assert a.update(m2) == ["tutorial"]
+
+
+def test_discoverer_drops_a_map_signature_from_the_older_rule():
+    """A checkpoint from before door steps carries a signature of screen tiles (no "doors"): it is dropped, not
+    kept or compared against the new one."""
+    from anygame.discover import Discoverer, LO, N
+    d = Discoverer()
+    d.load({"x": {"addr": 0xD362, "type": "u8"}, "y": {"addr": 0xD361, "type": "u8"}, "cell": 1,
+            "map": {"addrs": [0xC5AC, 0xC5AD, 0xC5C4, 0xC5C5], "transitions": 109}})
+    mem = np.zeros(N, np.int32)
+    for _ in range(10):
+        before = mem.copy()
+        mem[0xD362 - LO] += 1
+        d.press("right", before, mem.copy())
+        d.frame(mem.copy(), blank=False)
+    assert d.found["map"]["addrs"] == [] and d.state(mem)["map"] == 0

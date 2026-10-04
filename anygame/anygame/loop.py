@@ -95,6 +95,8 @@ class Agent:
             from .goals import GoalBook
             self.memory = RunMemory()
             self.goalbook = GoalBook(self.memory, None, pack.raw.get("goals_cfg"))
+            from .numbers import NumberBook
+            self.numbers = NumberBook()          # numbers the game prints, bound to RAM once they change
         if pack.raw.get("frames") == "stream" and hasattr(device, "stream"):
             device.stream()             # frames from the browser's screencast: ~10 ms a frame instead of a 40 ms screenshot
         # the hybrid: which screen is this, does the pack understand it, and who decides when it does not
@@ -459,7 +461,15 @@ class Agent:
         if self.memory is not None and pack is self.base:
             w = next((t for t in self.worlds.values() if hasattr(t, "tile_of")), None)
             t = w.tile_of(values) if w is not None else None
-            placed = {**values, "map": t[0]} if t else values      # the place as the world memory names it
+            placed = {**values, "map": t[0]} if t else dict(values)      # the place as the world memory names it
+            if getattr(self, "numbers", None) is not None:
+                ram = None
+                if hasattr(self.device, "memory"):
+                    from .discover import ram as work_ram
+                    ram = work_ram(self.device.memory)
+                txt = values.get(self.base.raw.get("dialogue_read", "text"))
+                self.numbers.observe(txt if isinstance(txt, str) else "", ram)
+                placed["numbers"] = self.numbers.values(ram)
             self.memory.observe(self.tick, getattr(self.device, "frames", None), placed,
                                 values.get(self.base.raw.get("dialogue_read", "text")), (t[1], t[2]) if t else None)
             if self.goalbook is not None:
@@ -884,7 +894,9 @@ class Agent:
         import numpy as _np
         dirs = list(r.get("keys") or ["down", "up", "left", "right"])
         buttons = list(r.get("buttons") or ["a", "start", "b"])
-        res = self.device.branch({"wait": [], **{k: [k] for k in buttons + dirs}}, frames=int(r.get("frames", 48)))
+        # directions are held long enough to walk a step: a tap only turns the player in some games (Pokemon)
+        hold = int(r.get("hold", 16))
+        res = self.device.branch({"wait": [], **{k: [k] for k in buttons}, **{k: [f"{k}:{hold}"] for k in dirs}}, frames=int(r.get("frames", 48)))
         disc = getattr(self.device, "discoverer", None)
         if disc is not None and res["wait"].get("ram") is not None:
             # each direction against waiting, from the same moment: what the press changed and nothing else, which is
@@ -892,7 +904,7 @@ class Agent:
             for k in dirs:
                 disc.press(k, res["wait"]["ram"], res[k]["ram"], full=False)
         base = res["wait"]["screen"].astype(_np.int16)
-        thr = float(r.get("min_change", 0.3))
+        thr = float(r.get("min_change", 0.05))   # the emulator is deterministic: a few letters more is a real difference
         differs = {k: float(_np.abs(v["screen"].astype(_np.int16) - base).mean()) > thr for k, v in res.items() if k != "wait"}
         pos = [str(x) for x in (r.get("pos") or [])]
         def at(k):

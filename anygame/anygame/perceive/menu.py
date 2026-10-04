@@ -91,6 +91,37 @@ def _ocr_boxes(img: np.ndarray) -> list[tuple[float, float, float, float, str]]:
     return out
 
 
+def _tile_boxes(img: np.ndarray, r: dict[str, Any]) -> list[tuple[float, float, float, float, str]] | None:
+    """The same boxes read exactly from the screen's cells (perceive/tiletext.py, the glyph book the text read uses).
+    None while most of the text on screen is glyphs not learned yet: the caller reads it by OCR meanwhile."""
+    from . import tiletext
+    t = tiletext.reader(r, None)
+    _, st = t.read(img)
+    if st["unknown"] > max(2, st["known"]):
+        return None
+    _, keys, kinds = tiletext.cells(img, t.size, t.cell, t.offset)
+    s = max(1, img.shape[0] // t.size[1])
+    c, (ox, oy) = t.cell * s, t.offset
+    out = []
+    for rr, row in enumerate(keys):
+        run: list[tuple[int, str]] = []
+        for q, k in enumerate(row + [None]):
+            kind = kinds[rr, q] if q < len(row) else 2
+            lab = t.book.labels.get(k) if kind == 1 else None
+            if kind == 1 and lab not in (None, tiletext.NOT_TEXT):
+                run.append((q, lab))
+                continue
+            if kind == 0 and run and q + 1 < len(row) and kinds[rr, q + 1] == 1:
+                run.append((q, " "))          # one blank cell between words
+                continue
+            text = "".join(ch for _, ch in run).strip()
+            if len(text) >= 2:
+                x0, x1 = ox * s + run[0][0] * c, ox * s + (run[-1][0] + 1) * c
+                out.append((float(x0), float(oy * s + rr * c), float(x1), float(oy * s + (rr + 1) * c), text))
+            run = []
+    return out
+
+
 def _label(boxes, cur: tuple[int, int, int, int] | None) -> str:
     """The text on the cursor's row, nearest it (to its right first: a cursor arrow sits left of its entry)."""
     if cur is None:
@@ -101,7 +132,7 @@ def _label(boxes, cur: tuple[int, int, int, int] | None) -> str:
         return ""
     cx = cur[2]
     row.sort(key=lambda b: (0 if b[2] >= cur[0] else 1, abs(b[0] - cx)))
-    return row[0][4]
+    return row[0][4].lstrip(">▶►→ ")      # the cursor's own glyph is not part of the entry's name
 
 
 def _words(t: str) -> list[str]:
@@ -123,11 +154,16 @@ class MenuTracker:
         self.last_landings: dict[str, str] = {}
         self.branches = 0
         self.reads = 0
+        self.tile_cfg = dict(r.get("tiletext") or {})       # the cell grid, if not the Game Boy's 160x144 / 8 px
         self.seen: dict[str, tuple[np.ndarray, str]] = {}   # screens the run has shown: small image, its text
+        self.loops: dict[str, dict[str, int]] = {}   # screen key → label → times it came straight back to this menu
+        self._pending: tuple[str, str] | None = None  # the last pick: (screen key, label)
+        self._since = 0                              # ticks seen since that pick
 
     def see(self, screen: np.ndarray, text: str | None = None) -> None:
         """A screen the run passed through (any tick): an outcome that looks like one of these leads back to it."""
         k = _key(screen)
+        self._since += 1
         if k not in self.seen:
             self.seen[k] = (_small(screen), (text or "")[:60])
             if len(self.seen) > 300:
@@ -178,6 +214,17 @@ class MenuTracker:
             for keys, img in entries:
                 device.restore(snap)
                 outcomes.append(self._outcome(device, keys + ["a"], total, img, pos))     # against the entry, cursor on it
+            if self.r.get("outcome") == "playout":
+                # an entry that does something is also played on until the game asks again (anygame/playout.py): a
+                # battle move's result is seconds of text later, past the short watch above
+                from ..playout import play_out, describe
+                for (keys, _), oc in zip(entries, outcomes):
+                    if oc["same_screen"]:
+                        continue
+                    device.restore(snap)
+                    r = play_out(device, [k for k in keys] + ["a"], self._read_text, hold=self.hold, gap=self.gap,
+                                 max_frames=int(self.r.get("playout_frames", 1800)))
+                    oc["playout"] = describe(r, 200)
             device.restore(snap)
             back = self._outcome(device, ["b"], total, base, pos)
             buttons = {}
@@ -187,13 +234,13 @@ class MenuTracker:
         finally:
             device.restore(snap)
             device.discoverer = disc
-        boxes = _ocr_boxes(base)
+        boxes = self._boxes(base)
         base_words = set(_words(" ".join(b[4] for b in boxes)))
         shots = [e[1] for e in entries]
         out = {"entries": []}
         for i, ((keys, img), oc) in enumerate(zip(entries, outcomes)):
             cur = _cursor_box(img, shots[:i] + shots[i + 1:])
-            lab = _label(_ocr_boxes(img) if i else boxes, cur) if len(entries) > 1 else ""
+            lab = _label(self._boxes(img) if i else boxes, cur) if len(entries) > 1 else ""
             out["entries"].append({"keys": keys, "label": lab, **oc})
         out["back"] = back
         out["buttons"] = buttons
@@ -204,10 +251,29 @@ class MenuTracker:
             e["new_text"] = " ".join(dict.fromkeys(new))[:120]
         return out
 
+    def _read_text(self, img: np.ndarray) -> str:
+        tb = self._boxes(img, ocr=False)
+        if tb is None:
+            from .ocr import _text
+            return _text(img, 0.67)
+        return " ".join(b[4] for b in tb)
+
+    def _boxes(self, img: np.ndarray, ocr: bool = True):
+        """Text boxes on a screen: from the cells (`text: tiletext`) where the glyphs are known, else by OCR."""
+        if self.r.get("text") == "tiletext":
+            tb = _tile_boxes(img, self.tile_cfg)
+            if tb is not None:
+                return tb
+        return _ocr_boxes(img) if ocr else None
+
     def _outcome(self, device, keys: list[str], total: int, ref: np.ndarray, pos) -> dict[str, Any]:
         img = self._play(device, keys, total + self.settle)
-        from .ocr import _text
-        txt = _text(img, 0.67)
+        tb = self._boxes(img, ocr=False)
+        if tb is None:
+            from .ocr import _text
+            txt = _text(img, 0.67)
+        else:
+            txt = " ".join(b[4] for b in tb)
         p = pos() if pos else None
         g = _small(img)
         change = float(np.abs(g - _small(ref)).mean())
@@ -217,6 +283,11 @@ class MenuTracker:
     # ---- the read ------------------------------------------------------------------------------------------
     def read(self, device, screen: np.ndarray, pos: Callable[[], tuple] | None = None) -> dict[str, Any]:
         k = _key(screen)
+        if self._pending and self._pending[0] == k and self._since <= int(self.r.get("loop_within", 3)):
+            # the last pick here led straight back to this same menu (a box that closes, an empty bag): a loop
+            lp = self.loops.setdefault(k, {})
+            lp[self._pending[1]] = lp.get(self._pending[1], 0) + 1
+        self._pending = None
         self.last_key = k
         self.see(screen)
         m = self.cache.get(k)
@@ -241,6 +312,16 @@ class MenuTracker:
             if not be["same_screen"]:
                 landings[f"press_{bn}"] = f"press {bn.upper()} → {self._said(be)}"
                 plans[f"press_{bn}"] = [bn]
+        lost = pos is not None and None in (pos() or (None,))
+        firsts = {e["keys"][0] for e in m["entries"] if len(e["keys"]) == 1}
+        if lost and len(firsts) >= 3:
+            # each direction reached its own "entry" in one press and none came round again: more like a player
+            # turning to face four ways than a menu. While where you are is unknown, offer holding each direction (a
+            # walk, in a game where a tap only turns); walking is also what lets the position be found
+            hold = int(self.r.get("walk_hold", 16))
+            for d in ("up", "down", "left", "right"):
+                landings[f"walk_{d}"] = f"hold {d.upper()} for a step (if this is the world and not a menu, you walk {d})"
+                plans[f"walk_{d}"] = [f"{d}:{hold}"]
         before = self.history.get(k) or []
         times = {lab: sum(1 for h in before if h.startswith(lab + ":")) for lab in landings}
         for lab, t in times.items():
@@ -250,11 +331,29 @@ class MenuTracker:
         # cursor order; then ones tried before (fewest first); entries that change nothing last
         idle = {lab for lab in landings if lab.startswith("pick_") and m["entries"][int(lab[5:]) - 1]["same_screen"]}
         back = {lab for lab in landings if lab.startswith("pick_") and m["entries"][int(lab[5:]) - 1].get("back_to") is not None}
-        if len(idle) < sum(1 for lab in landings if lab.startswith("pick_")):
-            for lab in idle:                 # an entry that does nothing is not a choice while others do something
+        others = [lab for lab in landings if not lab.startswith("pick_")]
+        if len(idle) < sum(1 for lab in landings if lab.startswith("pick_")) or (idle and others):
+            # an entry that does nothing is not a choice while others do something; and when choosing does nothing
+            # for every entry, this is not a menu at all (the world, with the position not found yet): its walks
+            # and buttons are the choice
+            for lab in idle:
                 landings.pop(lab)
                 plans.pop(lab, None)
-        order = sorted(landings, key=lambda lab: (lab in idle, lab == "back_out" or lab.startswith("press_"), lab in back, times[lab], list(landings).index(lab)))
+        # an entry that came straight back here twice is not offered again while something else is
+        looped = {lab for lab, c in (self.loops.get(k) or {}).items() if c >= 2 and lab in landings}
+        if looped and len(looped) < len(landings):
+            for lab in looped:
+                landings.pop(lab)
+                plans.pop(lab, None)
+        def group(lab):
+            if lab in idle:
+                return 4
+            if lab == "back_out" or lab.startswith("press_"):
+                return 3
+            if lab.startswith("walk_"):
+                return 1 + (1 if times[lab] else 0)
+            return 0 if not times[lab] and lab not in back else 2
+        order = sorted(landings, key=lambda lab: (group(lab), times[lab], list(landings).index(lab)))
         landings = {lab: landings[lab] for lab in order}
         self.plans = plans
         self.macros = {kk: list(v) for kk, v in plans.items()}
@@ -265,6 +364,9 @@ class MenuTracker:
     def _said(e: dict[str, Any]) -> str:
         if e["same_screen"]:
             return "nothing changes"
+        if e.get("playout"):
+            back = f"; first goes to a screen seen before ('{e['back_to']}')" if e.get("back_to") is not None else ""
+            return "played on: " + e["playout"] + back
         bits = []
         if e["walking"]:
             bits.append("you can walk after it")
@@ -286,13 +388,16 @@ class MenuTracker:
         if not plan:
             return f"{label}: no plan"
         for k in plan:
-            device.press(k, hold=self.hold, after=self.gap)
+            k, _, h = k.partition(":")
+            device.press(k, hold=int(h) if h else self.hold, after=self.gap)
         if self.last_key:
             self.history.setdefault(self.last_key, []).append(f"{label}:{self.last_landings.get(label, '')[:60]}")
-        return f"{label}: " + " ".join(k.upper() for k in plan)
+            self._pending, self._since = (self.last_key, label), 0
+        return f"{label}: " + " ".join(k.split(":")[0].upper() for k in plan)
 
     def dump(self) -> dict[str, Any]:
-        return {"history": self.history}
+        return {"history": self.history, "loops": self.loops}
 
     def load(self, d: dict[str, Any]) -> None:
         self.history = dict(d.get("history") or {})
+        self.loops = {k: dict(v) for k, v in (d.get("loops") or {}).items()}

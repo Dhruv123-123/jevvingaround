@@ -56,6 +56,9 @@ def cmd_play(a):
     _start_fresh(device)
     grader = _attach_grader(agent, device, getattr(a, "saves", None))
     _long_horizon(agent, device, grader, a)
+    if getattr(a, "live", None):
+        from .live import attach
+        attach(agent, a.live, a.live_every, grader, getattr(grader, "game", None) or pack.name)
     if a.fallback:
         from .fallback import VLMFallback
         agent.fallback = VLMFallback()
@@ -874,6 +877,14 @@ def cmd_render(a):
     print(f"wrote {a.out} ({len(frames)} frames at {a.fps} fps)")
 
 
+def cmd_usage(a):
+    """Chat-model calls, tokens and estimated dollars from the usage ledger (see anygame/chat.py)."""
+    from .chat import ledger_path, summarize
+    from pathlib import Path
+    path = Path(a.log) if a.log else ledger_path()
+    print(json.dumps({"ledger": str(path), **summarize(path, a.since)}, indent=1))
+
+
 def cmd_record(a):
     import cv2
     from .device import open_device
@@ -902,6 +913,8 @@ def main(argv=None):
     pl.add_argument("--checkpoint", default=None, help="a directory: the run's state (emulator, world, memory, goals) saved there")
     pl.add_argument("--checkpoint-every", dest="checkpoint_every", type=int, default=0, help="save a checkpoint every N ticks")
     pl.add_argument("--resume", default=None, help="a checkpoint directory to continue a run from")
+    pl.add_argument("--live", default=None, help="a directory: the screen (frame.png) and status.json written every --live-every ticks, with index.html to watch them")
+    pl.add_argument("--live-every", dest="live_every", type=int, default=10, help="ticks between live frames")
     pl.add_argument("--no-writer", dest="no_writer", action="store_true", help="no chat-model goal writer: the generic goal only")
     pl.add_argument("--fallback", nargs="?", const="yes", default=None, help="VLM fallback on screens the pack cannot read; optional path for the learned pack (default <pack>/pack.learned.yaml)")
     pl.add_argument("--goal", default=None, help="what the game is about, for the fallback")
@@ -961,6 +974,7 @@ def main(argv=None):
     rs = sub.add_parser("ramscan", help="find a game's position bytes in RAM by walking the player (an emulator device)")
     rs.add_argument("device", help="pyboy://<rom>?state=<a save state in the overworld>"); rs.add_argument("--presses", type=int, default=60); rs.add_argument("--seed", type=int, default=0)
     rs.set_defaults(fn=lambda a: __import__("anygame.ramscan", fromlist=["main"]).main(a))
+    us = sub.add_parser("usage", help="chat-model (Azure) calls, tokens and estimated dollars from the usage ledger"); us.add_argument("--since", default=None, help="ISO time, e.g. 2026-10-04"); us.add_argument("--log", default=None); us.set_defaults(fn=cmd_usage)
     rc = sub.add_parser("record"); rc.add_argument("--device", required=True); rc.add_argument("--out", required=True); rc.add_argument("--seconds", type=int, default=20); rc.add_argument("--hz", type=float, default=2); rc.add_argument("--pack"); rc.set_defaults(fn=cmd_record)
     a = p.parse_args(argv)
     a.fn(a)

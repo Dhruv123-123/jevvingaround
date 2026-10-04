@@ -1,6 +1,8 @@
 """Numbers and short text via RapidOCR (ONNX, CPU). Per cell when the zone has a grid."""
 from __future__ import annotations
+import hashlib
 import re
+from collections import OrderedDict
 import numpy as np
 import cv2
 from .common import crop
@@ -16,15 +18,28 @@ def engine():
     return _engine
 
 
+_seen: "OrderedDict[tuple, str]" = OrderedDict()
+CACHE = 512
+
+
 def _text(img: np.ndarray, upscale: float = 2.0) -> str:
+    """The text in an image. The same pixels give the same text, so a repeat is answered from a cache: menu
+    exploration and play-outs look at the same screens many times (an OCR pass is 150-200 ms)."""
     if img.size == 0:
         return ""
+    key = (img.shape, upscale, hashlib.blake2b(np.ascontiguousarray(img).data, digest_size=16).digest())
+    hit = _seen.get(key)
+    if hit is not None:
+        _seen.move_to_end(key)
+        return hit
     if upscale != 1:
         img = cv2.resize(img, None, fx=upscale, fy=upscale, interpolation=cv2.INTER_CUBIC)
     res, _ = engine()(img)
-    if not res:
-        return ""
-    return " ".join(t[1] for t in res).strip()
+    out = " ".join(t[1] for t in res).strip() if res else ""
+    _seen[key] = out
+    if len(_seen) > CACHE:
+        _seen.popitem(last=False)
+    return out
 
 
 def _parse(text: str, r):

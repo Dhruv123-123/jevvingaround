@@ -44,6 +44,20 @@ def test_conditions_are_checked_before_a_goal_is_set():
     assert check_target({"line": 0}, set(), 1) is None and check_target({"line": 3}, set(), 1)
 
 
+def test_a_number_goal_checks_and_holds():
+    m = RunMemory()
+    chat = FakeChat([json.dumps({"goal": {"instruction": "heal up", "done": {"number": {"name": "SQUIRTLE #/#", "share_at_least": 0.8}}}})])
+    gb = GoalBook(m, chat)
+    low = {"map": 1, "x": 0, "y": 0, "screen": "walk", "numbers": {"SQUIRTLE #/#": {"value": 4, "of": 19, "share": 0.21}}}
+    assert gb.update(1, low)["instruction"] == "heal up"
+    assert chat.seen[0]["numbers"] == {"SQUIRTLE #/#": "4/19"}
+    gb.update(2, low)
+    assert gb.goals[0]["outcome"] is None
+    gb.update(3, {**low, "numbers": {"SQUIRTLE #/#": {"value": 19, "of": 19, "share": 1.0}}})
+    assert gb.goals[0]["outcome"] == "reached"
+    assert check({"number": {"name": "LEVEL", "at_least": 14}}, numbers={"SQUIRTLE #/#"})
+
+
 def test_goal_from_dialogue_then_reached_then_the_next_one():
     m = RunMemory()
     chat = FakeChat([
@@ -150,6 +164,23 @@ def test_menu_entries_found_by_trying_and_ranked(monkeypatch):
     assert g.real_presses == t.plans["pick_2"] and g.s["text"] is not None
 
 
+def test_a_pick_that_comes_straight_back_twice_is_dropped(monkeypatch):
+    import anygame.perceive.menu as menu
+    monkeypatch.setattr(menu, "_ocr_boxes", lambda img: [])
+    g = MenuGame()
+    t = MenuTracker({"depth": 4})
+    for _ in range(2):
+        assert "pick_1" in t.read(g, g.screen())["landings"]
+        t.run(g, "pick_1", lambda: {})
+        t.see(g.screen())                               # the box it opened, for a tick
+        g.s = {"cur": 0, "open": True, "text": None}    # then it closes, back on the same menu
+    lands = t.read(g, g.screen())["landings"]
+    assert "pick_1" not in lands and "pick_2" in lands
+    t2 = MenuTracker({"depth": 4})
+    t2.load(json.loads(json.dumps(t.dump())))
+    assert t2.loops == t.loops
+
+
 # ---- the audit ------------------------------------------------------------------------------------------
 class TinyDevice:
     def __init__(self):
@@ -227,10 +258,12 @@ def test_a_signature_change_without_a_jump_is_the_same_place():
     assert w.tile_of({"map": 99, "x": 3, "y": 4}) == (11, 3, 4)       # a byte of the signature changed mid-dialogue
     assert w.tile_of({"map": 42, "x": 9, "y": 1}) == (42, 9, 1)       # the position jumped with it: a door
     assert w.tile_of({"map": 99, "x": 9, "y": 2}) == (11, 9, 2)       # an alias stays one for the run
+    assert w.tile_of({"map": 7, "x": 9, "y": 2}, stepping=True) == (7, 9, 2)   # stairs onto the same tile, while walking
+    assert w.tile_of({"map": 8, "x": 9, "y": 3}, stepping=True) == (7, 9, 3)   # one plain step: scenery, not a door
     d = w.dump()
     w2 = WorldTracker({"x": "x", "y": "y", "map": "map"})
     w2.load(json.loads(json.dumps(d)))
-    assert w2.alias == {99: 11}
+    assert w2.alias == {99: 11, 8: 7}
 
 
 def test_checkpoint_resumes_the_run(tmp_path):
@@ -267,3 +300,22 @@ def test_checkpoint_resumes_the_run(tmp_path):
     assert b.memory.places == a.memory.places and b.goalbook.quest() == a.goalbook.quest()
     b.run()
     assert b.tick == 60
+
+
+def test_the_generic_game_boy_pack_loads():
+    import os
+    from anygame.pack import load_pack
+    pack = load_pack(os.path.join(os.path.dirname(__file__), "..", "packs", "gameboy"))
+    assert pack.reads["text"]["kind"] == "tiletext" and pack.reads["menu"]["text"] == "tiletext"
+
+
+def test_a_walk_that_ends_back_on_its_tile_twice_is_dropped():
+    from anygame.perceive.world import WorldTracker
+    w = WorldTracker({"x": "x", "y": "y", "map": "map"})
+    v = {"map": 1, "x": 4, "y": 5}
+    lands = w.read(v)["landings"]
+    lab = next(k for k in lands if k.startswith("explore_"))
+    for _ in range(2):
+        w._pending = (w.here, tuple(w.plans[lab]))     # walked it (a script pushed the player back)...
+        lands = w.read(v)["landings"]                 # ...and the next decision is on the same tile
+    assert lab not in lands and lands

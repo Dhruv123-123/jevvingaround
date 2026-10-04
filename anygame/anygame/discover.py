@@ -19,6 +19,8 @@ from typing import Any
 import numpy as np
 
 LO, HI = 0xC000, 0xE000
+MOVED = 0.2         # a position byte moves on at least this share of its axis's presses (walls and turns take the rest)
+HOLD_WALKS = 6      # a map value holds while the player walks at least this many moves (a step's bytes hold for one)
 RING = 16           # frames back that a burst is measured against
 BURST_MIN, BURST_X = 150, 2.5   # a burst: at least this many bytes changed over RING frames, and this many times the usual
 WINDOW = 40          # events (rendered frames and presses) around a transition in which a map's bytes change
@@ -41,6 +43,24 @@ def _z(a: np.ndarray) -> bytes:
 def _unz(b: bytes) -> np.ndarray:
     import zlib
     return np.frombuffer(zlib.decompress(b), np.uint8).astype(np.int32)
+
+
+def _split(ns: list[int]) -> float:
+    """Where presses that did little part from presses that did a lot: the best two-group split of the counts'
+    logarithms (Otsu), taken only when the groups are at least three times apart; otherwise everything counts."""
+    v = np.sort(np.log1p(np.asarray([n for n in ns if n > 0], float)))
+    if len(v) < 8:
+        return 1.0
+    best, cut = -1.0, None
+    for i in range(1, len(v)):
+        a, b = v[:i], v[i:]
+        w = len(a) * len(b) * (a.mean() - b.mean()) ** 2
+        if w > best:
+            best, cut = w, i
+    lo, hi = v[cut - 1], v[cut]
+    if np.expm1(v[cut:]).mean() < 3 * np.expm1(v[:cut]).mean():
+        return 1.0
+    return float(np.expm1((lo + hi) / 2))
 
 
 def _wrap(d: np.ndarray) -> np.ndarray:
@@ -68,11 +88,18 @@ class Discoverer:
         self.in_burst = False
         self.ring: list[np.ndarray] = []
         self.ema = 0.0
-        self.pending_values: int | None = None
-        self._majority, self._majority_idx = np.zeros(0, bool), np.zeros(0, int)
-        self.visits: list[np.ndarray] = []       # work RAM as each map visit settled, the last 200
         self.presses = 0
+        self.by_pad = z()                # changed by a d-pad press (a step, a door, a probe's step)
+        self.by_other = z()              # changed by any other press (a menu, a text box, a button)
+        self.pad_presses = 0
+        self.by_door = z()               # changed by a d-pad press that looked like a door (see press)
+        self.walks = 0
+        self.walks_at = np.zeros(N, np.int64)
+        self.holds = np.zeros(N, np.int32)
+        self.holds_walked = np.zeros(N, np.int32)
+        self.crossed = np.zeros(N, bool)    # a pair whose high byte moved with a small step: a position past 255
         self._xdeltas: list[int] = []
+        self._moves: dict[bool, list[int]] = {}   # how far a step moves, for whole steps and for probes
         self.transitions = 0
         self.blank = False
         self.before_blank: np.ndarray | None = None
@@ -92,6 +119,27 @@ class Discoverer:
         if self.trace is not None:
             self.trace.append(("p", button, _z(before), _z(after), full))
         d = DIRS.get(button)
+        if "x" in self.found and "y" in self.found:
+            c = after != before
+            if d and (d[0] or d[1]):
+                # a door rewrites several of the bytes that steps rarely change at once (the map's id, its bank,
+                # tileset, script), and the step does not end one step along: the player lands elsewhere, or on the
+                # same spot of another floor. A plain step (the usual distance, along the pressed direction)
+                # scrolls the screen, which rewrites rarely changed tiles too
+                dx = self.decode(after, "x") - self.decode(before, "x")
+                dy = self.decode(after, "y") - self.decode(before, "y")
+                along, across = (dx, dy) if d[0] else (dy, dx)
+                moves = self._moves.setdefault(full, [])
+                if along and not across and np.sign(along) == (d[0] or d[1]):
+                    self._moves[full] = (moves + [abs(along)])[-40:]
+                plain = not across and np.sign(along) == (d[0] or d[1]) and len(moves) >= 3 and abs(along) == int(np.median(moves))
+                rare = c & (self.by_pad <= max(2, 0.02 * self.pad_presses)) & (self.by_other * 4 <= self.by_pad + 1)
+                if not plain and rare.sum() >= 4:
+                    self.by_door += c
+                self.by_pad += c
+                self.pad_presses += 1
+            else:
+                self.by_other += c
         if full and d and d[0] and "x" in self.found and "y" in self.found:
             dx = self.decode(after, "x") - self.decode(before, "x")
             if dx and not self.decode(after, "y") - self.decode(before, "y"):
@@ -102,10 +150,21 @@ class Discoverer:
             self.presses += 1
         if d is None or jump or self.blank:
             return
+        if not full:
+            # against waiting, a press that did little is no evidence either way: a text box ignores the d-pad but a
+            # few bytes (the pad's own state) still differ, while a step rewrites far more (position, sprites, the
+            # screen's tile map). Little is measured against this game's own recent presses
+            n = int((after != before).sum())
+            self._probe_n = (getattr(self, "_probe_n", []) + [n])[-200:]
+            if n < _split(self._probe_n):
+                return
         self._last_ram = after
         d8 = _wrap(after - before)
         b16, a16 = before[:-1] + 256 * before[1:], after[:-1] + 256 * after[1:]
         d16 = np.concatenate([a16 - b16, [0]])
+        hi_step = np.concatenate([np.abs(_wrap(after[1:] - before[1:])) == 1, [False]])
+        lo_wrap = ((before >= 0xC0) & (after < 0x40)) | ((before < 0x40) & (after >= 0xC0))
+        self.crossed |= hi_step & lo_wrap & (np.abs(d16) < 64)     # the low byte wrapped and carried into the high one
         for ax, want, other in (("x", d[0], d[1]), ("y", d[1], d[0])):
             for w, dd in ((1, d8), (2, d16)):
                 for s in (self.st[(ax, w)], self.seg[(ax, w)]):
@@ -128,7 +187,18 @@ class Discoverer:
         playing = "x" in self.found and "y" in self.found   # title screens and menus before play churn everything
         if last is not None and playing:
             ch = now != last
+            pos = (self.decode(now, "x"), self.decode(now, "y"))
+            if pos != getattr(self, "_pos", None):
+                self.walks += 1                          # the player moved since the last frame
+                self._pos = pos
             if ch.any():
+                idx = np.where(ch)[0]
+                # every value a byte takes is a hold; a hold the player walked through (two moves or more) is how a
+                # map's bytes behave, and a menu's or a text box's (held while the player stands still) is not
+                walked = (self.walks - self.walks_at[idx]) >= HOLD_WALKS
+                self.holds[idx] += 1
+                self.holds_walked[idx] += walked
+                self.walks_at[idx] = self.walks
                 self.changes += ch
                 self.ups += ch & ((now - last) % 256 == 1)
                 self.last_change[ch] = self.event
@@ -147,10 +217,6 @@ class Discoverer:
                     self.in_burst = False
                 if not self.in_burst:
                     self.ema = net if self.ema == 0 else 0.98 * self.ema + 0.02 * net
-            if self.pending_values is not None and self.event >= self.pending_values:
-                self.visits = (self.visits + [now.astype(np.uint8)])[-200:]   # what the new map settled on
-                self._update()
-                self.pending_values = None
         self.ring = (self.ring + [now])[-RING:]
         if blank and not self.blank:
             self.blank, self.before_blank = True, last if last is not None else now
@@ -176,7 +242,6 @@ class Discoverer:
         if not ("x" in self.found and "y" in self.found):
             return
         self.transitions += 1
-        self.pending_values = self.event + RING
         self.last_trans_event = self.event
         self._credit(self.last_change >= self.event - WINDOW)
         if self.seg[("x", 1)]["n"] + self.seg[("y", 1)]["n"] >= self.min_presses:
@@ -193,6 +258,17 @@ class Discoverer:
         moved = s["moved"] / s["n"]
         return (s["agree"] / np.maximum(s["moved"], 1)) * (s["still"] / s["n_other"]), moved
 
+    def _walked(self, s: dict) -> bool:
+        """On this visit something followed the d-pad on both axes: the player walked. A menu or a list has a cursor
+        on one axis at most, and a visit spent in one says nothing about the position."""
+        def ok(ax):
+            for w in (1, 2):
+                v = self._score(s[(ax, w)])
+                if v is not None and float((v[0] * (v[1] > MOVED)).max()) >= self.threshold:
+                    return True
+            return False
+        return ok("x") and ok("y")
+
     def _axis(self, ax: str, last: np.ndarray | None = None) -> dict[str, Any] | None:
         """The best position candidate on this axis. A press into a wall moves nothing, so the score is the share of
         presses that moved the byte that moved it the right way, times the share of the other axis's presses that
@@ -203,17 +279,25 @@ class Discoverer:
             sc = self._score(self.st[(ax, w)])
             if sc is None:
                 continue
-            score = sc[0] * (sc[1] > 0.3)
+            score = sc[0] * (sc[1] > MOVED)
             for s in self.segs + [self.seg]:
                 v = self._score(s[(ax, w)])
-                if v is None or float((v[0] * (v[1] > 0.3)).max()) < self.threshold:
+                if v is None or not self._walked(s):
                     continue                      # a visit spent against walls or in menus says nothing
-                score = np.minimum(score, v[0] * (v[1] > 0.3))
+                score = np.minimum(score, v[0] * (v[1] > MOVED))
             top = float(score.max())
             if top < self.threshold:
                 continue
-            for i in np.where(score >= top - 0.02)[0][:16]:
-                cands.append((float(score[i]), w, int(i)))
+            cur = self.found.get(ax)
+            if cur and (cur["type"] == "u8") == (w == 1) and score[cur["addr"] - LO] >= self.threshold:
+                held = (float(score[cur["addr"] - LO]), w, cur["addr"] - LO, float(sc[1][cur["addr"] - LO]))
+            keep = score >= top - 0.02
+            idx = np.where(keep)[0]
+            # among equals, the bytes that moved on the most presses: a position changes on every step that lands, a
+            # block or chunk coordinate on some; and the one already found is always looked at
+            idx = idx[np.argsort(-sc[1][idx], kind="stable")][:64].tolist()
+            for i in idx:
+                cands.append((float(score[i]), w, int(i), float(sc[1][i])))
         if not cands:
             return None
         best = max(c[0] for c in cands)
@@ -221,10 +305,18 @@ class Discoverer:
         # a pair whose high byte stays small is a position past 255 (pixels); a byte copied into the sprite table
         # scores as well while the camera is still, so the pair wins a tie
         def pref(c):
-            score, w, i = c
-            hi_small = w == 2 and last is not None and i + 1 < N and last[i + 1] <= 3
-            return (hi_small, w == 1, score, -i)
-        score, w, i = max(cands, key=pref)
+            score, w, i, moved = c
+            hi_small = w == 2 and last is not None and i + 1 < N and last[i + 1] <= 3 and self.crossed[i]
+            # then the byte that moves on most steps; ties: the higher address (buffers and sprite copies sit low)
+            return (hi_small, w == 1, round(moved, 1), score, i)
+        best = max(cands, key=pref)
+        held = locals().get("held")
+        # a track record: the byte found already stays while it passes, so one odd press (a step through a door, a
+        # turn) cannot hand the position to a byte that agreed for a stretch; only one that moves on clearly more
+        # steps (the real position against a block coordinate or a sprite slot) takes over
+        if held and not (best[3] >= held[3] + 0.15 and best[0] >= held[0] - 0.02):
+            best = held
+        score, w, i, _ = best
         return {"addr": LO + i, "type": "u8" if w == 1 else "u16le", "score": round(score, 3)}
 
     def _dead(self, ax: str) -> bool:
@@ -232,14 +324,11 @@ class Discoverer:
         f = self.found.get(ax)
         if not f or self.seg[(ax, 1)]["n"] < 3 * self.min_presses:      # ten presses on arrival prove nothing
             return False
-        w = 1 if f["type"] == "u8" else 2
-        for ww in (1, 2):
-            v = self._score(self.seg[(ax, ww)])
-            if v is not None and float((v[0] * (v[1] > 0.3)).max()) >= self.threshold:
-                mine = self._score(self.seg[(ax, w)])
-                i = f["addr"] - LO
-                return mine is not None and (mine[1][i] < 0.1 or mine[0][i] < 0.5)
-        return False
+        if not self._walked(self.seg):
+            return False
+        mine = self._score(self.seg[(ax, 1 if f["type"] == "u8" else 2)])
+        i = f["addr"] - LO
+        return mine is not None and (mine[1][i] < 0.1 or mine[0][i] < 0.5)
 
     def _update(self) -> None:
         for ax in "xy":
@@ -252,53 +341,42 @@ class Discoverer:
                 del self.found[ax]                       # better unknown than wrong: the world memory walks blind
         if "x" in self.found and "cell" not in self.fixed:
             self.found["cell"] = self.found.get("cell") or 1
-        if self.transitions and "map" not in self.fixed and (self.transitions, len(self.visits)) != getattr(self, "_map_at", None):
-            self._map_at = (self.transitions, len(self.visits))     # the map only needs a look after a new visit
-            # a map's bytes change (almost) only near transitions, and not by counting up. Scrolling, cutscenes and
-            # menus make transitions of their own, so how many transitions a byte missed says nothing
-            cand = (self.near >= 1) & (self.near >= 0.8 * self.changes) & (self.ups < 0.5 * self.changes)
-            for ax in "xy":                                  # the position bytes jump at a door; they are not the map
-                if ax in self.found:
-                    a = self.found[ax]["addr"] - LO
-                    cand[a: a + (2 if self.found[ax]["type"] == "u16le" else 1)] = False
-            idx = np.where(cand)[0]
-            idx = idx[np.lexsort((self.changes[idx] - self.near[idx], -self.near[idx]))][:64]
-            idx = self._consensus(idx)[:4]
-            cur = self.found.get("map", {}).get("addrs")
-            keep = cur and all(cand[a - LO] for a in cur) and len(self.visits) >= 3 and \
-                self._agree(np.array([a - LO for a in cur])) >= self._agree(idx) - 0.05
-            if len(idx) and not keep:            # a signature that still holds is kept: the world memory is keyed on it
-                self.found["map"] = {"addrs": sorted(int(LO + i) for i in idx), "transitions": self.transitions}
-            elif keep:
-                self.found["map"]["transitions"] = self.transitions
+        if "map" not in self.fixed and "x" in self.found and "y" in self.found:
+            m = self._map()
+            if m:
+                self.found["map"] = m
+            elif "map" not in self.found:                # until a door is seen, everything so far is one place
+                self.found["map"] = {"addrs": [], "doors": 0, "transitions": self.transitions}
 
-    def _agree(self, idx: np.ndarray) -> float:
-        """How well a signature's verdicts (same place or not, for every two visits) match the majority of
-        candidates'."""
-        if not len(idx) or len(self.visits) < 3 or not len(self._majority_idx):
-            return 0.0
-        V = np.stack(self.visits)
-        iu = np.triu_indices(len(V), 1)
-        sig = (V[:, None, idx] == V[None, :, idx]).all(2)[iu]
-        return float((sig == self._majority).mean())
-
-    def _consensus(self, idx: np.ndarray) -> np.ndarray:
-        """Many bytes hold still within a map and change at its doors (its id, bank, script pointer, tileset, the
-        people in it); some also depend on the door taken or on the story. Each byte says, for every two visits,
-        whether they were the same place; the majority of bytes is the best guess, and the bytes that agree with
-        it most, and tell the most places apart, are the signature."""
-        if len(self.visits) < 3 or len(idx) < 3:
-            return idx
-        V = np.stack(self.visits)[:, idx]                       # visits x candidates
-        same = V[:, None, :] == V[None, :, :]                   # visit x visit x candidate
-        iu = np.triu_indices(len(V), 1)
-        same = same[iu]                                          # pairs x candidates
-        majority = same.mean(1) > 0.5
-        self._majority, self._majority_idx = majority, idx
-        agree = (same == majority[:, None]).mean(0)
-        distinct = np.array([len(np.unique(V[:, j])) for j in range(V.shape[1])])
-        order = np.lexsort((-distinct, -agree))
-        return idx[order][agree[order] >= agree.max() - 0.02]
+    def _map(self) -> dict[str, Any] | None:
+        """A map's bytes (its id, bank, tileset) change when a step takes the player through a door, stairs or a
+        warp, and then hold while the player walks around. A menu or a text box changes bytes when a button is
+        pressed, and those hold only while the player stands still; the screen and the sprites change on most
+        steps. Neither bursts of rewritten memory nor fades find Pokemon's doors (its stairs warp inside the step
+        and the screen buffer churns on every menu), so a door is a step that did not end one plain step along
+        (see press); the signature is the bytes such steps changed, among those that steps change rarely and
+        buttons almost never, that changed on the most steps."""
+        done = self.holds + 1                                     # the current hold counts if walked through
+        walked = self.holds_walked + ((self.walks - self.walks_at) >= HOLD_WALKS)
+        P = (self.changes >= 1) & (self.changes < 64) & (walked >= 0.8 * done) & (self.ups < 0.5 * np.maximum(self.changes, 1))
+        for ax in "xy":
+            if ax in self.found:
+                a = self.found[ax]["addr"] - LO
+                P[a: a + (2 if self.found[ax]["type"] == "u16le" else 1)] = False
+        # a map's bytes change when the player walks through a door, rarely, and not when a button opens a menu or a
+        # text box; the bytes that changed at the most such steps tell the most places apart
+        P &= (self.by_door >= 1) & (self.by_pad <= max(2, 0.02 * self.pad_presses)) & (self.by_other * 4 <= self.by_pad)
+        if not P.any():
+            return None
+        idx = np.where(P)[0]
+        top = self.by_pad[idx].max()
+        idx = idx[self.by_pad[idx] >= 0.8 * top]
+        idx = idx[np.argsort(-self.by_pad[idx], kind="stable")][:2]
+        cur = self.found.get("map", {})
+        if cur.get("addrs") and all(P[a - LO] for a in cur["addrs"]) and \
+                self.by_pad[[a - LO for a in cur["addrs"]]].min() >= 0.7 * top:
+            return {**cur, "doors": int(self.by_pad[idx].max())}   # a signature that still holds is kept
+        return {"addrs": sorted(int(LO + i) for i in idx), "doors": int(self.by_pad[idx].max()), "transitions": self.transitions}
 
     def learn_cell(self, deltas: list[int]) -> None:
         """Typical change of x for one press, set by the device from presses it knows moved."""
@@ -329,6 +407,8 @@ class Discoverer:
 
     def load(self, d: dict[str, Any]) -> None:
         for k in ("x", "y", "map", "cell"):
+            if k == "map" and d.get(k) and "doors" not in d[k]:
+                continue                        # a signature found by the older burst rule (screen tiles): not kept
             if d.get(k):
                 self.found[k] = d[k]            # a starting point: what this run sees can replace or drop it
 
