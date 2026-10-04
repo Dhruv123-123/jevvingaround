@@ -157,6 +157,8 @@ class MenuTracker:
         self.reads = 0
         self.tile_cfg = dict(r.get("tiletext") or {})       # the cell grid, if not the Game Boy's 160x144 / 8 px
         self.seen: dict[str, tuple[np.ndarray, str]] = {}   # screens the run has shown: small image, its text
+        self.leave = False                       # a number is low (anygame/upkeep.py): entries that get out come first
+        self.screen_kind = None                  # () → the screen kind now (the loop's probe), to tell what an entry ends on
         self.loops: dict[str, dict[str, int]] = {}   # screen key → label → times it came straight back to this menu
         self._recent: list[list] = []                 # recent picks: [screen key, label, ticks since]
 
@@ -226,6 +228,8 @@ class MenuTracker:
                     r = play_out(device, [k for k in keys] + ["a"], self._read_text, hold=self.hold, gap=self.gap,
                                  max_frames=int(self.r.get("playout_frames", 1800)))
                     oc["playout"] = describe(r, 200)
+                    if self.leave and self.screen_kind is not None:
+                        oc["ends_on"], oc["frames"] = self.screen_kind(), r["frames"]
             device.restore(snap)
             back = self._outcome(device, ["b"], total, base, pos)
             buttons = {}
@@ -295,8 +299,9 @@ class MenuTracker:
         self.last_key = k
         self.see(screen)
         m = self.cache.get(k)
-        if m is None:
+        if m is None or (self.leave and self.screen_kind is not None and not m.get("ends_known")):
             m = self.explore(device, pos)
+            m["ends_known"] = self.leave and self.screen_kind is not None
             self.cache[k] = m
             self.reads += 1
         landings, plans = {}, {}
@@ -349,7 +354,16 @@ class MenuTracker:
             for lab in looped:
                 landings.pop(lab)
                 plans.pop(lab, None)
+        exits = set()
+        if self.leave:
+            from ..upkeep import rank_exits
+            exits = set(rank_exits({f"pick_{i + 1}": e for i, e in enumerate(m["entries"]) if f"pick_{i + 1}" in landings}))
+            for lab in exits:
+                landings[lab] += " [gets out of here: a number is low]"
+
         def group(lab):
+            if lab in exits:
+                return -1
             if lab in idle:
                 return 4
             if lab == "back_out" or lab.startswith("press_"):

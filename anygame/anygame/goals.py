@@ -201,6 +201,16 @@ class GoalBook:
             self._set(dict(EXPLORE), tick, values)
         return self.quest()
 
+    def impose(self, goal: dict[str, Any], tick: int, values: dict[str, Any], source: str = "upkeep") -> bool:
+        """A goal from the run itself, not the writer (a number to get back up, anygame/upkeep.py): set unless the
+        current goal already checks the same condition. Returns whether it was set."""
+        if self.current is not None and self.current.get("done") == goal.get("done"):
+            return False
+        if self.current is not None:
+            self._close(self.current, "replaced", tick)
+        self._set({**goal, "source": source}, tick, values)
+        return True
+
     def _close(self, g: dict[str, Any], outcome: str, tick: int) -> None:
         g["outcome"], g["closed_tick"] = outcome, tick
         self.ended = outcome

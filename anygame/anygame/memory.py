@@ -97,6 +97,8 @@ def save_checkpoint(agent, path: str) -> str:
     dev = agent.device
     if hasattr(dev, "save_state"):
         dev.save_state(os.path.join(path, "emulator.state"))
+    if hasattr(dev, "save_trace"):
+        dev.save_trace()            # ANYGAME_DISCOVER_TRACE: kept up to date, so a stopped run still has its trace
     disc = getattr(dev, "discoverer", None)
     d: dict[str, Any] = {
         "tick": agent.tick, "total_cost": agent.total_cost, "auto_ticks": agent.auto_ticks,
@@ -107,6 +109,8 @@ def save_checkpoint(agent, path: str) -> str:
         "discovered": disc.dump() if disc is not None and getattr(disc, "found", None) else None,
         "audit": agent.auditor.dump() if getattr(agent, "auditor", None) is not None else None,
         "glyphs": _glyph_books(),
+        "upkeep": ({n: dict(t.__dict__) for n, t in agent.keep.tracks.items()}
+                   if getattr(agent, "keep", None) is not None else None),
     }
     tmp = os.path.join(path, "run.json.tmp")
     with open(tmp, "w") as f:
@@ -148,6 +152,13 @@ def load_checkpoint(agent, path: str) -> dict[str, Any]:
         agent.quest = agent.goalbook.quest()
     if d.get("audit") and getattr(agent, "auditor", None) is not None:
         agent.auditor.load(d["audit"])
+    if d.get("upkeep") and getattr(agent, "keep", None) is not None:
+        from .upkeep import Track
+        for n, td in d["upkeep"].items():
+            t = Track(n)
+            t.__dict__.update(td)
+            t.since_low = [tuple(x) for x in t.since_low]
+            agent.keep.tracks[n] = t
     if d.get("glyphs"):
         from .perceive import tiletext
         tiletext.restore_books(d["glyphs"])

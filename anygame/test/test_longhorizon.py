@@ -412,3 +412,69 @@ def test_a_button_that_jumps_becomes_an_option(monkeypatch):
     assert w.learn_motion(Dev(), 0) is None                     # once per place
     out = w.read({"map": 0, "x": 1, "y": 1})
     assert w.plans["move_b"] == ["hold:b:32"] and "jumps" in out["landings"]["move_b"]
+
+
+def test_a_stalled_said_goal_offers_a_menu_chain_search_once():
+    """A goal waiting for the game to tell of something, with the walk stalled: one menu-chain search is offered."""
+    from anygame.perceive.world import WorldTracker
+    w = WorldTracker({"x": "x", "y": "y", "map": "map", "chain_after": 2})
+    calls = []
+    w.chain_fn = lambda dev, words: calls.append(words) or "played start > a: Got POTION"
+    w.wants = ("g7", ["POTION"])
+    w.read({"map": 0, "x": 1, "y": 1})                  # the first read is news: the tile is new
+    w.stale = 5
+    out = w.read({"map": 0, "x": 1, "y": 1})
+    assert "search_menus" in out["landings"]
+    r = w.run(object(), "search_menus", lambda: {"map": 0, "x": 1, "y": 1})
+    assert calls == [["POTION"]] and "Got POTION" in r
+    w.stale = 5
+    assert "search_menus" not in w.read({"map": 0, "x": 1, "y": 1})["landings"]
+
+
+def test_places_come_from_the_place_book():
+    from anygame.perceive.world import WorldTracker
+    w = WorldTracker({"x": "x", "y": "y", "map": "map"})
+    home = w.tile_of({"map": 11, "x": 3, "y": 3})[0]
+    assert w.tile_of({"map": 99, "x": 3, "y": 3})[0] == home          # a byte of the signature changed mid-dialogue
+    door = w.tile_of({"map": 42, "x": 9, "y": 1})[0]
+    assert door != home                                                 # the position jumped with it: a door
+    stairs = w.tile_of({"map": 7, "x": 9, "y": 1}, stepping=True, moves=("down",))[0]
+    assert stairs not in (home, door)                                   # stairs onto the same tile, while walking
+    w.tile_of({"map": 7, "x": 9, "y": 0}, stepping=True, moves=("up",))
+    route = w.tile_of({"map": 7, "x": 9, "y": 35}, stepping=True, moves=("up",))[0]
+    assert route != stairs                                              # off the top row onto the next map, no door
+    assert w.book.neighbours(stairs) == {"up": route}
+    d = w.dump()
+    w2 = WorldTracker({"x": "x", "y": "y", "map": "map"})
+    w2.load(json.loads(json.dumps(d)))
+    assert w2.book.joins == w.book.joins and w2.tile_of({"map": 7, "x": 9, "y": 34}, stepping=True, moves=("up",))[0] == route
+
+
+def test_upkeep_advice_becomes_the_goal_and_menus_put_exits_first(monkeypatch):
+    """A number low: the goal book takes the upkeep goal once; a menu with leave set ranks the entry that gets back to
+    the world first."""
+    m = RunMemory()
+    gb = GoalBook(m, None)
+    walk = {"map": 1, "x": 0, "y": 0, "screen": "walk"}
+    goal = {"instruction": "Get HP back up", "done": {"number": {"name": "HP", "share_at_least": 0.9}}, "target": None}
+    assert gb.impose(goal, 5, walk) and gb.current["source"] == "upkeep"
+    assert not gb.impose(goal, 6, walk)
+    tr = MenuTracker({"kind": "menu"})
+    tr.leave = True
+    from anygame.upkeep import rank_exits
+    entries = {"pick_1": {"ends_on": "choice", "frames": 10}, "pick_2": {"ends_on": "walk", "frames": 300}}
+    assert rank_exits(entries) == ["pick_2"]
+
+
+def test_a_walk_pushed_back_after_a_talk_counts_as_stuck():
+    """The pushback comes after the text: reads during the talk do not clear the plan, so it is dropped after two."""
+    from anygame.perceive.world import WorldTracker
+    w = WorldTracker({"x": "x", "y": "y", "map": "map"})
+    w.read({"map": 0, "x": 5, "y": 5, "screen": "walk"})
+    w.visited[0] |= {(4, 5), (6, 5), (5, 4)}
+    for _ in range(2):
+        w.read({"map": 0, "x": 5, "y": 5, "screen": "walk"})
+        w._pending = (w.here, ("down", "down"))
+        w.read({"map": 0, "x": 5, "y": 6, "screen": "text"})      # stepped once, then the talk
+    w.read({"map": 0, "x": 5, "y": 5, "screen": "walk"})          # pushed back
+    assert w.stuck.get((w.here, ("down", "down"))) == 2
