@@ -368,7 +368,11 @@ class WorldTracker:
             to: dict = {}
             if wo is not None and self._route_option(here, wo[1], tree, "a route not walked to its end", tp, to):
                 plans["way_on"] = tp["goal"]
-                opts = {"way_on": to["goal"].replace("walk", "the way on: walk", 1), **opts}
+                line = to["goal"].replace("walk", "the way on: walk", 1)
+                if any(k.startswith("explore_") for k in opts):
+                    opts["way_on"] = line            # this place still has ground to explore: that first
+                else:
+                    opts = {"way_on": line, **opts}
         # 4. inspect blocked tiles not inspected yet, nearest first: people, signs and objects block the way as walls do,
         # and the only general way to find the one a quest wants is to try them
         cands = []

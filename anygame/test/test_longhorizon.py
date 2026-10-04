@@ -728,3 +728,20 @@ def test_a_join_route_does_not_step_off_an_edge_known_to_be_walled():
     plans, opts = {}, {}
     assert w._route_option((p, 3, 5), 99, w.bfs((p, 3, 5)), "x", plans, opts)
     assert plans["goal"][-3:] == ["up"] * 3 and "right" in plans["goal"]     # goes round to (4,1) first
+
+
+def test_the_way_on_comes_after_exploring_what_is_left_here():
+    from anygame.perceive.world import WorldTracker
+    w = WorldTracker({"x": "x", "y": "y", "map": "map"})
+    town = w.tile_of({"map": 11, "x": 3, "y": 3})[0]
+    w._moves, w._walking = ["up"] * 3, True
+    w.tile_of({"map": 11, "x": 3, "y": 0})
+    w._moves, w._walking = ["up"], True
+    route = w.tile_of({"map": 11, "x": 3, "y": 35})[0]
+    w.visit((route, 3, 35))
+    for y in range(0, 4):
+        w.visit((town, 3, y))
+    opts, _ = w.options((town, 3, 3), None)
+    keys = list(opts)
+    assert "way_on" in keys and any(k.startswith("explore_") for k in keys)
+    assert keys.index("way_on") > min(keys.index(k) for k in keys if k.startswith("explore_"))
