@@ -233,7 +233,7 @@ class PyBoyDevice(Device):
         import yaml
         with open(self.discover_file, "w") as f:
             f.write("# found by anygame/discover.py while playing: the agent's own map of this game's RAM\n")
-            yaml.safe_dump(self.discoverer.dump(), f, sort_keys=False)
+            yaml.safe_dump(self.discoverer.dump(evidence=False), f, sort_keys=False)
         return self.discover_file
 
     # ---- branching: the emulator as the forward model of every game on it ------------------------------

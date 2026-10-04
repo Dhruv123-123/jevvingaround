@@ -431,3 +431,26 @@ def test_pyboy_holds_several_buttons_together():
         assert d.frames == f0 + 10 and d.snapshot() is not a
     finally:
         d.close()
+
+
+def test_discoverer_evidence_survives_a_checkpoint():
+    """A run resumed from a checkpoint goes on from the evidence the map was judged from, not from nothing."""
+    import json
+    from anygame.discover import Discoverer, LO, N
+    rng = np.random.default_rng(1)
+    d = Discoverer()
+    mem = np.zeros(N, np.int32)
+    X, Y = 0xD712 - LO, 0xD710 - LO
+    mem[X], mem[Y] = 40, 40
+    for _ in range(80):
+        b = ["up", "down", "left", "right"][rng.integers(4)]
+        before = mem.copy()
+        mem[X] += {"left": -1, "right": 1}.get(b, 0)
+        mem[Y] += {"up": -1, "down": 1}.get(b, 0)
+        d.press(b, before, mem.copy())
+        d.frame(mem.copy(), blank=False)
+    saved = json.loads(json.dumps(d.dump()))
+    e = Discoverer()
+    e.load(saved)
+    assert (e.by_pad == d.by_pad).all() and (e._seen == d._seen).all() and e.pad_presses == d.pad_presses
+    assert "evidence" not in d.dump(evidence=False)
