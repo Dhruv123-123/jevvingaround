@@ -92,6 +92,9 @@ class Agent:
         self.memory = None
         self.goalbook = None
         self.auditor = None
+        from .stuck import Stuck
+        self.stuck = Stuck()                     # the same few screens and actions with nothing new: a stall
+        self._avoid: tuple[int, set[str]] | None = None
         if pack.raw.get("goals_from") == "dialogue":
             from .memory import RunMemory
             from .goals import GoalBook
@@ -815,6 +818,11 @@ class Agent:
             self._emit(rec, frame, dets, None)
             return rec
         qs = self.questions(values)
+        if self._avoid is not None:
+            if self.tick > self._avoid[0]:
+                self._avoid = None
+            else:
+                qs = _without(qs, self._avoid[1])
         budget = float(self.pack.raw.get("budget_ms") or 0)
         expected = t_perc + self.sensor_ewma_ms
         reflex = self.pack.raw.get("reflex")
@@ -1189,6 +1197,19 @@ class Agent:
         return out
 
     def _emit(self, rec, frame, dets, answers):
+        if getattr(self, "stuck", None) is not None and rec.get("action") is not None:
+            v = rec.get("screen") or {}
+            pos = (v.get("x"), v.get("y"), v.get("map")) if v.get("x") is not None else None
+            s = self.stuck.see(self.tick, rec["action"], kind=v.get("screen"), text=str(v.get("text") or "")[:120],
+                               pos=pos, frame=frame)
+            if s:
+                # break it: B once (backs out of most menus and talks), then the repeated choices are left out of
+                # the next questions while the detector stays quiet, so the decider takes something else
+                rec["stuck"] = s
+                self._avoid = (self.tick + self.stuck.quiet, set(s["repeated"]))
+                print(f"stall at tick {self.tick}: {s['counts']} since {s['since']}", file=sys.stderr)
+                if hasattr(self.device, "press"):
+                    self.device.press("b", hold=4, after=8)
         if self.on_record is not None:
             self.on_record(rec, frame)
         if self.log:
@@ -1235,3 +1256,16 @@ class Agent:
                     time.sleep(period - dt)
         finally:
             self.close()
+
+
+def _without(qs: dict[str, Any], avoid: set[str]) -> dict[str, Any]:
+    """The questions with the options a stall kept taking left out, where some other option remains."""
+    out = {}
+    for k, q in qs.items():
+        c = q.get("criteria") if isinstance(q, dict) else None
+        if q.get("type") == "choice" and isinstance(c, dict):
+            keep = {o: t for o, t in c.items() if o not in avoid}
+            if keep and len(keep) < len(c):
+                q = {**q, "criteria": keep}
+        out[k] = q
+    return out
