@@ -186,7 +186,8 @@ class WorldTracker:
     def _frontier_option(self, here: Tile, tree, plans: dict, opts: dict) -> None:
         """Walked about here a long while with nothing new: the nearest other place with ground left to find."""
         n = int(self.r.get("stale_place_after", 300))
-        since = max(self._new_tile_at.get(here[0], -10 ** 9), self._arrived.get(here[0], -10 ** 9))
+        # arriving gives a short grace only: walking in and out of a place does not make it fresh again
+        since = max(self._new_tile_at.get(here[0], -10 ** 9), self._arrived.get(here[0], -10 ** 9) - n + 50)
         if self.steps - since < n:
             return
         best = None
@@ -407,6 +408,10 @@ class WorldTracker:
         fp: dict = {}
         self._frontier_option(here, tree, fp, fo)
         if fo:
+            # exploring here has found nothing for a long while: its explore options are dropped, the other place leads
+            for k in [k for k in opts if k.startswith("explore_")]:
+                opts.pop(k)
+                plans.pop(k, None)
             plans.update(fp)
             opts = {**fo, **opts}
         if own and (toward is None or f"explore_{toward}" not in opts):
@@ -418,7 +423,7 @@ class WorldTracker:
             if wo is not None and self._route_option(here, wo[1], tree, "a route not walked to its end", tp, to):
                 plans["way_on"] = tp["goal"]
                 line = to["goal"].replace("walk", "the way on: walk", 1)
-                if any(k.startswith("explore_") for k in opts):
+                if "frontier" in opts or any(k.startswith("explore_") for k in opts):
                     opts["way_on"] = line            # this place still has ground to explore: that first
                 else:
                     opts = {"way_on": line, **opts}

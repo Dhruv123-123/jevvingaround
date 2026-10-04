@@ -763,6 +763,7 @@ def test_a_place_walked_long_with_nothing_new_offers_the_nearest_place_with_grou
     w.steps = 1000                       # 1000 steps since anything new in the town
     opts, plans = w.options((town, 3, 3), None)
     assert list(opts)[0] == "frontier" and plans["frontier"][-1] == "up"
+    assert not any(k.startswith("explore_") for k in opts)
     w._new_tile_at[town] = 990           # something new just now: no frontier option
     opts, _ = w.options((town, 3, 3), None)
     assert "frontier" not in opts
