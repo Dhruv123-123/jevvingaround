@@ -448,3 +448,19 @@ def test_places_come_from_the_place_book():
     w2 = WorldTracker({"x": "x", "y": "y", "map": "map"})
     w2.load(json.loads(json.dumps(d)))
     assert w2.book.joins == w.book.joins and w2.tile_of({"map": 7, "x": 9, "y": 34}, stepping=True, moves=("up",))[0] == route
+
+
+def test_upkeep_advice_becomes_the_goal_and_menus_put_exits_first(monkeypatch):
+    """A number low: the goal book takes the upkeep goal once; a menu with leave set ranks the entry that gets back to
+    the world first."""
+    m = RunMemory()
+    gb = GoalBook(m, None)
+    walk = {"map": 1, "x": 0, "y": 0, "screen": "walk"}
+    goal = {"instruction": "Get HP back up", "done": {"number": {"name": "HP", "share_at_least": 0.9}}, "target": None}
+    assert gb.impose(goal, 5, walk) and gb.current["source"] == "upkeep"
+    assert not gb.impose(goal, 6, walk)
+    tr = MenuTracker({"kind": "menu"})
+    tr.leave = True
+    from anygame.upkeep import rank_exits
+    entries = {"pick_1": {"ends_on": "choice", "frames": 10}, "pick_2": {"ends_on": "walk", "frames": 300}}
+    assert rank_exits(entries) == ["pick_2"]

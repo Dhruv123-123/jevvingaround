@@ -98,6 +98,9 @@ class Agent:
             self.goalbook = GoalBook(self.memory, None, pack.raw.get("goals_cfg"))
             from .numbers import NumberBook
             self.numbers = NumberBook()          # numbers the game prints, bound to RAM once they change
+            from .upkeep import Upkeep
+            self.keep = Upkeep()                 # a number falling toward a fatal floor: leave, go back to the refill
+            self._book_seen = 0
         if pack.raw.get("frames") == "stream" and hasattr(device, "stream"):
             device.stream()             # frames from the browser's screencast: ~10 ms a frame instead of a 40 ms screenshot
         # the hybrid: which screen is this, does the pack understand it, and who decides when it does not
@@ -478,13 +481,32 @@ class Agent:
                     self.gains.see(txt if isinstance(txt, str) else "")
             self.memory.observe(self.tick, getattr(self.device, "frames", None), placed,
                                 values.get(self.base.raw.get("dialogue_read", "text")), (t[1], t[2]) if t else None)
+            if getattr(self, "keep", None) is not None and "numbers" in placed:
+                # upkeep (anygame/upkeep.py): a tracked number falling toward a floor the game has shown to be fatal
+                forced = False
+                if w is not None and hasattr(w, "book"):
+                    evs = w.book.events
+                    forced = any(e.get("forced") for e in evs[self._book_seen:])
+                    self._book_seen = len(evs)
+                self.keep.see(self.tick, placed["numbers"], place=t[0] if t else None, screen=values.get("screen"),
+                              moved=forced)
             if self.goalbook is not None:
                 self.quest = self.goalbook.update(self.tick, placed, w, getattr(self.device, "frames", None))
+                adv = self.keep.advice() if getattr(self, "keep", None) is not None else None
+                for tr in self.worlds.values():
+                    if hasattr(tr, "leave"):
+                        tr.leave = bool(adv and adv.get("leave"))
+                if adv and self.goalbook.impose(adv["goal"], self.tick, placed):
+                    print(f"upkeep at tick {self.tick}: {adv['why']}", file=sys.stderr)
+                    self.quest = self.goalbook.quest()
         for rid, r in pack.reads.items():
             if r.get("kind") == "menu":
                 if rid not in self.worlds:
                     from .perceive.menu import MenuTracker
                     self.worlds[rid] = MenuTracker(r)
+                    pr = next((x for x in pack.reads.values() if x.get("kind") == "probe"), None)
+                    if pr is not None:
+                        self.worlds[rid].screen_kind = lambda pr=pr: self._probe(pr)
                 self.trackers[rid] = self.worlds[rid]
                 if r.get("when") and not self._task_ok(r["when"], values):
                     self.worlds[rid].see(self.device.screen(), values.get("text"))   # where a choice may lead back to
