@@ -100,6 +100,7 @@ class WorldTracker:
         self.stuck: dict[tuple, int] = {}       # (tile, plan) → times walking that plan from that tile ended back on it
         self._pending: tuple | None = None
         self._last_off: tuple | None = None      # (tile, direction) of a step that went 'off' (maybe a door mid-fade)
+        self._entries: list[tuple[int, Any]] = []  # (step, place) each time a different place was entered
         self.steps = 0                                  # steps tried over the run: the clock blocked edges age by
         self.here: Tile | None = None
         self.macros: dict[str, list[str]] = {}
@@ -319,6 +320,8 @@ class WorldTracker:
         for k, w in sorted(self.warps.items(), key=lambda kv: str(kv[0])):
             if k[0] != here[0] or w[0] == here[0] or w[0] in self.visited and len(self.visited[w[0]]) > 6:
                 continue
+            if sum(1 for st, p in self._entries if p == w[0] and self.steps - st < int(self.r.get("door_back_after", 300))) >= 2:
+                continue          # in and out of there twice lately (or a name it goes by at its door): a bounce, not news
             door = (k[0], k[1], k[2])
             if door in tree and k_door < 2:
                 p = self.path_to(tree, door) + [k[3]]
@@ -357,8 +360,9 @@ class WorldTracker:
         for _, dist, d, n in sorted(explore):
             hint = ((" (the way on)" if own else " (the goal's direction)") if d == toward else "")
             opts[f"explore_{d}"] = f"explore {COMPASS[d]}{hint}: nearest unexplored tile {dist} step(s) away, up to {n} steps"
-        if own and toward is None:
-            # no way on from here (a town whose exits are all known): the join to a neighbour not walked to its end
+        if own and (toward is None or f"explore_{toward}" not in opts):
+            # no way on from here (a town whose exits are all known, or its heading has nothing left that way): the
+            # joins straight on to a neighbour not walked to its end
             wo = self.heading.way_on(here[0])
             tp: dict = {}
             to: dict = {}
@@ -448,6 +452,9 @@ class WorldTracker:
             # the step went 'off' (the reads mid-fade said little) and the next position is on another map: that step
             # was a door. Learned, so the tile past it stops looking unexplored and is not walked into again and again
             self.warps[(lo[0][0], lo[0][1], lo[0][2], lo[1])] = here
+        if self.here is None or self.here[0] != here[0]:
+            self._entries = [e for e in self._entries if self.steps - e[0] < int(self.r.get("door_back_after", 300))]
+            self._entries.append((self.steps, here[0]))
         self.here = here
         self.visit(here)
         self.goal_target = goal

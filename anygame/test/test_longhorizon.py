@@ -699,3 +699,18 @@ def test_a_town_with_all_exits_known_points_on_along_its_joins_and_heading_survi
     w2 = WorldTracker({"x": "x", "y": "y", "map": "map"})
     w2.load(json.loads(json.dumps(w.dump())))
     assert w2.heading.entered.keys() == before.keys() and w2.heading.toward(route) == w.heading.toward(route)
+
+
+def test_a_door_to_a_place_just_left_is_not_offered_as_little_explored():
+    from anygame.perceive.world import WorldTracker
+    w = WorldTracker({"x": "x", "y": "y", "map": "map"})
+    w.read({"map": 11, "x": 3, "y": 3, "screen": "walk"})
+    town = w.here[0]
+    w.warps[(town, 3, 2, "up")] = ("lab", 5, 11)
+    w.visit((town, 3, 2))
+    w._entries = [(w.steps - 20, "lab"), (w.steps - 5, "lab")]   # in and out of it twice just now
+    opts, _ = w.options((town, 3, 3), None)
+    assert not any(k.startswith("door_") for k in opts)
+    w.steps += 500
+    opts, _ = w.options((town, 3, 3), None)
+    assert any(k.startswith("door_") for k in opts)
