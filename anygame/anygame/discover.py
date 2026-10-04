@@ -261,13 +261,14 @@ class Discoverer:
                     self.by_other += c
                 self.other_presses += 1
             if real:
-                if not warp and getattr(self, "_faded", False):
+                if not warp and getattr(self, "_faded", False) and not getattr(self, "_prev_warp", False):
                     # the screen went blank after this press: a fade, which only a map change does (stairs that land
                     # beside where they left move the player no further than a step). A byte the press before changed
                     # (the id is written as the player steps onto the stairs) is not held against it; one that changes
                     # in the fade itself (sprites and tiles reloaded for the new map) still is
                     self.fade_w += self._prev_c & ~c
                 self._faded = False
+                self._prev_warp = bool(warp)                # its changes are a warp's already: no fade credit for them
                 self._prev_c, self._prev_back = c, back
                 self._trans_seen = self.transitions
             if real:
@@ -613,7 +614,10 @@ class Discoverer:
             # ties (a map's sprite table loads with its id and comes back with it too): the byte lookaheads into a
             # door changed most (the id is written as the player steps onto the door, sprites and tiles only after
             # the fade), then the higher address (sprite tables and buffers sit low)
-            order = np.lexsort((-back, -self.by_pad[back], -self.n_values[back], off, -self.by_warp[back]))
+            # (a warp missed by one press, the position written a frame late, is no reason to lose: changing on
+            # nearly every warp is enough)
+            most = self.by_warp[back] >= 0.95 * self.by_warp[back].max()
+            order = np.lexsort((-back, -self.by_pad[back], -self.n_values[back], off, ~most))
             back = back[order]
             # a second byte only if it changed on exactly the same presses (an id's other half); the map the
             # player came from also comes back, but on other presses, and would split a place by its entrance
