@@ -319,3 +319,19 @@ def test_a_walk_that_ends_back_on_its_tile_twice_is_dropped():
         w._pending = (w.here, tuple(w.plans[lab]))     # walked it (a script pushed the player back)...
         lands = w.read(v)["landings"]                 # ...and the next decision is on the same tile
     assert lab not in lands and lands
+
+
+def test_a_pick_that_comes_back_through_another_screen_twice_is_dropped(monkeypatch):
+    import anygame.perceive.menu as menu
+    monkeypatch.setattr(menu, "_ocr_boxes", lambda img: [])
+    g = MenuGame()
+    t = MenuTracker({"depth": 4})
+    for _ in range(2):
+        t.read(g, g.screen())
+        t.run(g, "pick_1", lambda: {})
+        t.see(g.screen())                      # a card it opened, for a tick
+        g.s = {"cur": 0, "open": False, "text": "CARD"}
+        t.read(g, g.screen())                  # read as a screen of its own (one entry: A dismisses it)
+        g.s = {"cur": 0, "open": True, "text": None}
+    lands = t.read(g, g.screen())["landings"]
+    assert "pick_1" not in lands and "pick_2" in lands
