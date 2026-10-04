@@ -529,10 +529,27 @@ def test_upkeep_need_without_a_refill_place_asks_the_writer_how():
                       "done": {"talks": 1}, "target": {"place": 3}, "ticks": 200}})
     chat = FakeChat([ans])
     gb = GoalBook(m, chat)
-    walk = {"map": 1, "x": 0, "y": 0, "screen": "walk", "numbers": {"HP": {"value": 1, "of": 14}}}
+    walk = {"map": 1, "x": 0, "y": 0, "screen": "walk"}           # HP is not on a walking screen
     goal = {"instruction": "Get HP back up", "done": {"number": {"name": "HP", "share_at_least": 0.9}}, "target": None}
     assert gb.impose(goal, 5, walk)
     assert chat.seen[0]["need"]["done"] == goal["done"]
     g = gb.current
-    assert g["instruction"] == "Talk to Mom at home" and g["done"] == goal["done"] and g["target"] == {"place": 3}
+    assert g["instruction"] == "Talk to Mom at home" and g["target"] == {"place": 3}
+    assert g["done"] == {"any": [goal["done"], {"talks": 1}]}     # the rest given counts: HP is off screen
     assert g["source"] == "upkeep" and not gb.impose(goal, 6, walk)
+    gb._close(g, "reached", 9)
+    assert gb.need_met is g
+
+
+def test_upkeep_tracks_come_back_from_a_checkpoint_with_their_sets(tmp_path):
+    """JSON stores a Track's set of drop sizes as a list; a resumed run adds to it, so it must be a set again."""
+    import types
+    from anygame.memory import load_checkpoint
+    from anygame.upkeep import Upkeep, Track
+    t = Track("HP")
+    t.drops.add(3)
+    (tmp_path / "run.json").write_text(json.dumps({"tick": 9, "worlds": {}, "upkeep": {"HP": dict(t.__dict__, drops=[3])}}))
+    agent = types.SimpleNamespace(device=object(), worlds={}, keep=Upkeep())
+    load_checkpoint(agent, str(tmp_path))
+    agent.keep.tracks["HP"].drops.add(5)
+    assert agent.keep.tracks["HP"].drops == {3, 5}

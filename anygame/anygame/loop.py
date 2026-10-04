@@ -494,6 +494,21 @@ class Agent:
             if self.goalbook is not None:
                 self.quest = self.goalbook.update(self.tick, placed, w, getattr(self.device, "frames", None))
                 adv = self.keep.advice() if getattr(self, "keep", None) is not None else None
+                met = self.goalbook.need_met
+                if met is not None:
+                    # the way to refill it was taken (a rest given) but the number is not on screen: wait for a reading
+                    n = ((met.get("done") or {}).get("any") or [{}])[0].get("number", {}).get("name") or \
+                        (met.get("done") or {}).get("number", {}).get("name")
+                    tr_ = self.keep.tracks.get(n)
+                    self._held = (n, tr_.reads if tr_ else 0)
+                    self.goalbook.need_met = None
+                held = getattr(self, "_held", None)
+                if held and adv and adv["number"] == held[0]:
+                    tr_ = self.keep.tracks.get(held[0])
+                    if tr_ is not None and tr_.reads == held[1]:
+                        adv = None
+                    else:
+                        self._held = None
                 for tr in self.worlds.values():
                     if hasattr(tr, "leave"):
                         tr.leave = bool(adv and adv.get("leave"))

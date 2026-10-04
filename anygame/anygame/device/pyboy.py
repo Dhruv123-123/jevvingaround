@@ -219,13 +219,16 @@ class PyBoyDevice(Device):
         return s
 
     def save_trace(self) -> None:
+        """Write the trace events not written yet (appended, so a long run can save often and a killed run keeps
+        what it had); read back with discover.load_trace."""
         path = os.environ.get("ANYGAME_DISCOVER_TRACE")
         if self.discoverer is None or self.discoverer.trace is None or not path:
             return
-        import pickle
-        import zlib
-        with open(path, "wb") as f:
-            f.write(zlib.compress(pickle.dumps(self.discoverer.trace), 1))
+        from ..discover import append_trace
+        tr = self.discoverer.trace
+        # a branch that put the game back may also put back a copy of the discoverer: its trace is the run's, whole
+        done = getattr(self, "_trace_done", 0) if getattr(self, "_trace_of", None) is tr else 0
+        self._trace_done, self._trace_of = append_trace(path, tr, done), tr
 
     def save_discovered(self) -> str | None:
         if self.discoverer is None or not self.discover_file or not self.discoverer.found:
@@ -332,6 +335,8 @@ class PyBoyDevice(Device):
         if self.discoverer is not None:
             after_ = ram(self._pb.memory)
             self.discoverer.press(b, before, after_, full=hold is None or hold >= 8, continues=True)
+            if self.discoverer.trace is not None and len(self.discoverer.trace) - getattr(self, "_trace_done", 0) >= 2000:
+                self.save_trace()
 
     def hold_keys(self, keys: list[str], frames: int) -> None:
         """Hold several buttons together for `frames` frames; they stay down (across calls) until release_keys.
