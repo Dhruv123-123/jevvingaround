@@ -464,3 +464,17 @@ def test_upkeep_advice_becomes_the_goal_and_menus_put_exits_first(monkeypatch):
     from anygame.upkeep import rank_exits
     entries = {"pick_1": {"ends_on": "choice", "frames": 10}, "pick_2": {"ends_on": "walk", "frames": 300}}
     assert rank_exits(entries) == ["pick_2"]
+
+
+def test_a_walk_pushed_back_after_a_talk_counts_as_stuck():
+    """The pushback comes after the text: reads during the talk do not clear the plan, so it is dropped after two."""
+    from anygame.perceive.world import WorldTracker
+    w = WorldTracker({"x": "x", "y": "y", "map": "map"})
+    w.read({"map": 0, "x": 5, "y": 5, "screen": "walk"})
+    w.visited[0] |= {(4, 5), (6, 5), (5, 4)}
+    for _ in range(2):
+        w.read({"map": 0, "x": 5, "y": 5, "screen": "walk"})
+        w._pending = (w.here, ("down", "down"))
+        w.read({"map": 0, "x": 5, "y": 6, "screen": "text"})      # stepped once, then the talk
+    w.read({"map": 0, "x": 5, "y": 5, "screen": "walk"})          # pushed back
+    assert w.stuck.get((w.here, ("down", "down"))) == 2

@@ -401,10 +401,13 @@ class WorldTracker:
         if known > self.known:
             self.buttons_tried = set()
         self.known = known
-        if self._pending is not None and self._pending[0] == here:
-            # the last plan from this very tile ended where it started (pushed back by a script, a talk, a ledge)
-            self.stuck[self._pending] = self.stuck.get(self._pending, 0) + 1
-        self._pending = None
+        if values.get("screen") in (None, "walk"):
+            # judged when the player can walk again: a plan cut short by a talk ("don't go away yet!") is pushed back
+            # only after the text, so the reads in between say nothing about where it ended
+            if self._pending is not None and self._pending[0] == here:
+                # the last plan from this very tile ended where it started (pushed back by a script, a talk, a ledge)
+                self.stuck[self._pending] = self.stuck.get(self._pending, 0) + 1
+            self._pending = None
         opts, plans = self.options(here, goal)
         dead = [k for k, p in plans.items() if self.stuck.get((here, tuple(p)), 0) >= 2]
         if dead and len(dead) < len(plans):
