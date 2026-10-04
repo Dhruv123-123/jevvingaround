@@ -65,7 +65,10 @@ Targets (where to head, or null): {"toward": "up"|"down"|"left"|"right"} (up is 
 Prefer what the dialogue asks for (someone told you to go somewhere, find someone, press a button). If nothing was
 asked, explore: a new place, or talk to people. Do not repeat a goal that was just given up unless something changed.
 "now" is the present: its screen and text_on_screen say what the game shows at this moment; a dialogue line from
-earlier ticks may be about something already over (a battle that ended, a menu that closed)."""
+earlier ticks may be about something already over (a battle that ended, a menu that closed).
+When the context has "need", the run itself needs that condition (a number to get back up) and does not know where
+or how: write the goal for it, with its "done" exactly as given, and an instruction and target saying how, from what
+the game has said and shown (someone who offered rest or help, a place it refilled before)."""
 
 
 def check(cond: Any, places: set[str] | None = None, depth: int = 0, numbers: set[str] | None = None) -> str | None:
@@ -201,7 +204,7 @@ class GoalBook:
             self._set(dict(EXPLORE), tick, values)
         return self.quest()
 
-    def impose(self, goal: dict[str, Any], tick: int, values: dict[str, Any], source: str = "upkeep") -> bool:
+    def impose(self, goal: dict[str, Any], tick: int, values: dict[str, Any], source: str = "upkeep", world=None) -> bool:
         """A goal from the run itself, not the writer (a number to get back up, anygame/upkeep.py): set unless the
         current goal already checks the same condition. Returns whether it was set."""
         if self.current is not None and (self.current.get("done") == goal.get("done") or
@@ -210,6 +213,9 @@ class GoalBook:
         if self.current is not None:
             self._close(self.current, "replaced", tick)
         self._set({**goal, "source": source}, tick, values)
+        if not goal.get("target") and self.chat is not None:
+            # the run knows what it needs but not where to get it: the writer reads the game for how (once per goal)
+            self._write(tick, values, world, need=self.current)
         return True
 
     def _close(self, g: dict[str, Any], outcome: str, tick: int) -> None:
@@ -264,12 +270,14 @@ class GoalBook:
             "current_goal": ({"instruction": self.current["instruction"], "done": self.current["done"]} if self.current else None),
         }
 
-    def _write(self, tick: int, values: dict[str, Any], world=None) -> dict[str, Any]:
+    def _write(self, tick: int, values: dict[str, Any], world=None, need: dict[str, Any] | None = None) -> dict[str, Any]:
         self.calls += 1
         self.last_call = tick
         self.memory.new_lines = 0
         ctx = self.context(values, world)
         ctx["now"]["tick"] = tick
+        if need is not None:
+            ctx["need"] = {"instruction": need["instruction"], "done": need["done"]}
         places = {str(p["id"]) for p in ctx["places"]}
         msgs = [{"role": "system", "content": SYSTEM}, {"role": "user", "content": json.dumps(ctx)}]
         entry: dict[str, Any] = {"tick": tick, "kind": "goal_writer", "dialogue_lines": len(ctx["dialogue"])}
@@ -280,10 +288,12 @@ class GoalBook:
             a = _json(text)
             same = self.current is not None and (a.get("goal") or {}).get("done") == self.current["done"] and \
                 (a.get("goal") or {}).get("target") == self.current.get("target")
-            if (a.get("keep") or same) and self.current is not None:
+            if (a.get("keep") or same) and self.current is not None and need is None:
                 entry["result"] = "kept"           # the same goal again keeps its start (what counts as new is unchanged)
                 return entry
             goal = a.get("goal") or {}
+            if need is not None:
+                goal = {**goal, "done": need["done"]}      # how is the writer's; what counts as done is the run's
             err = None if goal.get("instruction") else "no instruction"
             err = err or check(goal.get("done"), places, numbers=set(values.get("numbers") or {})) or check_target(goal.get("target"), places, len(self.memory.dialogue))
             if err:
@@ -299,7 +309,7 @@ class GoalBook:
                 self._close(self.current, "replaced", tick)
             self._set({"instruction": str(goal["instruction"])[:160], "done": goal["done"], "target": goal.get("target"),
                        "ticks": max(40, min(400, int(goal.get("ticks") or self.give_up))), "why": str(a.get("why", ""))[:200],
-                       "source": "writer"}, tick, values)
+                       "source": need.get("source", "writer") if need is not None else "writer"}, tick, values)
             entry["result"] = "set " + self.current["id"]
         except Exception as e:  # noqa: BLE001
             self.failures += 1
