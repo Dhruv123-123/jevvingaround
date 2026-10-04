@@ -89,13 +89,8 @@ def test_a_door_taken_again_leads_where_it_did_whatever_the_name_reads_and_the_w
     assert b.route(town, house)["dir"] == "up"
 
 
-def test_a_new_name_where_the_place_looks_as_it_did_is_a_rename_and_joins_route_both_ways():
+def test_joins_route_both_ways():
     b = PlaceBook()
-    look = bytes(range(200))
-    room = b.see("R", 4, 4, look=look)
-    b.see("R", 5, 4, moves=["right"], walking=True, look=bytes(200))
-    # back on (4,4), a new name on an ordinary step, the screen as it was: the same room
-    assert b.see("R2", 4, 4, moves=["left"], walking=True, look=look) == room
     town = b.see("A", 10, 0)
     route = b.see("A", 10, 35, moves=["up"], walking=True)
     assert b.route(route, town) == {"kind": "join", "dir": "down", "hops": 1}

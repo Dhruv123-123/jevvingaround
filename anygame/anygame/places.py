@@ -71,12 +71,8 @@ class PlaceBook:
         # out is the other way). A door taken again leads where it led before, whatever the signature reads now
         self.doors: dict[tuple[int, int, int], tuple] = {}
         self._pressed: str | None = None
+        self.door_slack = 0                     # tiles a door taken again may differ by, from and to together
         self._from: tuple[int, int] | None = None
-        # what the screen looked like at a place and position (a coarse print, given by the caller): a new name read
-        # on a tile this place has been seen on, looking as it did then, is the same place under another name
-        self.looks: dict[tuple[int, int, int], bytes] = {}
-        self._look: bytes | None = None
-        self.same_look = 0.9
 
     # ---- places -----------------------------------------------------------------------------------------
     def _new(self, sig: Hashable) -> Place:
@@ -98,14 +94,12 @@ class PlaceBook:
 
     # ---- one read ---------------------------------------------------------------------------------------
     def see(self, sig: Hashable, x: int, y: int, moves: list[str] | tuple[str, ...] = (), walking: bool = False,
-            cut: bool = False, idle: bool = True, look: bytes | None = None) -> int:
+            cut: bool = False, idle: bool = True) -> int:
         """The place id for this read. `moves`: the directions pressed since the last read (empty when the last action
         was not a walk); `walking`: the last action was a walk; `cut`: the screen went to a new scene on the way (a
         fade or a blank between the reads), which makes a signature change a door even on a one-tile step (stairs);
-        `idle`: nothing was pressed since the last read (a wait), so a new name now belongs to the walk before it;
-        `look`: a coarse print of the screen (anygame/stuck.fingerprint), when the caller has one."""
+        `idle`: nothing was pressed since the last read (a wait), so a new name now belongs to the walk before it."""
         self.reads += 1
-        self._look = look
         self._xy = (x, y)
         last = self._last
         self._last = (sig, x, y)
@@ -150,11 +144,7 @@ class PlaceBook:
             else:
                 self._merge(self.here, back)            # it came back somewhere else: one place, two names
             return self._stand(x, y)
-        if sig != sig0 and sig not in self.here.sigs and self._looks_as_before(self.here.id, x, y) and not cut:
-            # a new name on a tile this place has been seen on, and the screen looks as it did there: one place
-            self.here.sigs.add(sig)
-            self.events.append({"read": self.reads, "kind": "rename", "place": self.here.id, "sig": str(sig), "look": True})
-        elif sig != sig0 and sig not in self.here.sigs:
+        if sig != sig0 and sig not in self.here.sigs:
             if late:
                 frm = self.here
                 to = self._door_to(sig, x, y)
@@ -211,18 +201,7 @@ class PlaceBook:
 
     def _stand(self, x: int, y: int) -> int:
         self.here.tiles.add((x, y))
-        if self._look is not None:
-            self.looks.setdefault((self.here.id, x, y), self._look)
         return self.here.id
-
-    def _looks_as_before(self, pid: int, x: int, y: int) -> bool:
-        if self._look is None:
-            return False
-        old = self.looks.get((pid, x, y))
-        if old is None or len(old) != len(self._look):
-            return False
-        same = sum(a == b for a, b in zip(old, self._look))
-        return same >= self.same_look * len(old)
 
     def _join_direction(self, dx: int, dy: int, moves: list[str]) -> str | None:
         """The pressed direction a walk went the wrong way along, further than `far` and further than the presses on
@@ -261,7 +240,7 @@ class PlaceBook:
                 if self.canonical(p) != here or self.canonical(q) == here:
                     continue
                 d = abs(ax - fx) + abs(ay - fy) + abs(bx - x) + abs(by - y)
-                if abs(ax - fx) + abs(ay - fy) <= 1 and abs(bx - x) + abs(by - y) <= 1:
+                if d <= self.door_slack:
                     hits.append((d, -self.places[self.canonical(q)].left_at, self.canonical(q)))
             if hits:
                 to = self.places[min(hits)[2]]
@@ -279,10 +258,27 @@ class PlaceBook:
         {"kind": "join", "dir", "hops"} (walk off this side), {"kind": "door", "x", "y", "dir", "hops"} (stand on that
         tile and press `dir`, the way the door was taken or back out the way it was come in by), or None when no way
         is known. `src` itself gives {"kind": "here", "hops": 0}."""
-        from collections import deque
         src, dst = self.canonical(src), self.canonical(dst)
         if src == dst:
             return {"kind": "here", "hops": 0}
+        # a place entered by a new name on an ordinary step (on trial: maybe one place under two names) is on the
+        # same ground as the place it was entered from: with no way known from it, that place's way is tried
+        seen = set()
+        while src not in seen:
+            seen.add(src)
+            hop = self._route(src, dst)
+            if hop is not None:
+                return hop
+            trial = self.places[src].trial
+            if trial is None:
+                return None
+            src = self.canonical(trial["from"])
+            if src == dst:
+                return None             # the place it was entered from is the goal: walking on here is the way
+        return None
+
+    def _route(self, src: int, dst: int) -> dict[str, Any] | None:
+        from collections import deque
         edges: dict[int, list[tuple[int, dict[str, Any]]]] = {}
         for (p, d), q in self.joins.items():
             edges.setdefault(self.canonical(p), []).append((self.canonical(q), {"kind": "join", "dir": d}))

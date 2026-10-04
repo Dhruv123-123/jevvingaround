@@ -67,6 +67,9 @@ def main():
             agent.goalbook.impose({"id": "back", "instruction": f"go back to place {target}",
                                    "done": {"place": target}, "target": {"place": target}, "ticks": a.cap},
                                   agent.tick, values, source="test")
+            wt = next((t for t in agent.worlds.values() if hasattr(t, "book")), None)
+            if wt is not None and hasattr(wt.book, "route"):
+                print("route:", wt.book.route(here, target), "doors:", len(wt.book.doors), "joins:", len(wt.book.joins))
             print(f"step {i + 1}: on {truth} (place {here}); goal: back to place {target} ({a.target}); "
                   f"places so far {dict((k, dict(v)) for k, v in pids.items())}")
         if target is not None and i + 1 > start:
@@ -77,8 +80,11 @@ def main():
             if reached is None and back is not None and back.get("outcome") == "reached":
                 reached = i + 1 - start
         if log:
+            land = sorted(((w or {}).get("landings") or {}).keys()) if isinstance(w, dict) else []
             log.write(json.dumps({"step": i + 1, "truth": truth, "here": here, "action": str(rec.get("action")),
-                                  "goal": rec.get("goal")}) + "\n")
+                                  "goal": rec.get("goal"), "options": land,
+                                  "goal_option": ((w or {}).get("landings") or {}).get("goal") if isinstance(w, dict) else None})
+                      + "\n")
         if (arrived is not None and reached is not None) or (start is not None and i + 1 - start >= a.cap):
             break
     print(json.dumps({"target": a.target, "place": target, "given_at": start, "arrived_after": arrived,

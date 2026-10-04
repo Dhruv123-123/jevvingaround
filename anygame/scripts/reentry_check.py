@@ -14,7 +14,7 @@ from anygame.places import PlaceBook  # noqa: E402
 from place_check import moves_of  # noqa: E402
 
 
-def reentries(path: str, looks: bool = True, **kw) -> tuple[int, int, int]:
+def reentries(path: str, **kw) -> tuple[int, int, int]:
     rows = [json.loads(line) for line in open(path)]
     book = PlaceBook(**kw)
     named: dict = {}
@@ -27,9 +27,7 @@ def reentries(path: str, looks: bool = True, **kw) -> tuple[int, int, int]:
         moves = moves_of(a.get("action"))
         walking = (a.get("screen") or {}).get("screen") == "walk" and bool(moves)
         idle = str(a.get("action", "")).startswith("auto: wait")
-        look = bytes.fromhex(b["print"]) if looks and b.get("print") else None
-        pid = book.canonical(book.see(s.get("map", 0), int(s["x"]), int(s["y"]), moves=moves, walking=walking, idle=idle,
-                                      look=look))
+        pid = book.canonical(book.see(s.get("map", 0), int(s["x"]), int(s["y"]), moves=moves, walking=walking, idle=idle))
         if t != last_map and t in named:
             back += 1
             known += any(book.canonical(p) == pid for p in named[t])
@@ -39,8 +37,7 @@ def reentries(path: str, looks: bool = True, **kw) -> tuple[int, int, int]:
 
 
 def main() -> None:
-    ways = {"before": dict(remember_doors=False, looks=False), "doors": dict(remember_doors=True, looks=False),
-            "doors+looks": dict(remember_doors=True, looks=True)}
+    ways = {"before": dict(remember_doors=False), "doors": dict(remember_doors=True)}
     tot = {k: [0, 0] for k in ways}
     for p in sys.argv[1:]:
         line = [p.split("/")[-2] + "/" + p.split("/")[-1]]
