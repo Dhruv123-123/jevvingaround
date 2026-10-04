@@ -20,9 +20,13 @@ from typing import Any
 import numpy as np
 
 LO, HI = 0xC000, 0xE000
-MAP_RULE = 4        # bumped when the map rule changes: a signature or evidence saved under another is not loaded
+MAP_RULE = 5        # bumped when the map rule changes: a signature saved under another is not loaded
+EVIDENCE_RULE = 4   # bumped when what the evidence counts changes: evidence saved under another is not loaded
 EVIDENCE = ("changes", "ups", "holds", "holds_walked", "walks_at", "by_pad", "by_other", "full_any", "follows_pos",
-            "_from", "_to", "_old", "_hist", "n_values", "by_warp", "returned")
+            "_from", "_to", "_old", "_hist", "n_values", "by_warp", "returned", "full_w", "chg_w")
+LOADED_HOLD = 150   # presses on an axis this run judges for itself before a position loaded from a save can change
+SETTLED = 300       # updates the position held unchanged before lookaheads stop teaching it (early on they correct it)
+RECENT = 40         # real d-pad presses looked back on to tell walking from a menu
 MOVED = 0.2         # a position byte moves on at least this share of its axis's presses (walls and turns take the rest)
 WALKED = 0.8        # a map value must have held through walking on this share of its holds
 HOLD_WALKS = 6      # a map value holds while the player walks at least this many moves (a step's bytes hold for one)
@@ -148,6 +152,9 @@ class Discoverer:
         self.n_values = z()
         self._seen_walking = np.zeros((N, 256), bool)   # the same, from presses once the position is known
         self.full_any = z()              # changed by a press the game went on from (not a probe from a save state)
+        # the same two counts (presses, all frames) since the warps were last counted afresh: a byte's changes
+        # off the warps are judged against the warps counted over the same stretch
+        self.full_w, self.chg_w = z(), z()
         self.other_presses = 0
         self.walks = 0
         self.walks_at = np.zeros(N, np.int64)
@@ -198,8 +205,13 @@ class Discoverer:
         new = ~self._seen[np.arange(N), v]
         self._seen[np.arange(N), v] = True
         self.n_values += new
+        warp = False
         if "x" in self.found and "y" in self.found:
             c = after != before
+            if real and d and (d[0] or d[1]):
+                # which found axis the last real d-pad presses moved: on a menu or a battle screen neither does
+                moved_axes = {ax for ax in "xy" if self.decode(after, ax) != self.decode(before, ax)}
+                self._axis_moves = ((getattr(self, "_axis_moves", []) + [moved_axes])[-RECENT:])
             back = c & self._seen_walking[np.arange(N), v]     # back to a value it had while the player walked
             if real:
                 self._seen_walking[np.arange(N), v] = True
@@ -234,14 +246,18 @@ class Discoverer:
                 self._prev_c, self._prev_back = c, back
             if real:
                 self.full_any += c
+                self.full_w += c
             # which presses changed a byte, folded into one number: a map's id, bank, tileset and script pointers all
             # change on exactly the same presses, a screen tile or a sprite with few others
             self._hist[c] = self._hist[c] * np.uint64(1000003) + np.uint64(self.pad_presses + self.other_presses)
-        if full and d and d[0] and "x" in self.found and "y" in self.found:
+        # a warp is judged against the step size, so it is left out only once the step size is known (from a save, or
+        # from enough steps): before that every step of a game that counts pixels looks like one
+        known = getattr(self, "_cell_known", False) or len(self._xdeltas) >= 10
+        if full and d and d[0] and not (warp and known) and "x" in self.found and "y" in self.found:
             dx = self.decode(after, "x") - self.decode(before, "x")
             if dx and not self.decode(after, "y") - self.decode(before, "y"):
                 self._xdeltas = (self._xdeltas + [dx])[-40:]
-                self.learn_cell(self._xdeltas)      # the median: a warp now and then does not move it
+                self.learn_cell(self._xdeltas)      # the median, and never a warp: a door loop is warps back to back
         jump = self._jump(before, after)
         if not jump and not self.blank:
             self.presses += 1
@@ -255,6 +271,11 @@ class Discoverer:
             self._full_n = (getattr(self, "_full_n", []) + [n])[-200:]
             if n < _split(self._full_n):
                 return
+        if not full and getattr(self, "_pos_age", 0) >= SETTLED:
+            # once the position has held for a while, lookaheads teach it nothing more: in a battle's menu the cursor byte follows
+            # up and down and stays on left and right against waiting exactly like a position, and probe after probe
+            # there handed y to it (the Rattata stall on Route 1). Real presses still judge it
+            return
         if not full:
             # against waiting, a press that did little is no evidence either way: a text box ignores the d-pad but a
             # few bytes (the pad's own state) still differ, while a step rewrites far more (position, sprites, the
@@ -270,7 +291,9 @@ class Discoverer:
         hi_step = np.concatenate([np.abs(_wrap(after[1:] - before[1:])) == 1, [False]])
         lo_wrap = ((before >= 0xC0) & (after < 0x40)) | ((before < 0x40) & (after >= 0xC0))
         self.crossed |= hi_step & lo_wrap & (np.abs(d16) < 64)     # the low byte wrapped and carried into the high one
-        for ax, want, other in (("x", d[0], d[1]), ("y", d[1], d[0])):
+        # through a door the position jumps to the new map's spot whatever the press was: it says nothing about which
+        # bytes follow the d-pad, and a byte that held still through it (a sprite tile) would gain on it
+        for ax, want, other in (("x", d[0], d[1]), ("y", d[1], d[0])) if not (warp and known) else ():
             for w, dd in ((1, d8), (2, d16)):
                 for s in (self.st[(ax, w)], self.seg[(ax, w)]):
                     if want:
@@ -305,6 +328,7 @@ class Discoverer:
                 self.holds_walked[idx] += walked
                 self.walks_at[idx] = self.walks
                 self.changes += ch
+                self.chg_w += ch
                 self.ups += ch & ((now - last) % 256 == 1)
                 self.last_change[ch] = self.event
                 if self.event - self.last_trans_event <= WINDOW:
@@ -379,6 +403,12 @@ class Discoverer:
         presses that moved the byte that moved it the right way, times the share of the other axis's presses that
         left it alone, for a byte that moved on at least a third of this axis's presses. It must also hold on every
         recent map visit where something did follow the d-pad: the lowest visit score counts."""
+        cur = self.found.get(ax)
+        if cur and ax in getattr(self, "_loaded", ()) and self.st[(ax, 1)]["n"] < LOADED_HOLD:
+            # a position resumed from a save had a whole run behind it, which the save does not carry: a few
+            # presses here (a door gone in and out of, a stretch along a wall) cannot hand it to a byte that agreed
+            # with them; only one that stops following on a walked visit loses it
+            return None if self._dead(ax) else cur
         cands = []
         for w in (1, 2):
             # the share a byte must move on is judged over visits where the player walked: a long battle or a
@@ -432,6 +462,12 @@ class Discoverer:
         # steps (the real position against a block coordinate or a sprite slot) takes over
         if held and not (best[3] >= held[3] + 0.15 and best[0] >= held[0] - 0.02):
             best = held
+        other = "y" if ax == "x" else "x"
+        if held and best is not held and other in self.found and \
+                not any(other in m for m in getattr(self, "_axis_moves", [])[-RECENT:]):
+            # the other axis has not moved on any recent press: the player is not walking (a menu, a battle), and a
+            # byte that follows the d-pad on one axis there is a cursor, not the position
+            best = held
         score, w, i, _ = best
         return {"addr": LO + i, "type": "u8" if w == 1 else "u16le", "score": round(score, 3)}
 
@@ -463,7 +499,13 @@ class Discoverer:
             # what it called warps is forgotten when the position changes hands
             self.by_warp[:] = 0
             self.returned[:] = 0
+            self.full_w[:] = 0
+            self.chg_w[:] = 0
             self.warps = 0
+        if pos == getattr(self, "_warp_pos", None) and None not in pos:
+            self._pos_age = getattr(self, "_pos_age", 0) + 1
+        else:
+            self._pos_age = 0
         self._warp_pos = pos
         if "map" not in self.fixed and "x" in self.found and "y" in self.found:
             m = self._map()
@@ -501,9 +543,10 @@ class Discoverer:
         W = np.zeros(N, bool)
         if self.warps:
             # bytes that changed on most warps and on few plain steps or buttons: a map's, even before it held
-            W = (self.by_warp >= max(1, 0.5 * self.warps)) & (self.changes < 64) & (self.follows_pos == 0) & \
-                (self.by_pad - self.by_warp <= np.maximum(2, 0.3 * self.by_warp)) & (self.by_other <= 1) & \
-                (self.changes <= 2 * self.by_warp + 2)
+            # (no cap on its changes: a long game goes through hundreds of doors)
+            W = (self.by_warp >= max(1, 0.5 * self.warps)) & (self.follows_pos == 0) & \
+                (self.full_w - self.by_warp <= np.maximum(2, 0.3 * self.by_warp)) & (self.by_other <= 1 + 0.5 * self.by_warp) & \
+                (self.chg_w <= 2 * self.by_warp + 2)
             for ax in "xy":
                 a = self.found[ax]["addr"] - LO
                 W[a: a + (2 if self.found[ax]["type"] == "u16le" else 1)] = False
@@ -518,8 +561,11 @@ class Discoverer:
         if len(back):
             # a place's bytes come back when the player does; the one that took the most values tells the most
             # places apart (a byte that only says indoors or out takes two)
-            off = self.by_pad[back] - self.by_warp[back] + np.maximum(self.changes[back] - self.by_warp[back], 0)
-            order = np.lexsort((off, -self.n_values[back], -self.by_warp[back]))
+            off = np.maximum(self.full_w[back] - self.by_warp[back], 0) + np.maximum(self.chg_w[back] - self.by_warp[back], 0)
+            # ties (a map's sprite table loads with its id and comes back with it too): the byte lookaheads into a
+            # door changed most (the id is written as the player steps onto the door, sprites and tiles only after
+            # the fade), then the higher address (sprite tables and buffers sit low)
+            order = np.lexsort((-back, -self.by_pad[back], -self.n_values[back], off, -self.by_warp[back]))
             back = back[order]
             # a second byte only if it changed on exactly the same presses (an id's other half); the map the
             # player came from also comes back, but on other presses, and would split a place by its entrance
@@ -580,7 +626,7 @@ class Discoverer:
             arrays["_seen"] = np.packbits(self._seen, axis=1)
             arrays["_seen_walking"] = np.packbits(self._seen_walking, axis=1)
             np.savez_compressed(b, **arrays, counts=np.array([self.walks, self.pad_presses, self.other_presses, self.warps]))
-            out["evidence"] = {"rule": MAP_RULE, "npz": base64.b64encode(b.getvalue()).decode()}
+            out["evidence"] = {"rule": EVIDENCE_RULE, "npz": base64.b64encode(b.getvalue()).decode()}
         return out
 
     def load(self, d: dict[str, Any]) -> None:
@@ -589,17 +635,25 @@ class Discoverer:
                 continue                        # a signature found by an older rule (screen tiles, sprites): not kept
             if d.get(k):
                 self.found[k] = d[k]            # a starting point: what this run sees can replace or drop it
+        self._loaded = {ax for ax in "xy" if d.get(ax)}
+        self._cell_known = bool(d.get("cell"))
         ev = d.get("evidence")
-        if ev and ev.get("rule") == MAP_RULE:
+        if ev and ev.get("rule") == EVIDENCE_RULE:   # counts kept across a ranking change: the map is re-judged from them
             import base64
             import io
             z = np.load(io.BytesIO(base64.b64decode(ev["npz"])))
             for k in EVIDENCE:
-                if z[k].shape == getattr(self, k).shape:
+                if k in z and z[k].shape == getattr(self, k).shape:
                     setattr(self, k, z[k].astype(getattr(self, k).dtype))
             self._seen = np.unpackbits(z["_seen"], axis=1)[:, :256].astype(bool)
             self._seen_walking = np.unpackbits(z["_seen_walking"], axis=1)[:, :256].astype(bool)
             self.walks, self.pad_presses, self.other_presses, self.warps = (int(v) for v in z["counts"])
+            if "full_w" not in z:
+                # saved before the changes off the warps were counted over the warps' stretch: the warps can't be
+                # weighed against them, so they are counted afresh from here (the position and the rest are kept)
+                self.by_warp[:] = 0
+                self.returned[:] = 0
+                self.warps = 0
 
     def summary(self) -> str:
         return json.dumps({k: ({kk: (hex(vv) if kk == "addr" else vv) for kk, vv in v.items()} if isinstance(v, dict) else v) for k, v in self.found.items()})
