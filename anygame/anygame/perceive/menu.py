@@ -91,6 +91,37 @@ def _ocr_boxes(img: np.ndarray) -> list[tuple[float, float, float, float, str]]:
     return out
 
 
+def _tile_boxes(img: np.ndarray, r: dict[str, Any]) -> list[tuple[float, float, float, float, str]] | None:
+    """The same boxes read exactly from the screen's cells (perceive/tiletext.py, the glyph book the text read uses).
+    None while most of the text on screen is glyphs not learned yet: the caller reads it by OCR meanwhile."""
+    from . import tiletext
+    t = tiletext.reader(r, None)
+    _, st = t.read(img)
+    if st["unknown"] > max(2, st["known"]):
+        return None
+    _, keys, kinds = tiletext.cells(img, t.size, t.cell, t.offset)
+    s = max(1, img.shape[0] // t.size[1])
+    c, (ox, oy) = t.cell * s, t.offset
+    out = []
+    for rr, row in enumerate(keys):
+        run: list[tuple[int, str]] = []
+        for q, k in enumerate(row + [None]):
+            kind = kinds[rr, q] if q < len(row) else 2
+            lab = t.book.labels.get(k) if kind == 1 else None
+            if kind == 1 and lab not in (None, tiletext.NOT_TEXT):
+                run.append((q, lab))
+                continue
+            if kind == 0 and run and q + 1 < len(row) and kinds[rr, q + 1] == 1:
+                run.append((q, " "))          # one blank cell between words
+                continue
+            text = "".join(ch for _, ch in run).strip()
+            if len(text) >= 2:
+                x0, x1 = ox * s + run[0][0] * c, ox * s + (run[-1][0] + 1) * c
+                out.append((float(x0), float(oy * s + rr * c), float(x1), float(oy * s + (rr + 1) * c), text))
+            run = []
+    return out
+
+
 def _label(boxes, cur: tuple[int, int, int, int] | None) -> str:
     """The text on the cursor's row, nearest it (to its right first: a cursor arrow sits left of its entry)."""
     if cur is None:
@@ -101,7 +132,7 @@ def _label(boxes, cur: tuple[int, int, int, int] | None) -> str:
         return ""
     cx = cur[2]
     row.sort(key=lambda b: (0 if b[2] >= cur[0] else 1, abs(b[0] - cx)))
-    return row[0][4]
+    return row[0][4].lstrip(">▶►→ ")      # the cursor's own glyph is not part of the entry's name
 
 
 def _words(t: str) -> list[str]:
@@ -123,6 +154,7 @@ class MenuTracker:
         self.last_landings: dict[str, str] = {}
         self.branches = 0
         self.reads = 0
+        self.tile_cfg = dict(r.get("tiletext") or {})       # the cell grid, if not the Game Boy's 160x144 / 8 px
         self.seen: dict[str, tuple[np.ndarray, str]] = {}   # screens the run has shown: small image, its text
         self.loops: dict[str, dict[str, int]] = {}   # screen key → label → times it came straight back to this menu
         self._pending: tuple[str, str] | None = None  # the last pick: (screen key, label)
@@ -191,13 +223,13 @@ class MenuTracker:
         finally:
             device.restore(snap)
             device.discoverer = disc
-        boxes = _ocr_boxes(base)
+        boxes = self._boxes(base)
         base_words = set(_words(" ".join(b[4] for b in boxes)))
         shots = [e[1] for e in entries]
         out = {"entries": []}
         for i, ((keys, img), oc) in enumerate(zip(entries, outcomes)):
             cur = _cursor_box(img, shots[:i] + shots[i + 1:])
-            lab = _label(_ocr_boxes(img) if i else boxes, cur) if len(entries) > 1 else ""
+            lab = _label(self._boxes(img) if i else boxes, cur) if len(entries) > 1 else ""
             out["entries"].append({"keys": keys, "label": lab, **oc})
         out["back"] = back
         out["buttons"] = buttons
@@ -208,10 +240,22 @@ class MenuTracker:
             e["new_text"] = " ".join(dict.fromkeys(new))[:120]
         return out
 
+    def _boxes(self, img: np.ndarray, ocr: bool = True):
+        """Text boxes on a screen: from the cells (`text: tiletext`) where the glyphs are known, else by OCR."""
+        if self.r.get("text") == "tiletext":
+            tb = _tile_boxes(img, self.tile_cfg)
+            if tb is not None:
+                return tb
+        return _ocr_boxes(img) if ocr else None
+
     def _outcome(self, device, keys: list[str], total: int, ref: np.ndarray, pos) -> dict[str, Any]:
         img = self._play(device, keys, total + self.settle)
-        from .ocr import _text
-        txt = _text(img, 0.67)
+        tb = self._boxes(img, ocr=False)
+        if tb is None:
+            from .ocr import _text
+            txt = _text(img, 0.67)
+        else:
+            txt = " ".join(b[4] for b in tb)
         p = pos() if pos else None
         g = _small(img)
         change = float(np.abs(g - _small(ref)).mean())
