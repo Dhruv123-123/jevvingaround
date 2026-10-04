@@ -711,6 +711,25 @@ def test_discoverer_place_names_survive_a_checkpoint():
         assert e.state(at(7))["map"] not in names.values()          # a place first seen now gets a name of its own
 
 
+def test_discoverer_counts_doors_afresh_on_resume_and_lets_old_doors_fade():
+    """At the live run's tick-21500 resume, door counts carried from early in the run (stairs before fades were seen)
+    held the map id out and a byte with two values (indoors or out) read Pallet, the lab and both houses as one place.
+    A resumed run counts its doors afresh, keeping the rest; within a run, doors long past weigh half, then a quarter."""
+    import json
+    from anygame.discover import Discoverer, LO, WARP_MEMORY
+    ID = 0xD35E - LO
+    d = Discoverer()
+    d.found.update({"x": {"addr": 0xD362, "type": "u8"}, "y": {"addr": 0xD361, "type": "u8"}, "cell": 1})
+    d.warps, d.by_warp[ID], d.full_w[ID], d.n_values[ID], d.by_pad[ID] = 500, 490, 700, 7, 760
+    e = Discoverer()
+    e.load(json.loads(json.dumps(d.dump())))
+    assert e.warps == 0 and e.by_warp[ID] == 0 and e.full_w[ID] == 0
+    assert e.n_values[ID] == 7 and e.by_pad[ID] == 760                # what is not counted over the doors stays
+    d.warps = 2 * WARP_MEMORY
+    d._update()
+    assert d.warps == WARP_MEMORY and d.by_warp[ID] == 245 and d.full_w[ID] == 350
+
+
 def test_discoverer_keeps_place_names_when_the_signature_changes_hands():
     """A place named under one signature keeps its name when another signature takes over and tells the same places
     apart; a name an early signature gave two maps alike does not carry over."""
