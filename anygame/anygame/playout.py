@@ -8,7 +8,8 @@ purchase needs a confirmation, and an item needs its use played out. So from the
   2. let the game run; whenever the screen has stood still for a while, look at whether the game is asking: a
      direction that changes the screen differently from waiting (a cursor moves, the player walks) means it is,
      and the play-out ends there;
-  3. otherwise press A to page on (a text box waiting for a button), and keep going;
+  3. otherwise press A to page on (a text box waiting for a button), and keep going; when A has changed nothing
+     twice, the game is waiting for some other button (a pause menu that lists them) and the play-out ends there;
   4. keep every new text the screen showed, in order, and the numbers on screen before and after;
   5. put the game back exactly as it was.
 
@@ -55,7 +56,8 @@ def asks(device, frames: int = 24, dirs: tuple[str, ...] = ("down", "right")) ->
 
 def play_out(device, keys: list[str], read_text: Callable[[np.ndarray], str], *, max_frames: int = 2400, step: int = 20,
              still: int = 2, hold: int = 4, gap: int = 10, delay: int = 0, restore: bool = True) -> dict[str, Any]:
-    """Play `keys`, then run until the game asks again (or `max_frames`). Returns {lines, end, frames, pages,
+    """Play `keys`, then run until the game asks again (end "asks"; "waits" when only another button does anything;
+    "cap" at `max_frames`). Returns {lines, end, frames, pages,
     numbers_before, numbers_after, text_after}. The game is put back as it was unless `restore` is False."""
     snap = device.snapshot()
     disc, device.discoverer = getattr(device, "discoverer", None), None     # trying keys must not teach discovery
@@ -72,6 +74,7 @@ def play_out(device, keys: list[str], read_text: Callable[[np.ndarray], str], *,
             device.press(k, hold=int(h) if h else hold, after=gap)
         prev = device.screen()
         calm = 0
+        dead = 0
         last_text = before
         while device.frames - t0 < max_frames:
             device.wait(step)
@@ -93,6 +96,16 @@ def play_out(device, keys: list[str], read_text: Callable[[np.ndarray], str], *,
             device.press("a", hold=hold, after=gap)      # a text box waiting for a button: page on
             pages += 1
             calm = 0
+            device.wait(step)
+            if _differs(device.screen(), img):
+                dead = 0
+            else:
+                dead += 1
+                if dead >= 2:
+                    # neither A nor a direction does anything: the game waits for another button (a pause menu
+                    # that lists them, START to go on). That is a decision too
+                    end = "waits"
+                    break
             prev = device.screen()
         after = read_text(device.screen())
         out = {"lines": lines, "end": end, "frames": device.frames - t0, "pages": pages, "text_before": before,
@@ -140,8 +153,9 @@ def describe(r: dict[str, Any] | list[dict[str, Any]], width: int = 240) -> str:
     bits = [said or "no new text"]
     ends = {x["end"] for x in rs}
     secs = first["frames"] / 60
-    bits.append(f"then asks again ({secs:.1f} s)" if ends == {"asks"} else f"still going after {secs:.0f} s" if ends == {"cap"}
-                else "sometimes asks again, sometimes still going")
+    bits.append(f"then asks again ({secs:.1f} s)" if ends == {"asks"} else
+                f"then waits for another button ({secs:.1f} s)" if ends == {"waits"} else
+                f"still going after {secs:.0f} s" if ends == {"cap"} else "sometimes asks again, sometimes still going")
     nb, na = first["numbers_before"], first["numbers_after"]
     moved = [f"{a} → {b}" for a, b in zip(nb, na) if a != b] if len(nb) == len(na) else []
     if moved:

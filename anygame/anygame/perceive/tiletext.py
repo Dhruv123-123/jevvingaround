@@ -9,7 +9,8 @@ same letter in black-on-white and white-on-black is one glyph). A glyph's charac
             and it answers one character per cell; an answer of the wrong length is discarded, and one that disagrees
             with the glyphs already known is too (it read a different line, or misread). With no chat model, OCR of the
             same clean line is the labeller, kept only when it finds one character per inked cell.
-  trusted   a glyph is read once two lines agree on it, or one line agrees with at least three glyphs already trusted.
+  trusted   a glyph is read once two lines agree on it, or one line agrees with at least three glyphs already trusted
+            (two lines when its character is already another glyph's: a lookalike such as w read as v).
             Until then it reads as '?'.
 
 Nothing here knows a game. The book of glyphs is data: kept in memory for the run and, with `book:` (a path, relative
@@ -108,6 +109,10 @@ class GlyphBook:
                 # two agreeing lines; or, from the chat model, one line whose other glyphs it read exactly as trusted
                 # (three of them, or every one of at least one: a short status line such as "19/ 19")
                 vouched = agree >= 3 or (agree >= 1 and agree == len(known))
+                if vouched and c != "#" and any(lab == c and o != k for o, lab in self.labels.items()):
+                    # a character another glyph is already read as: a second glyph for it (a shifted copy) is
+                    # possible, but so is a lookalike misread (w read as v, the cursor read as R). Two lines decide
+                    vouched = False
                 if (n >= 2 and n > 0.66 * sum(v.values())) or (vouched and len(v) == 1 and source == "chat"):
                     self.labels[k] = top
         return True

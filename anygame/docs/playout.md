@@ -10,7 +10,8 @@ seconds of text before the game shows what it did, so every move read as "the sc
 1. From a save state, it presses the choice's keys and lets the game run.
 2. Whenever the screen stands still, it checks whether the game is asking for a choice: a direction changes the
    screen differently from waiting (`asks`, two branches through `device.branch`). If so, the play-out ends there.
-3. Otherwise it presses A to page on.
+3. Otherwise it presses A to page on. If A has changed nothing twice, the game is waiting for some other button
+   (Aevilia's pause menu lists them) and the play-out ends there with end "waits" (added with gap 4).
 4. It records every new text in order (read with `kind: tiletext`), plus the numbers on screen before and after.
 5. It puts the game back exactly as it was.
 

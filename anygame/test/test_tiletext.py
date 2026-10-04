@@ -102,3 +102,17 @@ def test_the_book_round_trips(tmp_path):
     b.save(p)
     c = GlyphBook(p)
     assert c.labels == b.labels and len(c.labels) == 4
+
+
+def test_a_second_glyph_for_a_character_already_known_needs_two_lines():
+    b = GlyphBook()
+    keys = cells(screen({13: "HOTEL"}))[1][13][1:6]
+    for _ in range(2):
+        b.vote(keys, "HOTEL", "chat")
+    keys2 = cells(screen({13: "HOTELW"}))[1][13][1:7]
+    b.vote(keys2, "HOTELL", "chat")                       # W read as L, vouched for by five trusted letters
+    w = keys2[5]
+    assert w not in b.labels                              # L is already another glyph's: a lookalike, not trusted yet
+    keys3 = cells(screen({13: "HOTELS"}))[1][13][1:7]
+    b.vote(keys3, "HOTELS", "chat")
+    assert b.labels[keys3[5]] == "S"                      # a character no glyph has yet: one vouched line is enough
