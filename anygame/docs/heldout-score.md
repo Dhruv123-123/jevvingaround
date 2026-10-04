@@ -390,3 +390,50 @@ The word gate lets these explores through because the text read finds at least o
 - play out only the entries whose short outcome differs.
 
 Moving `_outcome`'s reads from OCR to tiletext would recover at most the 13%.
+
+
+## After the endless-screen explore fix: long-horizon e5378fc (2026-10-04)
+
+e5378fc makes the menu explore give up when every direction keeps changing the picture for `depth` presses, with no end and no wrap-around. It does this except while the position is lost.
+
+Same games, seeds, budget and four-way parallelism as before. Two rows: cold and per-game book.
+
+| game | random | cold, top | cold, Jev | per-game book, top | per-game book, Jev |
+|---|---|---|---|---|---|
+| GBHack | 0.33 | 0.40, +0.10 | 0.40, +0.10 | 0.40, +0.10 | 0.40, +0.10 |
+| PostBot | 0.40 | 0.40, +0.00 | 0.40, +0.00 | 0.40, +0.00 | 0.40, +0.00 |
+| Renegade Rush | 0.20 | 0.27, +0.08 | 0.20, +0.00 | 0.33, +0.17 | 0.20, +0.00 |
+| Tobu Tobu Girl | 0.53 | 0.40, −0.29 | 0.60, +0.14 | 0.47, −0.14 | 0.40, −0.29 |
+| **suite median (games above 0.1)** | 0 | +0.04 (0 of 4) | +0.05 (1 of 4) | +0.05 (1 of 4) | +0.00 (0 of 4) |
+
+| agent | presses per wall-minute (median) | Tobu / PostBot / Renegade / GBHack | game frames per wall-minute | runs ended by the wall limit | Jev $ | Azure $ (calls) |
+|---|---|---|---|---|---|---|
+| 78d2b73, cold, top | 148 | 128 / 292 / 23 / 225 | 3,195 | 3 of 12 | 0 | 0.688 (376) |
+| 78d2b73, cold, Jev | 93 | 148 / 106 / 71 / 80 | 4,662 | 1 of 4 | 0.193 | 0.162 (109) |
+| **e5378fc, cold, top** | **187** | 236 / 319 / **64** / 150 | 7,319 | **3 of 12 (all Renegade)** | 0 | 0.536 (280) |
+| **e5378fc, cold, Jev** | **91** | 125 / 103 / **74** / 79 | 4,974 | **1 of 4 (Renegade)** | 0.176 | 0.152 (99) |
+| e5378fc, per-game book, top | 204 | 284 / 324 / 154 / 170 | 7,953 | 1 of 12 (Renegade seed 1) | 0 | 0.418 (237) |
+| e5378fc, per-game book, Jev | 108 | 114 / 117 / 102 / 95 | 4,615 | 0 of 4 | 0.225 | 0.080 (69) |
+
+**Renegade Rush explores**
+
+| | steps explored per 100 (seeds 1 / 2 / 3, or Jev) | wall seconds in explores |
+|---|---|---|
+| 78d2b73, cold, top | 19 / 43 / 28 | 876 / 892 / 820 |
+| e5378fc, cold, top | 22 / 31 / 19 | 862 / 716 / 709 |
+| e5378fc, cold, Jev | 31 | 323 |
+| e5378fc, per-game book, top | 22 / 17 / 33 | 814 / 327 / 337 |
+
+**Renegade Rush still hits the clock cold, because the give-up rule never fires there.** The exception for a lost position is the one that applies. The agent never finds a position on Renegade Rush; there is no walking map to discover.
+
+A diagnostic run printed every explore. Each explore after the first two had position (None, None), was not marked "not a menu", and recorded all 121 entries: 5 presses in each of the 4 directions plus the full 100-entry grid. Every direction changed the picture with no end, which is exactly the case the rule is for, but `lost` kept it running.
+
+A second profile, of cold seed 1 scaled to 320 s, shows the same split as before:
+- 7 explores took 306 s (96%), with about 80 entries each;
+- play-outs took 155 s;
+- screen comparisons took 80 s;
+- RapidOCR took 42 s.
+
+The fix belongs to long-horizon's `menu.explore`. "Position lost" should mean a position the run once had and lost, not a game that never had one; or the walk options it keeps the explore for should be offered without the grid and play-outs.
+
+Elsewhere the fix helps throughput: the top pick rose from 148 to 187 presses per wall-minute, and Tobu Tobu Girl from 128 to 236. Scores stay within the run-to-run spread.
