@@ -9,3 +9,9 @@ dist/
 ext/anygame-extension.zip
 build/
 runs/
+roms/homebrew/
+roms/*.gb
+roms/*.gbc
+!roms/2048gb/*.gb
+saves/
+packs/*/discovered*.yaml
