@@ -363,7 +363,7 @@ Today's Pokemon logs, replayed from the reads (`scripts/stuck_replay.py`, no fra
 | stall | started | raised | steps to detect |
 |---|---|---|---|
 | Oak's "Don't go away yet!" sending the player back | 388 | 489 | 101 (the first walks up still find new tiles) |
-| the Pokemon menu opened and closed over and over | 5365 | ~5405 | ~40 |
+| the Pokemon menu opened and closed over and over | 5365 | 5404 | 39 |
 | Rattata's move menu walked "down" (cursor read as position) | ~5764 | 5835 | ~71 |
 
 That is 0.7 raises per 1000 steps on the replayed logs, every one a real loop. On Route 1 (pk-jev-route1) it raised
