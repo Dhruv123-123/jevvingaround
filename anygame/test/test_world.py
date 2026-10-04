@@ -684,6 +684,33 @@ def test_discoverer_drops_an_old_rule_signature_but_keeps_the_position():
     assert d.found["x"]["addr"] == 0xD362 and d.found["y"]["addr"] == 0xD361
 
 
+def test_discoverer_place_names_survive_a_checkpoint():
+    """A resumed run calls each place what the run before it did, under the same signature or a new one: the world
+    memory and the goals saved with the checkpoint are keyed by those names."""
+    import json
+    from anygame.discover import Discoverer, LO, N, MAP_RULE
+    A, B = 0xC750, 0xD35E
+
+    def at(place):
+        mem = np.zeros(N, np.int32)
+        mem[A - LO], mem[B - LO] = 10 + place, place
+        return mem
+    d = Discoverer()
+    d.found.update({"x": {"addr": 0xD362, "type": "u8"}, "y": {"addr": 0xD361, "type": "u8"}, "cell": 1,
+                    "map": {"addrs": [A], "rule": MAP_RULE}})
+    names = {}
+    for place in (3, 1, 2):
+        for _ in range(12):
+            names[place] = d.state(at(place))["map"]
+    saved = json.loads(json.dumps(d.dump()))
+    for sig in ([A], [B]):
+        e = Discoverer()
+        e.load(saved)
+        e.found["map"] = {"addrs": sig, "rule": MAP_RULE}
+        assert {place: e.state(at(place))["map"] for place in (2, 1, 3)} == names
+        assert e.state(at(7))["map"] not in names.values()          # a place first seen now gets a name of its own
+
+
 def test_discoverer_keeps_place_names_when_the_signature_changes_hands():
     """A place named under one signature keeps its name when another signature takes over and tells the same places
     apart; a name an early signature gave two maps alike does not carry over."""
