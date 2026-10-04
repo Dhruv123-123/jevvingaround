@@ -19,6 +19,9 @@ from typing import Any
 import numpy as np
 
 LO, HI = 0xC000, 0xE000
+MAP_RULE = 3        # bumped when the map rule changes: a signature or evidence saved under another is not loaded
+EVIDENCE = ("changes", "ups", "holds", "holds_walked", "walks_at", "by_pad", "by_other", "full_any", "follows_pos",
+            "_from", "_to", "_old", "_hist", "n_values")
 MOVED = 0.2         # a position byte moves on at least this share of its axis's presses (walls and turns take the rest)
 HOLD_WALKS = 6      # a map value holds while the player walks at least this many moves (a step's bytes hold for one)
 RING = 16           # frames back that a burst is measured against
@@ -376,7 +379,7 @@ class Discoverer:
             elif "map" not in self.found or self.pad_presses >= 50:
                 # nothing passes (yet, or any more): everything so far is one place. A signature loaded from an
                 # earlier run is kept for the first few steps, while this run's evidence is too thin to judge it
-                self.found["map"] = {"addrs": [], "doors": 0, "transitions": self.transitions}
+                self.found["map"] = {"addrs": [], "doors": 0, "transitions": self.transitions, "rule": MAP_RULE}
 
     def _map(self) -> dict[str, Any] | None:
         """A map's bytes (its id, bank, tileset, script pointers) change together when a press takes the player
@@ -395,7 +398,7 @@ class Discoverer:
                 P[a: a + (2 if self.found[ax]["type"] == "u16le" else 1)] = False
         # a map's bytes change when the player walks through a door, rarely, and not when a button opens a menu or a
         # text box; the bytes that changed at the most such steps tell the most places apart
-        P &= (self.full_any >= 1) & (self.follows_pos == 0) & (self.by_pad <= max(2, 0.02 * self.pad_presses)) & \
+        P &= (self.full_any >= 1) & (self.by_pad >= 1) & (self.follows_pos == 0) & (self.by_pad <= max(2, 0.02 * self.pad_presses)) & \
             (self.by_other <= max(1, 0.02 * self.other_presses))
         held = P & (self.holds_walked >= 0.8 * self.holds)    # the signature in use: its current value is still new
         P &= walked >= 0.8 * done
@@ -415,8 +418,9 @@ class Discoverer:
         idx = idx[np.argsort(-self.by_pad[idx], kind="stable")][:2]
         if keep and \
                 self.by_pad[[a - LO for a in cur["addrs"]]].min() >= 0.7 * top:
-            return {**cur, "doors": int(self.by_pad[idx].max())}   # a signature that still holds is kept
-        return {"addrs": sorted(int(LO + i) for i in idx), "doors": int(self.by_pad[idx].max()), "transitions": self.transitions}
+            return {**cur, "doors": int(self.by_pad[idx].max()), "rule": MAP_RULE}   # a signature that still holds is kept
+        return {"addrs": sorted(int(LO + i) for i in idx), "doors": int(self.by_pad[idx].max()), "transitions": self.transitions,
+                "rule": MAP_RULE}
 
     def learn_cell(self, deltas: list[int]) -> None:
         """Typical change of x for one press, set by the device from presses it knows moved."""
@@ -442,15 +446,36 @@ class Discoverer:
         return out
 
     # ---- the data file ---------------------------------------------------------------------------------
-    def dump(self) -> dict[str, Any]:
-        return {k: v for k, v in self.found.items()}
+    def dump(self, evidence: bool = True) -> dict[str, Any]:
+        """What was found; with `evidence`, also what the map was judged from, so a run resumed from a checkpoint
+        goes on from the same evidence instead of from nothing (a few presses' worth lets one-off bytes through)."""
+        out: dict[str, Any] = {k: v for k, v in self.found.items()}
+        if evidence and "x" in self.found:
+            import base64
+            import io
+            b = io.BytesIO()
+            arrays = {k: getattr(self, k) for k in EVIDENCE}
+            arrays["_seen"] = np.packbits(self._seen, axis=1)
+            np.savez_compressed(b, **arrays, counts=np.array([self.walks, self.pad_presses, self.other_presses]))
+            out["evidence"] = {"rule": MAP_RULE, "npz": base64.b64encode(b.getvalue()).decode()}
+        return out
 
     def load(self, d: dict[str, Any]) -> None:
         for k in ("x", "y", "map", "cell"):
-            if k == "map" and d.get(k) and "doors" not in d[k]:
-                continue                        # a signature found by the older burst rule (screen tiles): not kept
+            if k == "map" and d.get(k) and d[k].get("rule") != MAP_RULE:
+                continue                        # a signature found by an older rule (screen tiles, sprites): not kept
             if d.get(k):
                 self.found[k] = d[k]            # a starting point: what this run sees can replace or drop it
+        ev = d.get("evidence")
+        if ev and ev.get("rule") == MAP_RULE:
+            import base64
+            import io
+            z = np.load(io.BytesIO(base64.b64decode(ev["npz"])))
+            for k in EVIDENCE:
+                if z[k].shape == getattr(self, k).shape:
+                    setattr(self, k, z[k].astype(getattr(self, k).dtype))
+            self._seen = np.unpackbits(z["_seen"], axis=1)[:, :256].astype(bool)
+            self.walks, self.pad_presses, self.other_presses = (int(v) for v in z["counts"])
 
     def summary(self) -> str:
         return json.dumps({k: ({kk: (hex(vv) if kk == "addr" else vv) for kk, vv in v.items()} if isinstance(v, dict) else v) for k, v in self.found.items()})
