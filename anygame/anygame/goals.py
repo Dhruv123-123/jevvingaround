@@ -271,7 +271,9 @@ class GoalBook:
                 q["target"] = {"map": _as_map(t["place"])}
             elif "line" in t and 0 <= t["line"] < len(self.memory.dialogue):
                 d = self.memory.dialogue[t["line"]]
-                if d.get("tile") is not None:
+                since = int(getattr(self.memory, "since", 0) or 0)
+                fresh = not since or int((self.memory.places.get(str(d.get("map"))) or {}).get("last_tick") or -1) >= since
+                if d.get("tile") is not None and fresh:
                     q["target"] = {"map": d["map"], "x": d["tile"][0], "y": d["tile"][1]}
         return q
 
