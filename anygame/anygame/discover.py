@@ -26,6 +26,7 @@ EVIDENCE = ("changes", "ups", "holds", "holds_walked", "walks_at", "by_pad", "by
             "_from", "_to", "_old", "_hist", "n_values", "by_warp", "returned", "full_w", "chg_w")
 LOADED_HOLD = 150   # presses on an axis this run judges for itself before a position loaded from a save can change
 SETTLED = 300       # updates the position held unchanged before lookaheads stop teaching it (early on they correct it)
+STILL_MAX = 600     # such presses in a row after which a position that never moves is judged again (it froze)
 RECENT = 40         # real d-pad presses looked back on to tell walking from a menu
 MOVED = 0.2         # a position byte moves on at least this share of its axis's presses (walls and turns take the rest)
 WALKED = 0.8        # a map value must have held through walking on this share of its holds
@@ -166,6 +167,7 @@ class Discoverer:
         self.blank = False
         self.before_blank: np.ndarray | None = None
         self.found: dict[str, Any] = {}
+        self._still = 0                  # real d-pad presses in a row that moved neither found axis
         self.fixed: dict[str, Any] = {}  # loaded from a data file: no learning needed for these
         self.trace: list | None = None   # ANYGAME_DISCOVER_TRACE: every event kept, to replay offline (scripts/discovery_replay.py)
 
@@ -212,6 +214,7 @@ class Discoverer:
                 # which found axis the last real d-pad presses moved: on a menu or a battle screen neither does
                 moved_axes = {ax for ax in "xy" if self.decode(after, ax) != self.decode(before, ax)}
                 self._axis_moves = ((getattr(self, "_axis_moves", []) + [moved_axes])[-RECENT:])
+                self._still = 0 if moved_axes else self._still + 1
             back = c & self._seen_walking[np.arange(N), v]     # back to a value it had while the player walked
             if real:
                 self._seen_walking[np.arange(N), v] = True
@@ -409,6 +412,13 @@ class Discoverer:
             # presses here (a door gone in and out of, a stretch along a wall) cannot hand it to a byte that agreed
             # with them; only one that stops following on a walked visit loses it
             return None if self._dead(ax) else cur
+        moves = getattr(self, "_axis_moves", [])
+        if cur and "x" in self.found and "y" in self.found and len(moves) >= RECENT and \
+                not any(moves[-RECENT:]) and self._still < STILL_MAX:
+            # the position has not moved on any of the last real d-pad presses: the player is not walking (a menu, a
+            # battle, a job grid), and a byte that follows the d-pad there is a cursor, not the position. Kept as it
+            # is, for a while: a position that froze (a sprite copy left behind by a door) is judged again after that
+            return cur
         cands = []
         for w in (1, 2):
             # the share a byte must move on is judged over visits where the player walked: a long battle or a
@@ -461,12 +471,6 @@ class Discoverer:
         # turn) cannot hand the position to a byte that agreed for a stretch; only one that moves on clearly more
         # steps (the real position against a block coordinate or a sprite slot) takes over
         if held and not (best[3] >= held[3] + 0.15 and best[0] >= held[0] - 0.02):
-            best = held
-        other = "y" if ax == "x" else "x"
-        if held and best is not held and other in self.found and \
-                not any(other in m for m in getattr(self, "_axis_moves", [])[-RECENT:]):
-            # the other axis has not moved on any recent press: the player is not walking (a menu, a battle), and a
-            # byte that follows the d-pad on one axis there is a cursor, not the position
             best = held
         score, w, i, _ = best
         return {"addr": LO + i, "type": "u8" if w == 1 else "u16le", "score": round(score, 3)}
