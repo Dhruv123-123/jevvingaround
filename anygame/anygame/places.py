@@ -54,7 +54,8 @@ class Place:
 
 
 class PlaceBook:
-    def __init__(self, far: int = 4, span: int = 128):
+    def __init__(self, far: int = 4, span: int = 128, remember_doors: bool = True):
+        self.remember_doors = remember_doors    # off: the rule before door memory, for comparison
         self.far = far                          # tiles moved the wrong way that make a step a join
         self.span = span                        # no map is wider: a longer jump is a misread position, not a join
         self.places: list[Place] = []
@@ -66,6 +67,12 @@ class PlaceBook:
         self._xy: tuple[int, int] = (0, 0)
         self._jumped: tuple[int, int, int] | None = None
         self.events: list[dict[str, Any]] = []  # joins, doors and renames, for the log
+        # doors taken: (place, x, y) stood on before → (place, x, y arrived at, direction pressed), both ways (back
+        # out is the other way). A door taken again leads where it led before, whatever the signature reads now
+        self.doors: dict[tuple[int, int, int], tuple] = {}
+        self._pressed: str | None = None
+        self.door_slack = 0                     # tiles a door taken again may differ by, from and to together
+        self._from: tuple[int, int] | None = None
 
     # ---- places -----------------------------------------------------------------------------------------
     def _new(self, sig: Hashable) -> Place:
@@ -76,6 +83,11 @@ class PlaceBook:
     def _move(self, to: Place, kind: str, **why) -> None:
         if self.here is not None and to is not self.here:
             self.here.left_at = self.reads
+            if kind == "door" and not why.get("forced") and self._from is not None:
+                a, b = (self.here.id, *self._from), (to.id, *self._xy)
+                d = self._pressed
+                self.doors[a] = (*b, d)
+                self.doors[b] = (*a, OPPOSITE.get(d) if d else None)
         self.events.append({"read": self.reads, "kind": kind, "from": None if self.here is None else self.here.id,
                             "to": to.id, "at": list(self._xy), **why})
         self.here = to
@@ -91,15 +103,17 @@ class PlaceBook:
         self._xy = (x, y)
         last = self._last
         self._last = (sig, x, y)
+        self._from = (last[1], last[2]) if last is not None else None
         if self.here is None or last is None:
             self._move(self._door_to(sig, x, y), "start")
             return self._stand(x, y)
         sig0, x0, y0 = last
         dx, dy = x - x0, y - y0
         moves = [m for m in moves if m in DIRS]
+        self._pressed = moves[-1] if moves else None
         j, self._jumped = self._jumped, None
         if j is not None and j[2] == self.reads - 1 and abs(x - j[0]) + abs(y - j[1]) <= max(1, len(moves)):
-            self._move(self._door_to(sig, j[0], j[1]), "door", jump="forced", forced=True)
+            self._move(self._door_to(sig, j[0], j[1], door=False), "door", jump="forced", forced=True)
             self.here.sigs.add(sig)
             self.here.tiles.add((j[0], j[1]))
             return self._stand(x, y)
@@ -214,9 +228,24 @@ class PlaceBook:
         return (dx == 0 or dx * sx > 0 or any(DIRS[m][0] * dx > 0 for m in moves)) and \
                (dy == 0 or dy * sy > 0 or any(DIRS[m][1] * dy > 0 for m in moves))
 
-    def _door_to(self, sig: Hashable, x: int, y: int) -> Place:
-        """Through a door into a place named `sig`: the one last left with that name that has been seen near here,
-        else the one last left with that name if it has no tiles near anywhere else, else a new place."""
+    def _door_to(self, sig: Hashable, x: int, y: int, door: bool = True) -> Place:
+        """Through a door into a place named `sig`: where this door led before (taken from the tile next to the one it
+        was taken from, arriving next to where it arrived), else the one last left with that name that has been seen
+        near here, else a new place."""
+        if door and self.remember_doors and self.here is not None and self._from is not None:
+            fx, fy = self._from
+            here = self.canonical(self.here.id)
+            hits = []
+            for (p, ax, ay), (q, bx, by, *_) in self.doors.items():
+                if self.canonical(p) != here or self.canonical(q) == here:
+                    continue
+                d = abs(ax - fx) + abs(ay - fy) + abs(bx - x) + abs(by - y)
+                if d <= self.door_slack:
+                    hits.append((d, -self.places[self.canonical(q)].left_at, self.canonical(q)))
+            if hits:
+                to = self.places[min(hits)[2]]
+                to.sigs.add(sig)
+                return to
         named = [p for p in self.places if sig in p.sigs and p is not self.here and p.merged_into is None]
         near = [p for p in named if p.near(x, y)]
         if near:
@@ -224,6 +253,53 @@ class PlaceBook:
         return self._new(sig)
 
     # ---- for the world memory and the log ---------------------------------------------------------------
+    def route(self, src: int, dst: int) -> dict[str, Any] | None:
+        """The first move on the shortest known way from place `src` to place `dst`, over joins and doors taken:
+        {"kind": "join", "dir", "hops"} (walk off this side), {"kind": "door", "x", "y", "dir", "hops"} (stand on that
+        tile and press `dir`, the way the door was taken or back out the way it was come in by), or None when no way
+        is known. `src` itself gives {"kind": "here", "hops": 0}."""
+        src, dst = self.canonical(src), self.canonical(dst)
+        if src == dst:
+            return {"kind": "here", "hops": 0}
+        # a place entered by a new name on an ordinary step (on trial: maybe one place under two names) is on the
+        # same ground as the place it was entered from: with no way known from it, that place's way is tried
+        seen = set()
+        while src not in seen:
+            seen.add(src)
+            hop = self._route(src, dst)
+            if hop is not None:
+                return hop
+            trial = self.places[src].trial
+            if trial is None:
+                return None
+            src = self.canonical(trial["from"])
+            if src == dst:
+                return None             # the place it was entered from is the goal: walking on here is the way
+        return None
+
+    def _route(self, src: int, dst: int) -> dict[str, Any] | None:
+        from collections import deque
+        edges: dict[int, list[tuple[int, dict[str, Any]]]] = {}
+        for (p, d), q in self.joins.items():
+            edges.setdefault(self.canonical(p), []).append((self.canonical(q), {"kind": "join", "dir": d}))
+        for (p, x, y), (q, *rest) in sorted(self.doors.items(), key=lambda kv: str(kv)):
+            d = rest[2] if len(rest) > 2 else None
+            edges.setdefault(self.canonical(p), []).append((self.canonical(q), {"kind": "door", "x": x, "y": y, "dir": d}))
+        first: dict[int, dict[str, Any] | None] = {src: None}
+        hops = {src: 0}
+        q = deque([src])
+        while q:
+            p = q.popleft()
+            for n, hop in edges.get(p, []):
+                if n == p or n in first:
+                    continue
+                first[n] = first[p] or hop
+                hops[n] = hops[p] + 1
+                if n == dst:
+                    return {**first[n], "hops": hops[n]}
+                q.append(n)
+        return None
+
     def neighbours(self, pid: int) -> dict[str, int]:
         return {d: q for (p, d), q in self.joins.items() if p == pid}
 
@@ -239,6 +315,7 @@ class PlaceBook:
                             "trial": None if p.trial is None else {**p.trial, "tiles": sorted(p.trial["tiles"])}}
                            for p in self.places],
                 "joins": [[p, d, q] for (p, d), q in self.joins.items()],
+                "doors": [[list(a), list(b)] for a, b in self.doors.items()],
                 "here": None if self.here is None else self.here.id, "last": self._last, "reads": self.reads}
 
     @classmethod
@@ -254,6 +331,7 @@ class PlaceBook:
             q.trial = None if t is None else {**t, "tiles": {tuple(x) for x in t["tiles"]}}
             b.places.append(q)
         b.joins = {(p, dd): q for p, dd, q in d.get("joins") or []}
+        b.doors = {tuple(a): tuple(c) for a, c in d.get("doors") or []}
         b.here = None if d.get("here") is None else b.places[d["here"]]
         b._last = tuple(_hashable(v) for v in d["last"]) if d.get("last") else None
         b.reads = d.get("reads", 0)
