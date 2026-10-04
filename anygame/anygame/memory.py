@@ -40,6 +40,7 @@ class RunMemory:
         self.places: dict[str, dict[str, Any]] = {}   # str(map) → {first_tick, entered, tiles}
         self.events: list[dict[str, Any]] = []        # {tick, kind, ...}
         self.max_lines = max_lines
+        self.dropped = 0                              # oldest lines let go to stay under max_lines (count stays absolute)
         self.last_map: Any = None
         self.new_lines = 0                            # lines added since the goal writer last read them
 
@@ -70,7 +71,10 @@ class RunMemory:
         if x is None and last_pos is not None:
             e.update({"map": last_pos["map"], "x": last_pos["x"], "y": last_pos["y"], "tile": last_pos.get("tile"), "pos": "last known"})
         self.dialogue.append(e)
-        del self.dialogue[: -self.max_lines]
+        over = len(self.dialogue) - self.max_lines
+        if over > 0:
+            del self.dialogue[:over]
+            self.dropped += over
         self.new_lines += 1
         return e
 
@@ -78,17 +82,28 @@ class RunMemory:
         self.events.append({"tick": tick, "kind": kind, **kw})
         del self.events[:-500]
 
+    @property
+    def count(self) -> int:
+        """Lines taken in over the whole run (not just the ones still kept)."""
+        return self.dropped + len(self.dialogue)
+
+    def since_line(self, n: int) -> list[dict[str, Any]]:
+        """The kept lines taken in after the run had `n` lines (n from `count`)."""
+        return self.dialogue[max(0, n - self.dropped):]
+
     def recent_dialogue(self, n: int = 20) -> list[dict[str, Any]]:
         return self.dialogue[-n:]
 
     def dump(self) -> dict[str, Any]:
-        return {"dialogue": self.dialogue, "places": self.places, "events": self.events, "last_map": self.last_map}
+        return {"dialogue": self.dialogue, "places": self.places, "events": self.events, "last_map": self.last_map,
+                "dropped": self.dropped}
 
     def load(self, d: dict[str, Any]) -> None:
         self.dialogue = list(d.get("dialogue") or [])
         self.places = dict(d.get("places") or {})
         self.events = list(d.get("events") or [])
         self.last_map = d.get("last_map")
+        self.dropped = int(d.get("dropped") or 0)
 
 
 # ---- checkpoints --------------------------------------------------------------------------------------------

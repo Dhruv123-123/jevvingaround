@@ -165,9 +165,9 @@ class GoalBook:
             return here_known and str(m) == str(v)
         if k == "said":
             words = [_norm(w) for w in v]
-            return any(any(w and w in _norm(d["text"]) for w in words) for d in self.memory.dialogue[g["line_at_set"]:])
+            return any(any(w and w in _norm(d["text"]) for w in words) for d in self.memory.since_line(g["line_at_set"]))
         if k == "talks":
-            return len(self.memory.dialogue) - g["line_at_set"] >= int(v)
+            return self.memory.count - g["line_at_set"] >= int(v)
         if k == "screen":
             return values.get("screen") == v
         if k == "number":
@@ -252,7 +252,7 @@ class GoalBook:
         self.n += 1
         g = {**goal, "id": f"g{self.n}" if goal.get("id") != "explore" else f"explore{self.n}", "set_tick": tick,
              "map_at_set": values.get("map"), "places_at_set": sorted(self.memory.places),
-             "line_at_set": len(self.memory.dialogue), "outcome": None}
+             "line_at_set": self.memory.count, "outcome": None}
         self.goals.append(g)
         self.current = g
         self.memory.event(tick, "goal set", id=g["id"], instruction=g["instruction"], done=g["done"], source=g.get("source"))

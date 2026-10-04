@@ -628,3 +628,19 @@ def test_after_a_reload_the_writer_is_shown_only_places_seen_since():
     gb = GoalBook(m, None)
     ids = [p["id"] for p in gb.context({"map": 14593, "x": 1, "y": 1, "screen": "walk"})["places"]]
     assert ids == [14593]
+
+
+def test_said_and_talks_still_count_once_the_dialogue_is_full():
+    m = RunMemory(max_lines=5)
+    words = ["apple pie", "blue moon", "cold river", "dark forest", "empty road", "fast train", "green hill", "high tower"]
+    for i, w in enumerate(words):
+        m.observe(i, None, {"map": 1, "x": 1, "y": i}, w)
+    gb = GoalBook(m, None)
+    gb._set({"instruction": "run", "done": {"said": ["got away"]}}, 10, {"map": 1})
+    g = gb.current
+    assert not gb._holds({"said": ["got away"]}, g, {})
+    m.observe(11, None, {"map": 1, "x": 1, "y": 9}, "Got away safely!")
+    assert len(m.dialogue) == 5 and gb._holds({"said": ["got away"]}, g, {})
+    assert gb._holds({"talks": 1}, g, {})
+    m2 = RunMemory(max_lines=5); m2.load(m.dump())
+    assert m2.count == m.count
