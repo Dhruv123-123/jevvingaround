@@ -816,3 +816,76 @@ def test_discoverer_keeps_place_names_when_the_signature_changes_hands():
             joint = d.state(at(place, 7))["map"]
     d.found["map"] = {"addrs": [B]}
     assert d.state(at(1, 7))["map"] != joint and d.state(at(0, 7))["map"] != joint
+
+def test_discoverer_prefers_the_map_byte_over_a_sprite_byte_that_menus_also_change():
+    """A town (0) and a lab (39), doors only. A person's picture byte loads with each map (one of four pictures per
+    map) and comes back with it, so it changed on every door just like the id and took more values; but it also
+    flipped when the player talked to that person, which a map id never does. After a resume the door counts start
+    afresh and the two tie on them."""
+    import json
+    from anygame.discover import Discoverer, LO, N
+    rng = np.random.default_rng(5)
+    d = Discoverer()
+    d.found.update({"x": {"addr": 0xD362, "type": "u8"}, "y": {"addr": 0xD361, "type": "u8"}, "cell": 1})
+    mem = np.zeros(N, np.int32)
+    X, Y, ID, PIC, TILES = 0xD362 - LO, 0xD361 - LO, 0xD35E - LO, 0xC225 - LO, 0xC3A0 - LO
+    mem[X], mem[Y] = 5, 5
+    seen: dict = {}
+
+    def press(b, change, scroll=True):
+        before = mem.copy()
+        change()
+        if scroll:
+            mem[TILES: TILES + 40] = rng.integers(0, 256, 40)
+        d.press(b, before, mem.copy(), full=True, continues=True)
+        d.frame(mem.copy(), blank=False)
+        if d.found.get("map", {}).get("addrs"):
+            seen.setdefault(int(mem[ID]), set()).add(d.state(mem)["map"])
+
+    def pic():
+        return (0x10 if mem[ID] == 0 else 0x40) + 4 * int(rng.integers(4))
+
+    for lap in range(36):
+        if lap == 12:
+            # a checkpoint and a resume: door counts start afresh, what menus and text boxes changed is kept
+            saved = json.loads(json.dumps(d.dump()))
+            d = Discoverer()
+            d.load(saved)
+        for _ in range(int(rng.integers(20, 30))):
+            b = ["left", "right"][int(rng.integers(2))]
+            press(b, lambda: mem.__setitem__(X, min(9, max(1, int(mem[X]) + (1 if b == "right" else -1)))))
+        if lap < 12 and lap % 2 == 0:
+            press("a", lambda: mem.__setitem__(PIC, pic()), scroll=False)   # talking turns the person to face the player
+        def go():
+            mem[ID] = 39 if mem[ID] == 0 else 0
+            mem[PIC] = pic()
+            mem[X], mem[Y] = (2, 27) if mem[ID] == 39 else (5, 6)
+        press("up", go)
+    assert d.found["map"]["addrs"] == [0xD35E]
+    assert all(len(v) == 1 for v in seen.values()) and len(seen) == 2
+
+
+def test_discoverer_does_not_take_the_map_byte_for_a_came_from_byte_on_a_few_coincidences():
+    """Forty doors between a town (0), a lab (39) and a house (37), as the leading candidates see them: the id, a
+    'last map' byte that takes the id's old value through every door, and a byte that changed with the id on two
+    doors only, where the id happened to take its old value (from Pokemon Red's lab door after a resume). The 'last
+    map' byte records where the player came from; two coincidences out of forty doors do not make the id one."""
+    from anygame.discover import Discoverer, LO, N
+    d = Discoverer()
+    ID, LAST, ODD = 0xD35E - LO, 0xD73C - LO, 0xD42F - LO
+    d._top = [ID, LAST, ODD]
+    mem = np.zeros(N, np.int32)
+    mem[LAST], mem[ODD] = 39, 39
+    for k, to in enumerate([39, 0, 37, 0] * 10):
+        if k in (1, 2):
+            mem[ODD] = to                     # by chance, the value the id is about to take
+        before = mem.copy()
+        after = mem.copy()
+        after[LAST], after[ID] = mem[ID], to
+        if k in (1, 2):
+            after[ODD] = 50 + k
+        d._prev_before = before
+        d._came_from(before, after)
+        mem = after
+    assert not d._comes_from(ID)
+    assert d._comes_from(LAST)

@@ -415,9 +415,11 @@ class Discoverer:
             return
         pb = getattr(self, "_prev_before", before)          # the id may have been written on the press before
         came, both = self.__dict__.setdefault("_came", {}), self.__dict__.setdefault("_both", {})
+        seen = self.__dict__.setdefault("_doors", {})
         for i in top:
             if after[i] == pb[i]:
                 continue
+            seen[i] = seen.get(i, 0) + 1
             for j in top:
                 if i != j and after[j] != pb[j]:
                     both[(i, j)] = both.get((i, j), 0) + 1
@@ -426,10 +428,14 @@ class Discoverer:
 
     def _comes_from(self, i: int) -> bool:
         """`i` took the value another candidate left on (nearly) every door both went through, and more often than
-        the other way round (a door walked in and straight back out reads the same both ways)."""
+        the other way round (a door walked in and straight back out reads the same both ways). The two must have
+        changed together on at least half the doors `i` went through: a map id that, on two of its forty doors,
+        happened to take the value of some byte that rarely changes is not a record of where the player came from."""
         came, both = getattr(self, "_came", {}), getattr(self, "_both", {})
+        seen = getattr(self, "_doors", {})
         for (a, b), n in came.items():
-            if a == i and n >= 2 and n >= 0.9 * both[(a, b)] and n > came.get((b, a), 0):
+            if a == i and n >= 2 and n >= 0.9 * both[(a, b)] and n > came.get((b, a), 0) and \
+                    both[(a, b)] >= 0.5 * seen.get(a, both[(a, b)]):
                 return True
         return False
 
@@ -655,7 +661,7 @@ class Discoverer:
             fw = self.by_warp[back] + self.fade_w[back]
             off = np.maximum(self.full_w[back] - fw, 0) + np.maximum(self.chg_w[back] - fw, 0)
             most = self.by_warp[back] >= 0.95 * self.by_warp[back].max()
-            ranked = back[np.lexsort((-back, -self.by_pad[back], -self.n_values[back], off, ~most))]
+            ranked = back[np.lexsort((-back, -self.by_pad[back], -self.n_values[back], self.by_other[back], off, ~most))]
             # the leading candidates are watched at each door for one that records where the player came from
             self._top = [int(i) for i in ranked[:8]] + [a - LO for a in cur.get("addrs", ()) if a - LO not in ranked[:8]]
             back = np.array([i for i in back if not self._comes_from(int(i))], dtype=back.dtype)
@@ -668,9 +674,10 @@ class Discoverer:
             # door changed most (the id is written as the player steps onto the door, sprites and tiles only after
             # the fade), then the higher address (sprite tables and buffers sit low)
             # (a warp missed by one press, the position written a frame late, is no reason to lose: changing on
-            # nearly every warp is enough)
+            # nearly every warp is enough). Before the count of values: the byte fewer menus and text boxes changed
+            # (a sprite's picture byte comes back with the map too, takes more values, and flips when a person turns)
             most = self.by_warp[back] >= 0.95 * self.by_warp[back].max()
-            order = np.lexsort((-back, -self.by_pad[back], -self.n_values[back], off, ~most))
+            order = np.lexsort((-back, -self.by_pad[back], -self.n_values[back], self.by_other[back], off, ~most))
             back = back[order]
             # a second byte only if it changed on exactly the same presses (an id's other half); the map the
             # player came from also comes back, but on other presses, and would split a place by its entrance
@@ -787,7 +794,8 @@ class Discoverer:
                                 "given": sorted(int(p) for p in names["given"]), "npz": base64.b64encode(b.getvalue()).decode()}
             if getattr(self, "_came", None):
                 out["came_from"] = {"came": [[int(a), int(b_), n] for (a, b_), n in self._came.items()],
-                                    "both": [[int(a), int(b_), n] for (a, b_), n in self._both.items()]}
+                                    "both": [[int(a), int(b_), n] for (a, b_), n in self._both.items()],
+                                    "doors": [[int(a), n] for a, n in getattr(self, "_doors", {}).items()]}
         return out
 
     def load(self, d: dict[str, Any]) -> None:
@@ -834,6 +842,7 @@ class Discoverer:
         if cf:
             self._came = {(a, b): n for a, b, n in cf.get("came", [])}
             self._both = {(a, b): n for a, b, n in cf.get("both", [])}
+            self._doors = {a: n for a, n in cf.get("doors", [])}
 
     def summary(self) -> str:
         return json.dumps({k: ({kk: (hex(vv) if kk == "addr" else vv) for kk, vv in v.items()} if isinstance(v, dict) else v) for k, v in self.found.items()})
