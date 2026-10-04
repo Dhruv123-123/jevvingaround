@@ -424,7 +424,7 @@ Same games, seeds, budget and four-way parallelism as before. Two rows: cold and
 | e5378fc, cold, Jev | 31 | 323 |
 | e5378fc, per-game book, top | 22 / 17 / 33 | 814 / 327 / 337 |
 
-**Renegade Rush still hits the clock cold, because the give-up rule never fires there.** The exception for a lost position is the one that applies. The agent never finds a position on Renegade Rush; there is no walking map to discover.
+**Renegade Rush still hits the clock cold, because the give-up rule never fires there.** The exception for a lost position is the one that applies. The agent never finds a position on Renegade Rush, presumably because it has no walking map to discover.
 
 A diagnostic run printed every explore. Each explore after the first two had position (None, None), was not marked "not a menu", and recorded all 121 entries: 5 presses in each of the 4 directions plus the full 100-entry grid. Every direction changed the picture with no end, which is exactly the case the rule is for, but `lost` kept it running.
 
