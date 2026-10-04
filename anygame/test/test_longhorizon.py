@@ -745,3 +745,24 @@ def test_the_way_on_comes_after_exploring_what_is_left_here():
     keys = list(opts)
     assert "way_on" in keys and any(k.startswith("explore_") for k in keys)
     assert keys.index("way_on") > min(keys.index(k) for k in keys if k.startswith("explore_"))
+
+
+def test_a_place_walked_long_with_nothing_new_offers_the_nearest_place_with_ground_left():
+    from anygame.perceive.world import WorldTracker
+    w = WorldTracker({"x": "x", "y": "y", "map": "map"})
+    town = w.tile_of({"map": 11, "x": 3, "y": 3})[0]
+    w._moves, w._walking = ["up"] * 3, True
+    w.tile_of({"map": 11, "x": 3, "y": 0})
+    w._moves, w._walking = ["up"], True
+    route = w.tile_of({"map": 11, "x": 3, "y": 35})[0]
+    for y in range(28, 36):
+        w.visit((route, 3, y))
+    for y in range(0, 4):
+        w.visit((town, 3, y))
+    w._arrived = {town: 0, route: 0}
+    w.steps = 1000                       # 1000 steps since anything new in the town
+    opts, plans = w.options((town, 3, 3), None)
+    assert list(opts)[0] == "frontier" and plans["frontier"][-1] == "up"
+    w._new_tile_at[town] = 990           # something new just now: no frontier option
+    opts, _ = w.options((town, 3, 3), None)
+    assert "frontier" not in opts

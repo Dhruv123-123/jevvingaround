@@ -101,6 +101,8 @@ class WorldTracker:
         self._pending: tuple | None = None
         self._last_off: tuple | None = None      # (tile, direction) of a step that went 'off' (maybe a door mid-fade)
         self._entries: list[tuple[int, Any]] = []  # (step, place) each time a different place was entered
+        self._new_tile_at: dict[Any, int] = {}   # place → the step a tile there was first walked on, latest
+        self._arrived: dict[Any, int] = {}        # place → the step it was last entered
         self.steps = 0                                  # steps tried over the run: the clock blocked edges age by
         self.here: Tile | None = None
         self.macros: dict[str, list[str]] = {}
@@ -170,7 +172,48 @@ class WorldTracker:
             self.here = sw(self.here)
 
     def visit(self, t: Tile) -> None:
-        self.visited.setdefault(t[0], set()).add((t[1], t[2]))
+        v = self.visited.setdefault(t[0], set())
+        if (t[1], t[2]) not in v:
+            v.add((t[1], t[2]))
+            self._new_tile_at[t[0]] = self.steps
+
+    def frontier(self, pid: Any) -> int:
+        """Unvisited, not walled tiles next to visited ones in a place: ground (and unentered doors) left to find."""
+        vis, walls = self.visited.get(pid, set()), self.walls_at.get(pid, set())
+        edge = {(x + dx, y + dy) for x, y in vis for dx, dy in DIRS.values()}
+        return len(edge - vis - walls)
+
+    def _frontier_option(self, here: Tile, tree, plans: dict, opts: dict) -> None:
+        """Walked about here a long while with nothing new: the nearest other place with ground left to find."""
+        n = int(self.r.get("stale_place_after", 300))
+        since = max(self._new_tile_at.get(here[0], -10 ** 9), self._arrived.get(here[0], -10 ** 9))
+        if self.steps - since < n:
+            return
+        best = None
+        for pid in self.visited:
+            if pid == here[0]:
+                continue
+            if self.steps - self._arrived.get(pid, -10 ** 9) < n:
+                continue          # just been there: not a fresh place to go to
+            f = self.frontier(pid)
+            if f < int(self.r.get("frontier_min", 6)):
+                continue
+            try:
+                hop = self.book.route(here[0], pid)
+            except (IndexError, TypeError):
+                continue
+            if not hop or hop["kind"] == "here":
+                continue
+            key = (hop["hops"], -f)
+            if best is None or key < best[0]:
+                best = (key, pid, f)
+        if best is None:
+            return
+        tp: dict = {}
+        to: dict = {}
+        if self._route_option(here, best[1], tree, f"a place with ground left to explore ({best[2]} tiles' edge)", tp, to):
+            plans["frontier"] = tp["goal"]
+            opts["frontier"] = f"nothing new here for {self.steps - since} steps: " + to["goal"]
 
     def is_blocked(self, t: Tile, d: str) -> bool:
         b = self.blocked.get((t[0], t[1], t[2], d))
@@ -360,6 +403,12 @@ class WorldTracker:
         for _, dist, d, n in sorted(explore):
             hint = ((" (the way on)" if own else " (the goal's direction)") if d == toward else "")
             opts[f"explore_{d}"] = f"explore {COMPASS[d]}{hint}: nearest unexplored tile {dist} step(s) away, up to {n} steps"
+        fo: dict = {}
+        fp: dict = {}
+        self._frontier_option(here, tree, fp, fo)
+        if fo:
+            plans.update(fp)
+            opts = {**fo, **opts}
         if own and (toward is None or f"explore_{toward}" not in opts):
             # no way on from here (a town whose exits are all known, or its heading has nothing left that way): the
             # joins straight on to a neighbour not walked to its end
@@ -462,6 +511,7 @@ class WorldTracker:
         if self.here is None or self.here[0] != here[0]:
             self._entries = [e for e in self._entries if self.steps - e[0] < int(self.r.get("door_back_after", 300))]
             self._entries.append((self.steps, here[0]))
+            self._arrived[here[0]] = self.steps
         self.here = here
         self.visit(here)
         self.goal_target = goal
