@@ -124,10 +124,13 @@ class WorldTracker:
         m = t[0]
         if m in self.alias:
             m = self.alias[m]
-        elif m not in self.places and self._last is not None and self._last[0] != m and not stepping:
+        elif m not in self.places and self._last is not None and self._last[0] != m:
             # `stepping`: the change came with a step the agent took while walking (no text, no menu between), which
-            # is a door or stairs even when the position does not jump (Pokemon's stairs land on the same tile)
-            if abs(t[1] - self._last[1]) + abs(t[2] - self._last[2]) <= 1:
+            # is a door or stairs even when the position does not jump (Pokemon's stairs land on the same tile). A
+            # walking step that moved exactly one tile is still the same place: a door or stairs never lands on the
+            # very next tile, and a signature byte that changes as the player walks (scenery redrawn) does
+            moved = abs(t[1] - self._last[1]) + abs(t[2] - self._last[2])
+            if moved == 1 or (moved == 0 and not stepping):
                 self.alias[m] = self._last[0]
                 m = self._last[0]
         self.places.add(m)
