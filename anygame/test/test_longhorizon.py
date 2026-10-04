@@ -459,6 +459,8 @@ def test_upkeep_advice_becomes_the_goal_and_menus_put_exits_first(monkeypatch):
     goal = {"instruction": "Get HP back up", "done": {"number": {"name": "HP", "share_at_least": 0.9}}, "target": None}
     assert gb.impose(goal, 5, walk) and gb.current["source"] == "upkeep"
     assert not gb.impose(goal, 6, walk)
+    other = {**goal, "done": {"number": {"name": "HP (2)", "share_at_least": 0.9}}}
+    assert not gb.impose(other, 7, walk) and len(gb.goals) == 1          # not a new goal every tick
     tr = MenuTracker({"kind": "menu"})
     tr.leave = True
     from anygame.upkeep import rank_exits
@@ -478,3 +480,59 @@ def test_a_walk_pushed_back_after_a_talk_counts_as_stuck():
         w.read({"map": 0, "x": 5, "y": 6, "screen": "text"})      # stepped once, then the talk
     w.read({"map": 0, "x": 5, "y": 5, "screen": "walk"})          # pushed back
     assert w.stuck.get((w.here, ("down", "down"))) == 2
+
+
+class GridMenu(MenuGame):
+    """A 2 x 2 battle menu (FIGHT PKMN / ITEM RUN): the cursor moves on both axes and stops at the edges."""
+
+    def __init__(self):
+        super().__init__()
+        self.s = {"r": 0, "c": 0, "open": True, "text": None}
+
+    def press(self, k, hold=4, after=8):
+        self.frames += hold + after
+        self.real_presses.append(k)
+        s = self.s
+        if k in ("down", "up"):
+            s["r"] = 1 if k == "down" else 0
+        elif k in ("right", "left"):
+            s["c"] = 1 if k == "right" else 0
+        elif k == "a":
+            s["text"] = ["FIGHT", "PKMN", "ITEM", "RUN"][s["r"] * 2 + s["c"]]
+
+    def screen(self):
+        img = np.full((432, 480, 3), 240, np.uint8)
+        y, x = 60 + 120 * self.s["r"], 30 + 220 * self.s["c"]
+        img[y:y + 30, x:x + 30] = 20
+        if self.s["text"]:
+            img[330:420, :] = {"FIGHT": 0, "PKMN": 60, "ITEM": 120, "RUN": 180}[self.s["text"]]
+        return img
+
+
+def test_a_grid_menu_reaches_its_corner(monkeypatch):
+    """RUN sits down and right of FIGHT: an entry reached on one axis is tried along the other too."""
+    import anygame.perceive.menu as menu
+    monkeypatch.setattr(menu, "_ocr_boxes", lambda img: [])
+    monkeypatch.setattr("anygame.perceive.ocr._text", lambda img, up=2.0: "", raising=False)
+    g = GridMenu()
+    t = MenuTracker({"depth": 3})
+    t.read(g, g.screen())
+    assert ["down", "right", "a"] in t.plans.values()
+
+
+def test_upkeep_need_without_a_refill_place_asks_the_writer_how():
+    """Upkeep knows HP must go back up but not where: the writer says how (talk to someone at home), the done
+    condition stays upkeep's, and the goal keeps upkeep as its source so upkeep does not set it again."""
+    m = RunMemory()
+    m.places = {"3": {"first_tick": 1, "entered": 2}}
+    ans = json.dumps({"why": "mom offered rest", "goal": {"instruction": "Talk to Mom at home",
+                      "done": {"talks": 1}, "target": {"place": 3}, "ticks": 200}})
+    chat = FakeChat([ans])
+    gb = GoalBook(m, chat)
+    walk = {"map": 1, "x": 0, "y": 0, "screen": "walk", "numbers": {"HP": {"value": 1, "of": 14}}}
+    goal = {"instruction": "Get HP back up", "done": {"number": {"name": "HP", "share_at_least": 0.9}}, "target": None}
+    assert gb.impose(goal, 5, walk)
+    assert chat.seen[0]["need"]["done"] == goal["done"]
+    g = gb.current
+    assert g["instruction"] == "Talk to Mom at home" and g["done"] == goal["done"] and g["target"] == {"place": 3}
+    assert g["source"] == "upkeep" and not gb.impose(goal, 6, walk)

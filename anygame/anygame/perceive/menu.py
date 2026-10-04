@@ -94,33 +94,9 @@ def _ocr_boxes(img: np.ndarray) -> list[tuple[float, float, float, float, str]]:
 
 def _tile_boxes(img: np.ndarray, r: dict[str, Any]) -> list[tuple[float, float, float, float, str]] | None:
     """The same boxes read exactly from the screen's cells (perceive/tiletext.py, the glyph book the text read uses).
-    None while most of the text on screen is glyphs not learned yet: the caller reads it by OCR meanwhile."""
+    None only while the book is cold and most of the screen is unknown: the caller reads it by OCR meanwhile."""
     from . import tiletext
-    t = tiletext.reader(r, None)
-    _, st = t.read(img)
-    if st["unknown"] > max(2, st["known"]):
-        return None
-    _, keys, kinds = tiletext.cells(img, t.size, t.cell, t.offset)
-    s = max(1, img.shape[0] // t.size[1])
-    c, (ox, oy) = t.cell * s, t.offset
-    out = []
-    for rr, row in enumerate(keys):
-        run: list[tuple[int, str]] = []
-        for q, k in enumerate(row + [None]):
-            kind = kinds[rr, q] if q < len(row) else 2
-            lab = t.book.labels.get(k) if kind == 1 else None
-            if kind == 1 and lab not in (None, tiletext.NOT_TEXT):
-                run.append((q, lab))
-                continue
-            if kind == 0 and run and q + 1 < len(row) and kinds[rr, q + 1] == 1:
-                run.append((q, " "))          # one blank cell between words
-                continue
-            text = "".join(ch for _, ch in run).strip()
-            if len(text) >= 2:
-                x0, x1 = ox * s + run[0][0] * c, ox * s + (run[-1][0] + 1) * c
-                out.append((float(x0), float(oy * s + rr * c), float(x1), float(oy * s + (rr + 1) * c), text))
-            run = []
-    return out
+    return tiletext.boxes(img, r)
 
 
 def _label(boxes, cur: tuple[int, int, int, int] | None) -> str:
@@ -159,6 +135,8 @@ class MenuTracker:
         self.seen: dict[str, tuple[np.ndarray, str]] = {}   # screens the run has shown: small image, its text
         self.leave = False                       # a number is low (anygame/upkeep.py): entries that get out come first
         self.screen_kind = None                  # () → the screen kind now (the loop's probe), to tell what an entry ends on
+        from ..battle import Fight
+        self.fight = Fight()                     # which entry lowers the other side's bar most (anygame/battle.py)
         self.loops: dict[str, dict[str, int]] = {}   # screen key → label → times it came straight back to this menu
         self._recent: list[list] = []                 # recent picks: [screen key, label, ticks since]
 
@@ -211,6 +189,18 @@ class MenuTracker:
                         break       # the cursor stopped (an end of the list) or came round again (a wrapping list)
                     entries.append(([d] * n, img))
                     prev = img
+            # a grid (a battle's FIGHT / PKMN / ITEM / RUN): from each place one axis reached, the other axis too
+            for keys0, _ in [e for e in entries if e[0] and e[0][0] in ("down", "up")]:
+                for d in ("right", "left"):
+                    device.restore(snap)
+                    prev = self._play(device, keys0, total)
+                    for n in range(1, self.depth + 1):
+                        device.restore(snap)
+                        img = self._play(device, keys0 + [d] * n, total)
+                        if _same(img, prev) or any(_same(img, e[1]) for e in entries):
+                            break
+                        entries.append((keys0 + [d] * n, img))
+                        prev = img
             # what choosing each entry does, and what B does
             pos0 = pos() if pos else None
             outcomes = []
@@ -221,15 +211,22 @@ class MenuTracker:
                 # an entry that does something is also played on until the game asks again (anygame/playout.py): a
                 # battle move's result is seconds of text later, past the short watch above
                 from ..playout import play_out, describe
-                for (keys, _), oc in zip(entries, outcomes):
+                effects = {}
+                for i, ((keys, _), oc) in enumerate(zip(entries, outcomes)):
                     if oc["same_screen"]:
                         continue
                     device.restore(snap)
                     r = play_out(device, [k for k in keys] + ["a"], self._read_text, hold=self.hold, gap=self.gap,
                                  max_frames=int(self.r.get("playout_frames", 1800)))
                     oc["playout"] = describe(r, 200)
+                    effects[i] = self.fight.effect(str(i), r)
                     if self.leave and self.screen_kind is not None:
                         oc["ends_on"], oc["frames"] = self.screen_kind(), r["frames"]
+                order = self.fight.rank(effects)
+                if order:
+                    # a fight: the entry that left the other side's bar lowest, against what the others did
+                    outcomes[order[0]]["playout"] += f"; {self.fight.say(effects[order[0]])}"
+                    outcomes[order[0]]["hurts_most"] = True
             device.restore(snap)
             back = self._outcome(device, ["b"], total, base, pos)
             buttons = {}
@@ -309,7 +306,8 @@ class MenuTracker:
         for i, e in enumerate(m["entries"]):
             lab = f"pick_{i + 1}"
             name = f"'{e['label']}'" if e["label"] else f"entry {i + 1} of {n}"
-            where = "where the cursor is now" if not e["keys"] else f"{len(e['keys'])} x {e['keys'][0]}"
+            where = "where the cursor is now" if not e["keys"] else \
+                ", ".join(f"{e['keys'].count(k)} x {k}" for k in dict.fromkeys(e["keys"]))
             landings[lab] = f"{name} ({where}) → {self._said(e)}"
             plans[lab] = e["keys"] + ["a"]
         b = m["back"]
@@ -361,9 +359,15 @@ class MenuTracker:
             for lab in exits:
                 landings[lab] += " [gets out of here: a number is low]"
 
+        hurts = {f"pick_{i + 1}" for i, e in enumerate(m["entries"]) if e.get("hurts_most") and f"pick_{i + 1}" in landings}
+        for lab in hurts:
+            landings[lab] += " [lowers the other side's bar most]"
+
         def group(lab):
             if lab in exits:
                 return -1
+            if lab in hurts:
+                return -0.5
             if lab in idle:
                 return 4
             if lab == "back_out" or lab.startswith("press_"):

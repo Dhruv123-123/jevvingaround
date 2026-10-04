@@ -1,6 +1,7 @@
 """The play loop: frame → reads → state → Jev → action → device, at tick_hz. One audit line per tick."""
 from __future__ import annotations
 import hashlib
+import re
 import sys
 import json
 import os
@@ -496,7 +497,7 @@ class Agent:
                 for tr in self.worlds.values():
                     if hasattr(tr, "leave"):
                         tr.leave = bool(adv and adv.get("leave"))
-                if adv and self.goalbook.impose(adv["goal"], self.tick, placed):
+                if adv and self.goalbook.impose(adv["goal"], self.tick, placed, world=w):
                     print(f"upkeep at tick {self.tick}: {adv['why']}", file=sys.stderr)
                     self.quest = self.goalbook.quest()
         for rid, r in pack.reads.items():
@@ -504,11 +505,17 @@ class Agent:
                 if rid not in self.worlds:
                     from .perceive.menu import MenuTracker
                     self.worlds[rid] = MenuTracker(r)
+                if getattr(self.worlds[rid], "screen_kind", None) is None:
+                    # also for a tracker a checkpoint made: what an entry's play-out ends on, for leaving a fight
                     pr = next((x for x in pack.reads.values() if x.get("kind") == "probe"), None)
                     if pr is not None:
                         self.worlds[rid].screen_kind = lambda pr=pr: self._probe(pr)
                 self.trackers[rid] = self.worlds[rid]
-                if r.get("when") and not self._task_ok(r["when"], values):
+                # a screen with no word on it is not a menu to explore (a platformer's play screen answers the probe
+                # like a choice: a direction changes it, no position is known): exploring it costs seconds a step
+                wordless = int(r.get("needs_words", 0)) > 0 and values.get("screen") == "choice" and \
+                    len(re.findall(r"[A-Za-z]{2,}", str(values.get(r.get("text_read", "text")) or ""))) < int(r["needs_words"])
+                if (r.get("when") and not self._task_ok(r["when"], values)) or wordless:
                     self.worlds[rid].see(self.device.screen(), values.get("text"))   # where a choice may lead back to
                     values[rid] = None
                     continue
@@ -958,9 +965,11 @@ class Agent:
         hold = int(r.get("hold", 16))
         res = self.device.branch({"wait": [], **{k: [k] for k in buttons}, **{k: [f"{k}:{hold}"] for k in dirs}}, frames=int(r.get("frames", 48)))
         disc = getattr(self.device, "discoverer", None)
-        if disc is not None and res["wait"].get("ram") is not None:
+        if disc is not None and res["wait"].get("ram") is not None and not {"x", "y"} <= set(getattr(disc, "found", {}) or {}):
             # each direction against waiting, from the same moment: what the press changed and nothing else, which is
             # what finding the position needs (a timer or an animation changes in both and cancels out)
+            # once x and y are known, probes stop teaching: in a battle menu the cursor byte follows up/down and
+            # stays on left/right exactly like a position, and probes there swapped y for it (Rattata stall, tick 5730)
             for k in dirs:
                 disc.press(k, res["wait"]["ram"], res[k]["ram"], full=False)
         base = res["wait"]["screen"].astype(_np.int16)
