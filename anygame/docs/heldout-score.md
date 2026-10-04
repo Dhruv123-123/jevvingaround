@@ -244,11 +244,10 @@ Azure dollars by game (top pick, three runs / Jev, one run): Tobu 0.226 / 0.038,
 0.273 / 0.097, GBHack 0.155 / 0.039. Each run's chat-model calls go to its own ledger
 (`<game>-<agent>-<seed>.azure.jsonl` beside the run) and are copied into the project ledger afterwards.
 
-**Where the wall time goes now: labelling the font.** The harness starts every run with no glyph book (see below),
-so each run pays tiletext's Azure labelling again. On Tobu Tobu Girl and Renegade Rush that is 40 labelling calls
-per run, which looks like tiletext's per-run cap, taking 470–540 of the 900 wall seconds. Those are exactly the
-games still ended by the wall limit (Tobu 10 presses per minute, Renegade 26). Goal-writer calls cost 12–80 s per run.
-PostBot and GBHack, with few new glyphs, are now ended by the press or frame budget instead of the clock.
+**Where the wall time goes** (corrected 2026-10-04, see the next section): tiletext's Azure labelling (40 calls per run
+on Tobu Tobu Girl and Renegade Rush, its per-run cap, 470–540 s of Azure time) runs in a background thread and overlaps
+play. A first version of this paragraph blamed it for the wall limit; the warm-book runs and a profile below show the
+wall time goes to menu explores instead.
 
 **Glyph book: fresh every run.** The `gameboy` pack names no `book:`, so the tiletext glyph book lives in memory
 for one process. The harness clears it (with the OCR pixel cache) at the start of every run and ignores
@@ -259,3 +258,56 @@ book carried across games would be the general version.
 
     python -m heldout.run --pack gameboy --decider top --out runs/gaps-top          # four games in parallel in practice
     python -m heldout.run --pack gameboy --decider jev --seeds 1 --out runs/gaps-jev
+
+
+## A glyph book kept per game, and where the 900 s go (2026-10-04)
+
+The same agent and protocol, with `--books DIR`: one glyph book file per game carried from run to run (top pick seeds
+1, 2, 3, then Jev seed 1), reported as its own column. Nothing else carries over. Seed 1 of the top pick starts empty,
+like the cold row. The cold-start row above stays the official one until the protocol is decided.
+
+| game | random | cold, top | per-game book, top | cold, Jev | per-game book, Jev |
+|---|---|---|---|---|---|
+| GBHack | 0.33 | 0.53, +0.30 | 0.40, +0.10 | 0.40, +0.10 | 0.40, +0.10 |
+| PostBot | 0.40 | 0.40, +0.00 | 0.40, +0.00 | 0.40, +0.00 | 0.40, +0.00 |
+| Renegade Rush | 0.20 | 0.20, +0.00 | 0.27, +0.08 | 0.20, +0.00 | 0.40, +0.25 |
+| Tobu Tobu Girl | 0.53 | 0.40, −0.29 | 0.40, −0.29 | 0.40, −0.29 | 0.60, +0.14 |
+| **suite median (games above 0.1)** | 0 | +0.00 (1 of 4) | +0.04 (0 of 4) | +0.00 (0 of 4) | **+0.12 (2 of 4)** |
+
+| agent | presses per wall-minute (median) | per game: Tobu / PostBot / Renegade / GBHack | game frames per wall-minute | runs ended by the wall limit | Jev $ | Azure $ (calls) |
+|---|---|---|---|---|---|---|
+| cold, top | 60 | 10 / 213 / 26 / 81 | 2,459 | 6 of 12 (50%) | 0 | 0.700 (539) |
+| per-game book, top | 82 | 11 / 226 / 25 / 83 | 2,916 | 6 of 12 (50%) | 0 | 0.624 (498) |
+| cold, Jev | 76 | 109 / 81 / 16 / 71 | 3,650 | 1 of 4 (25%) | 0.104 | 0.178 (129) |
+| per-game book, Jev | 104 | 140 / 132 / 50 / 76 | 4,340 | 1 of 4 (25%) | 0.141 | 0.150 (126) |
+
+**The warm book does not fix the wall limit.** Tobu Tobu Girl's top pick stays at 9–13 presses per wall-minute with
+a book of 356 and then 793 glyphs, and still makes its 40 labelling calls every run: as the full-run-gaps thread
+measured, nearly all of Tobu's "glyphs" are two-colour scenery tiles, so the book never covers the screen. Labelling
+calls fall only where the game has real text (GBHack 26 → 7 → 2, PostBot already 1–2). The Jev score gains (+0.12
+median) are one seed each and within the run-to-run spread: seed 1 of the top pick started from an empty book in both
+rows and still differed (GBHack 0.6 vs 0.4), because Azure answers and four-way CPU sharing are not reproducible.
+Read the score columns as "no worse", not as a gain.
+
+**Profile of one Tobu Tobu Girl top-pick run** (seed 1, budget scaled to 310 s, run alone, cProfile of the main
+thread; the labeller's thread is not in it):
+
+| where | seconds of 310 | share |
+|---|---|---|
+| menu explores (`perceive/menu.py` explore, 75 of 112 steps) | 281 | 91% |
+|  · play-outs of each option (`playout.play_out`, 314 calls) | 138 | 44% |
+|  · RapidOCR inside menu reads (709 calls; menu.py still uses OCR, not tiletext) | 125 | 40% |
+|  · emulator ticks (`pyboy._tick`) | 57 | 18% |
+|  · save-state restore/snapshot | 30 | 10% |
+|  · screen-difference numpy (`_small`, `_differs`, `_same`) | ~50 | ~16% |
+| screen-kind probe | 12 | 4% |
+| Azure or Jev waits on the main thread | ~0 | 0% |
+
+(The indented rows overlap: OCR and ticks happen inside play-outs.) The agent explores a "menu" on two of every three
+steps of a platformer, at 3.7 s each. The levers, in order: stop treating Tobu's play screen as a menu (explore
+fired 75 times in 112 steps); switch menu.py's reads from RapidOCR to tiletext (~40% of the run); downscale the
+screen-difference checks. All three are in the long-horizon thread's code (menu.py) and the gaps thread's play-out
+code, not the harness.
+
+    python -m heldout.run --pack gameboy --decider top --books runs/books --out runs/book-top
+    python -m heldout.run --pack gameboy --decider jev --books runs/books --seeds 1 --out runs/book-jev
