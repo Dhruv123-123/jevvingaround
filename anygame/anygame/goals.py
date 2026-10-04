@@ -67,7 +67,9 @@ asked, explore: a new place, or talk to people. Do not repeat a goal that was ju
 "now" is the present: its screen and text_on_screen say what the game shows at this moment; a dialogue line from
 earlier ticks may be about something already over (a battle that ended, a menu that closed).
 When the context has "need", the run itself needs that condition (a number to get back up) and does not know where
-or how: write the goal for it, with its "done" exactly as given, and an instruction and target saying how, from what
+or how: write the goal for it, with an instruction and target saying how, and as "done" a sign the program can see
+that it happened ({"said": [...]} words the game says when it restores it, or {"talks": n}), not the number itself
+(it is often off screen; the run checks the number too). Say how from what
 the game has said and shown (someone who offered rest or help, a place it refilled before). Do not send the player
 to a place the game has not shown or named; when nothing says where, talk to the people in the nearest building
 (a family member, a nurse, an innkeeper often restore it)."""
