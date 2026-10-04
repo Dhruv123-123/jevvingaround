@@ -428,7 +428,10 @@ class WorldTracker:
         d = hop["dir"]
         dx, dy = DIRS[d]
         vis = self.visited.get(here[0], set())
-        edge = max((t for t in tree if (t[1], t[2]) in vis), key=lambda t: (t[1] * dx + t[2] * dy, -tree[t][2]), default=None)
+        # the furthest explored tile that way from which a step on that way is not known to be refused (a ledge, a tree
+        # line): stepping off a walled edge again and again goes nowhere
+        edge = max((t for t in tree if (t[1], t[2]) in vis and not self.is_blocked(t, d)),
+                   key=lambda t: (t[1] * dx + t[2] * dy, -tree[t][2]), default=None)
         if edge is None:
             return False
         p = self.path_to(tree, edge) + [d] * 3

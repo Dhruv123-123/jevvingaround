@@ -714,3 +714,17 @@ def test_a_door_to_a_place_just_left_is_not_offered_as_little_explored():
     w.steps += 500
     opts, _ = w.options((town, 3, 3), None)
     assert any(k.startswith("door_") for k in opts)
+
+
+def test_a_join_route_does_not_step_off_an_edge_known_to_be_walled():
+    from anygame.perceive.world import WorldTracker
+    w = WorldTracker({"x": "x", "y": "y", "map": "map"})
+    w.read({"map": 11, "x": 3, "y": 5, "screen": "walk"})
+    p = w.here[0]
+    for y in range(1, 6):
+        w.visit((p, 3, y)); w.visit((p, 4, y))
+    w.blocked[(p, 3, 1, "up")] = [3, w.steps]          # a ledge or a tree above (3,1)
+    w.book.route = lambda a, b: {"kind": "join", "dir": "up", "hops": 1}
+    plans, opts = {}, {}
+    assert w._route_option((p, 3, 5), 99, w.bfs((p, 3, 5)), "x", plans, opts)
+    assert plans["goal"][-3:] == ["up"] * 3 and "right" in plans["goal"]     # goes round to (4,1) first
