@@ -305,7 +305,7 @@ class PyBoyDevice(Device):
         self._tick(self.after if after is None else int(after))
         if self.discoverer is not None:
             after_ = ram(self._pb.memory)
-            self.discoverer.press(b, before, after_, full=hold is None or hold >= 8)
+            self.discoverer.press(b, before, after_, full=hold is None or hold >= 8, continues=True)
 
     def key(self, name, hold_ms=0, **_):
         if hold_ms:

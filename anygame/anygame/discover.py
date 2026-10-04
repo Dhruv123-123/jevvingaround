@@ -92,14 +92,19 @@ class Discoverer:
         self.by_pad = z()                # changed by a d-pad press (a step, a door, a probe's step)
         self.by_other = z()              # changed by any other press (a menu, a text box, a button)
         self.pad_presses = 0
-        self.by_door = z()               # changed by a d-pad press that looked like a door (see press)
+        self.follows_pos = z()           # changed back by the step back: drawn around the player, not the map
+        self._from, self._to, self._old = np.full(N, -1, np.int64), np.full(N, -1, np.int64), z()
+        self._hist = np.zeros(N, np.uint64)
+        self._seen = np.zeros((N, 256), bool)   # the values each byte has taken after a press
+        self.n_values = z()
+        self.full_any = z()              # changed by a whole press (not a probe from a save state)
+        self.other_presses = 0
         self.walks = 0
         self.walks_at = np.zeros(N, np.int64)
         self.holds = np.zeros(N, np.int32)
         self.holds_walked = np.zeros(N, np.int32)
         self.crossed = np.zeros(N, bool)    # a pair whose high byte moved with a small step: a position past 255
         self._xdeltas: list[int] = []
-        self._moves: dict[bool, list[int]] = {}   # how far a step moves, for whole steps and for probes
         self.transitions = 0
         self.blank = False
         self.before_blank: np.ndarray | None = None
@@ -113,33 +118,54 @@ class Discoverer:
         return {(ax, w): {"n": 0, "agree": z(), "moved": z(), "n_other": 0, "still": z()} for ax in "xy" for w in (1, 2)}
 
     # ---- evidence --------------------------------------------------------------------------------------
-    def press(self, button: str, before: np.ndarray, after: np.ndarray, full: bool = True) -> None:
+    def press(self, button: str, before: np.ndarray, after: np.ndarray, full: bool = True, continues: bool = False) -> None:
         """A press with work RAM before and after. `full`: a whole step was played (not a short probe from a save
-        state), so the position change is what one step does and teaches the step size."""
+        state), so the position change is what one step does and teaches the step size. `continues`: the game goes
+        on from `after`, so the press is judged by the RAM just before whatever comes next: a tap starts a step
+        that Pokemon finishes (and writes the position) after the press is over."""
         if self.trace is not None:
-            self.trace.append(("p", button, _z(before), _z(after), full))
+            self.trace.append(("p", button, _z(before), _z(after), full, continues))
+        if getattr(self, "_pending", None):
+            self._pending[2] = before                   # where the game had got to when the next press came
+        self._settle()
+        if continues:
+            self._pending = [button, before, after, full]
+        else:
+            self._press(button, before, after, full)
+
+    def _settle(self) -> None:
+        if getattr(self, "_pending", None):
+            button, before, after, full = self._pending
+            self._pending = None
+            self._press(button, before, after, full)
+
+    def _press(self, button: str, before: np.ndarray, after: np.ndarray, full: bool) -> None:
         d = DIRS.get(button)
+        v = after.astype(np.intp) & 0xFF
+        new = ~self._seen[np.arange(N), v]
+        self._seen[np.arange(N), v] = True
+        self.n_values += new
         if "x" in self.found and "y" in self.found:
             c = after != before
             if d and (d[0] or d[1]):
-                # a door rewrites several of the bytes that steps rarely change at once (the map's id, its bank,
-                # tileset, script), and the step does not end one step along: the player lands elsewhere, or on the
-                # same spot of another floor. A plain step (the usual distance, along the pressed direction)
-                # scrolls the screen, which rewrites rarely changed tiles too
-                dx = self.decode(after, "x") - self.decode(before, "x")
-                dy = self.decode(after, "y") - self.decode(before, "y")
-                along, across = (dx, dy) if d[0] else (dy, dx)
-                moves = self._moves.setdefault(full, [])
-                if along and not across and np.sign(along) == (d[0] or d[1]):
-                    self._moves[full] = (moves + [abs(along)])[-40:]
-                plain = not across and np.sign(along) == (d[0] or d[1]) and len(moves) >= 3 and abs(along) == int(np.median(moves))
-                rare = c & (self.by_pad <= max(2, 0.02 * self.pad_presses)) & (self.by_other * 4 <= self.by_pad + 1)
-                if not plain and rare.sum() >= 4:
-                    self.by_door += c
+                # a tile drawn around the player changes on a step and changes back on the step back; the map's
+                # bytes, changed by stairs, stay changed when the player steps off them
+                p0 = (self.decode(before, "x"), self.decode(before, "y"))
+                p1 = (self.decode(after, "x"), self.decode(after, "y"))
+                if p0 != p1:
+                    k0, k1 = hash(p0) & 0x7FFFFFFF, hash(p1) & 0x7FFFFFFF
+                    self.follows_pos += c & (self._from == k1) & (self._to == k0) & (after == self._old)
+                    self._from[c], self._to[c], self._old[c] = k0, k1, before[c]
                 self.by_pad += c
                 self.pad_presses += 1
             else:
-                self.by_other += c
+                self.by_other += c                      # a cutscene after a talk can move the player to another map
+                self.other_presses += 1
+            if full:
+                self.full_any += c
+            # which presses changed a byte, folded into one number: a map's id, bank, tileset and script pointers all
+            # change on exactly the same presses, a screen tile or a sprite with few others
+            self._hist[c] = self._hist[c] * np.uint64(1000003) + np.uint64(self.pad_presses + self.other_presses)
         if full and d and d[0] and "x" in self.found and "y" in self.found:
             dx = self.decode(after, "x") - self.decode(before, "x")
             if dx and not self.decode(after, "y") - self.decode(before, "y"):
@@ -279,7 +305,9 @@ class Discoverer:
             sc = self._score(self.st[(ax, w)])
             if sc is None:
                 continue
-            score = sc[0] * (sc[1] > MOVED)
+            # a position walks through many values; the direction the player faces or last pressed (a sprite's
+            # step vector: -1, 0, 1) follows the d-pad as well when presses turn the player more than they move him
+            score = sc[0] * (sc[1] > MOVED) * (self.n_values >= 4)
             for s in self.segs + [self.seg]:
                 v = self._score(s[(ax, w)])
                 if v is None or not self._walked(s):
@@ -345,35 +373,47 @@ class Discoverer:
             m = self._map()
             if m:
                 self.found["map"] = m
-            elif "map" not in self.found:                # until a door is seen, everything so far is one place
+            elif "map" not in self.found or self.pad_presses >= 50:
+                # nothing passes (yet, or any more): everything so far is one place. A signature loaded from an
+                # earlier run is kept for the first few steps, while this run's evidence is too thin to judge it
                 self.found["map"] = {"addrs": [], "doors": 0, "transitions": self.transitions}
 
     def _map(self) -> dict[str, Any] | None:
-        """A map's bytes (its id, bank, tileset) change when a step takes the player through a door, stairs or a
-        warp, and then hold while the player walks around. A menu or a text box changes bytes when a button is
-        pressed, and those hold only while the player stands still; the screen and the sprites change on most
-        steps. Neither bursts of rewritten memory nor fades find Pokemon's doors (its stairs warp inside the step
-        and the screen buffer churns on every menu), so a door is a step that did not end one plain step along
-        (see press); the signature is the bytes such steps changed, among those that steps change rarely and
-        buttons almost never, that changed on the most steps."""
+        """A map's bytes (its id, bank, tileset, script pointers) change together when a press takes the player
+        through a door, up stairs, or into a cutscene, and then hold while the player walks around. Neither bursts
+        of rewritten memory nor fades find Pokemon's doors (its stairs warp inside the step, landing on a plain
+        step's square, and its screen buffer churns on every menu), so doors are not looked for. A byte qualifies
+        if presses change it rarely, it held through walking, and stepping back does not change it back (a tile
+        drawn around the player does); the signature is the largest group of such bytes that changed on exactly
+        the same presses."""
         done = self.holds + 1                                     # the current hold counts if walked through
         walked = self.holds_walked + ((self.walks - self.walks_at) >= HOLD_WALKS)
-        P = (self.changes >= 1) & (self.changes < 64) & (walked >= 0.8 * done) & (self.ups < 0.5 * np.maximum(self.changes, 1))
+        P = (self.changes >= 1) & (self.changes < 64) & (self.ups < 0.5 * np.maximum(self.changes, 1))
         for ax in "xy":
             if ax in self.found:
                 a = self.found[ax]["addr"] - LO
                 P[a: a + (2 if self.found[ax]["type"] == "u16le" else 1)] = False
         # a map's bytes change when the player walks through a door, rarely, and not when a button opens a menu or a
         # text box; the bytes that changed at the most such steps tell the most places apart
-        P &= (self.by_door >= 1) & (self.by_pad <= max(2, 0.02 * self.pad_presses)) & (self.by_other * 4 <= self.by_pad)
+        P &= (self.full_any >= 1) & (self.follows_pos == 0) & (self.by_pad <= max(2, 0.02 * self.pad_presses)) & \
+            (self.by_other <= max(1, 0.02 * self.other_presses))
+        held = P & (self.holds_walked >= 0.8 * self.holds)    # the signature in use: its current value is still new
+        P &= walked >= 0.8 * done
+        cur = self.found.get("map", {})
+        keep = bool(cur.get("addrs")) and all(held[a - LO] for a in cur["addrs"])
         if not P.any():
-            return None
+            return {**cur} if keep else None
         idx = np.where(P)[0]
+        # the biggest group of bytes that changed on the same steps; among equals, the one that changed most
+        groups, inv, size = np.unique(self._hist[idx], return_inverse=True, return_counts=True)
+        best = max(range(len(groups)), key=lambda g: (size[g], self.by_pad[idx[inv == g]].max()))
+        if size[best] < 3:
+            return {**cur} if keep else None
+        idx = idx[inv == best]
         top = self.by_pad[idx].max()
         idx = idx[self.by_pad[idx] >= 0.8 * top]
         idx = idx[np.argsort(-self.by_pad[idx], kind="stable")][:2]
-        cur = self.found.get("map", {})
-        if cur.get("addrs") and all(P[a - LO] for a in cur["addrs"]) and \
+        if keep and \
                 self.by_pad[[a - LO for a in cur["addrs"]]].min() >= 0.7 * top:
             return {**cur, "doors": int(self.by_pad[idx].max())}   # a signature that still holds is kept
         return {"addrs": sorted(int(LO + i) for i in idx), "doors": int(self.by_pad[idx].max()), "transitions": self.transitions}

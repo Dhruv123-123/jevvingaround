@@ -373,3 +373,26 @@ def test_discoverer_drops_a_map_signature_from_the_older_rule():
         d.press("right", before, mem.copy())
         d.frame(mem.copy(), blank=False)
     assert d.found["map"]["addrs"] == [] and d.state(mem)["map"] == 0
+
+
+def test_discoverer_credits_a_tap_with_the_step_it_started():
+    """Pokemon walks one tile on a tap but writes the position after the press is over, while a facing byte (-1, 0,
+    1) changes during it: a press that the game goes on from is judged by the RAM when the next one comes."""
+    from anygame.discover import Discoverer, LO, N
+    rng = np.random.default_rng(3)
+    d = Discoverer()
+    mem = np.zeros(N, np.int32)
+    X, Y, FX, FY = 0xD362 - LO, 0xD361 - LO, 0xC105 - LO, 0xC103 - LO
+    mem[X], mem[Y] = 20, 20
+    late = (0, 0)
+    for _ in range(120):
+        mem[X] += late[0]                       # the last tap's step lands now, before the next press
+        mem[Y] += late[1]
+        b = ["up", "down", "left", "right"][rng.integers(4)]
+        before = mem.copy()
+        dx, dy = {"left": -1, "right": 1}.get(b, 0), {"up": -1, "down": 1}.get(b, 0)
+        mem[FX], mem[FY] = dx % 256, dy % 256    # the facing byte follows at once
+        late = (dx, dy) if rng.random() > 0.2 else (0, 0)
+        d.press(b, before, mem.copy(), full=False, continues=True)
+        d.frame(mem.copy(), blank=False)
+    assert d.found["x"]["addr"] == 0xD362 and d.found["y"]["addr"] == 0xD361
