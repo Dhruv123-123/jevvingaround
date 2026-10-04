@@ -210,3 +210,10 @@ walls the world tracker had given up on.
 See `docs/speed.md`. Profiling the long-horizon agent on Tobu Tobu Girl showed menu trials taking 90% of the wall time.
 Faster screen comparison and an OCR cache took 91 ticks from 184 s to 69 s with identical decisions. The rest is in
 the menu reader's choice of when to explore.
+
+## Gap 5: what each button does
+
+`anygame/motion.py`, see `docs/motion.md`. Each input is tried from a save state for a tap and a hold. The player's x
+and y are found in memory (the sprite table is preferred), and each input is described: a step of one tile, a walk
+while held, a jump with its height, a dash. On Pokemon a tap is a whole tile; on Aevilia movement is continuous; on
+Tobu Tobu Girl B is a jump and A with a direction a dash; on Renegade Rush left and right steer.
