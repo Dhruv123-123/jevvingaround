@@ -457,29 +457,38 @@ def test_discoverer_takes_the_map_id_from_warps_and_returns():
 
 def test_discoverer_keeps_y_through_a_menu_whose_cursor_follows_the_pad():
     """A menu with a cursor on both axes (a battle's grid of choices, a job grid): the d-pad moves the cursor's bytes
-    over many values while the position never moves. The position found while walking stays."""
+    on every press while the position never moves, and the battle's flashes start new visits until the walking ones
+    are forgotten. The position found while walking stays; without the guard the cursor takes x and y."""
     from anygame.discover import Discoverer, LO, N
     rng = np.random.default_rng(4)
     d = Discoverer()
     mem = np.zeros(N, np.int32)
     X, Y, CUR, CURX = 0xD362 - LO, 0xD361 - LO, 0xCC2A - LO, 0xCC2B - LO
     mem[X], mem[Y] = 20, 20
-    for _ in range(150):
+    for _ in range(300):
         b = ["up", "down", "left", "right"][rng.integers(4)]
         before = mem.copy()
-        mem[X] += {"left": -1, "right": 1}.get(b, 0)
-        mem[Y] += {"up": -1, "down": 1}.get(b, 0)
-        mem[0xC300 - LO: 0xC400 - LO] = rng.integers(0, 256, 256)      # a step redraws the screen
-        d.press(b, before, mem.copy(), full=True)
+        nx, ny = mem[X] + {"left": -1, "right": 1}.get(b, 0), mem[Y] + {"up": -1, "down": 1}.get(b, 0)
+        if 16 <= nx <= 24 and 18 <= ny <= 22:                            # a room: some presses hit a wall
+            mem[X], mem[Y] = nx, ny
+        mem[0xC300 - LO: 0xC340 - LO] = rng.integers(0, 256, 64)         # a step redraws part of the screen
+        d.press(b, before, mem.copy(), full=True, continues=True)
         d.frame(mem.copy(), blank=False)
-    assert d.found["y"]["addr"] == 0xD361
-    for _ in range(400):
+    assert d.found["y"]["addr"] == 0xD361 and d.found["x"]["addr"] == 0xD362
+    for t in range(400):
+        if t % 80 == 79:                                                 # a flash: a burst of changes, a new visit
+            mem[0xC400 - LO: 0xCC00 - LO] = rng.integers(0, 256, 0x800)
+            for _ in range(4):
+                d.frame(mem.copy(), blank=False)
+            mem[0xC400 - LO: 0xCC00 - LO] = 0
+            for _ in range(4):
+                d.frame(mem.copy(), blank=False)
         b = ["up", "down", "left", "right"][rng.integers(4)]
         before = mem.copy()
         mem[CUR] = (mem[CUR] + {"up": -1, "down": 1}.get(b, 0)) % 256
         mem[CURX] = (mem[CURX] + {"left": -1, "right": 1}.get(b, 0)) % 256
-        mem[0xC300 - LO: 0xC400 - LO] = rng.integers(0, 256, 256)      # the battle animates
-        d.press(b, before, mem.copy(), full=True)
+        mem[0xC300 - LO: 0xC340 - LO] = rng.integers(0, 256, 64)         # the battle animates
+        d.press(b, before, mem.copy(), full=True, continues=True)
         d.frame(mem.copy(), blank=False)
     assert d.found["y"]["addr"] == 0xD361 and d.found["x"]["addr"] == 0xD362
 
