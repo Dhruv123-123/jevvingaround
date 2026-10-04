@@ -205,8 +205,8 @@ The measurement the speed work starts from: presses per wall-minute and how ofte
 | long-horizon agent, top | 12 | 18 | 6 / 57 / 11 / 38 | 12 of 12 (100%) |
 | long-horizon agent, Jev | 4 | 41 | 18 / 72 / 16 / 65 | 3 of 4 (75%) |
 
-To spend the whole game budget inside the wall budget a run needs 2,400 game frames per wall-minute; the
-button-only agents reach about 92 presses per wall-minute at that pace (1,380 presses in 10 game-minutes). The
+To spend the whole game budget inside the wall budget a run needs 2,400 game frames per wall-minute, which for
+single presses (26 frames each) is about 92 presses per wall-minute; a walking macro covers more frames per press. The
 long-horizon agent is at 18 with its top pick and 41 with Jev, so it uses a small part of its game time before the
 clock stops it.
 
