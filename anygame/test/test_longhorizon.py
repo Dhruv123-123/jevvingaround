@@ -335,3 +335,22 @@ def test_a_pick_that_comes_back_through_another_screen_twice_is_dropped(monkeypa
         g.s = {"cur": 0, "open": True, "text": None}
     lands = t.read(g, g.screen())["landings"]
     assert "pick_1" not in lands and "pick_2" in lands
+
+
+def test_a_checkpoint_keeps_the_glyphs_learned(tmp_path):
+    """A resumed run reads the text it had learned to read, without asking the labeller again."""
+    from anygame.perceive import tiletext
+    from anygame.memory import _glyph_books
+    saved = dict(tiletext._BOOKS)
+    try:
+        tiletext._BOOKS.clear()
+        bk = tiletext._BOOKS[""] = tiletext.GlyphBook()
+        bk.labels.update({"k1": "A", "k2": "B"})
+        d = json.loads(json.dumps(_glyph_books()))
+        tiletext._BOOKS.clear()                           # a new process
+        tiletext.restore_books(d)
+        assert tiletext._BOOKS[""].labels == {"k1": "A", "k2": "B"}
+        assert tiletext.reader({"kind": "tiletext"}).book is tiletext._BOOKS[""]
+    finally:
+        tiletext._BOOKS.clear()
+        tiletext._BOOKS.update(saved)

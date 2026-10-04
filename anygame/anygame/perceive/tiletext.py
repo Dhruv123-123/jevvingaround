@@ -173,15 +173,18 @@ class GlyphBook:
         return self.vote(keys, " ".join(t[1] for t in (res or [])), "ocr")
 
     # ---- the data file ----------------------------------------------------------------------------------------
+    def dump(self) -> dict[str, Any]:
+        with self.lock:
+            return {"labels": dict(self.labels), "votes": {k: dict(v) for k, v in self.votes.items()}}
+
     def save(self, path: str) -> None:
         tmp = path + ".tmp"
         with open(tmp, "w") as f:
-            with self.lock:
-                json.dump({"labels": dict(self.labels), "votes": {k: dict(v) for k, v in self.votes.items()}}, f)
+            json.dump(self.dump(), f)
         os.replace(tmp, path)
 
-    def load(self, path: str) -> None:
-        d = json.load(open(path))
+    def load(self, path: str | dict) -> None:
+        d = json.load(open(path)) if isinstance(path, str) else path
         self.labels.update(d.get("labels") or {})
         for k, v in (d.get("votes") or {}).items():
             self.votes.setdefault(k, Counter()).update(v)
@@ -335,6 +338,20 @@ def _pool():
     return _POOL
 
 _READERS: dict[int, TileText] = {}
+
+
+def books() -> dict[str, dict[str, Any]]:
+    """Every glyph book of this process, by path ('' for the in-memory one): what a run's checkpoint keeps."""
+    return {p: b.dump() for p, b in _BOOKS.items() if b.labels}
+
+
+def restore_books(d: dict[str, dict[str, Any]]) -> None:
+    """The glyph books of a checkpoint, so a resumed run reads every glyph it had learned without asking again."""
+    for p, data in (d or {}).items():
+        bk = _BOOKS.get(p)
+        if bk is None:
+            bk = _BOOKS[p] = GlyphBook(p or None)
+        bk.load(data)
 
 
 def reader(r: dict[str, Any], pack_dir: str | None = None) -> TileText:

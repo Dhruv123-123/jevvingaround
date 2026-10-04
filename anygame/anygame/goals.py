@@ -61,7 +61,9 @@ Targets (where to head, or null): {"toward": "up"|"down"|"left"|"right"} (up is 
   {"place": <id>} (a known place), {"line": <index of a dialogue line>} (back to where it was said).
 
 Prefer what the dialogue asks for (someone told you to go somewhere, find someone, press a button). If nothing was
-asked, explore: a new place, or talk to people. Do not repeat a goal that was just given up unless something changed."""
+asked, explore: a new place, or talk to people. Do not repeat a goal that was just given up unless something changed.
+"now" is the present: its screen and text_on_screen say what the game shows at this moment; a dialogue line from
+earlier ticks may be about something already over (a battle that ended, a menu that closed)."""
 
 
 def check(cond: Any, places: set[str] | None = None, depth: int = 0, numbers: set[str] | None = None) -> str | None:
@@ -222,7 +224,9 @@ class GoalBook:
             doors = sum(1 for kk, w in world.warps.items() if str(kk[0]) == k and str(w[0]) != k) if world is not None else None
             places.append({"id": _as_map(k), "first_seen_tick": p["first_tick"], "times_entered": p["entered"], "tiles_walked": tiles, "doors_found": doors})
         return {
-            "now": {"place": values.get("map"), "screen": values.get("screen")},
+            # the tick and what is on screen now: older dialogue may be over (a battle that ended, a menu closed)
+            "now": {"tick": values.get("tick"), "place": values.get("map"), "screen": values.get("screen"),
+                    "text_on_screen": (values.get("text") or "")[:200]},
             "numbers": {n: (f"{v['value']}/{v['of']}" if v.get("of") else v["value"]) for n, v in (values.get("numbers") or {}).items()},
             "dialogue": [{"i": start + i, "place": d.get("map"), "tick": d["tick"], "text": d["text"][:200]} for i, d in enumerate(lines[start:])],
             "places": places,
@@ -235,6 +239,7 @@ class GoalBook:
         self.last_call = tick
         self.memory.new_lines = 0
         ctx = self.context(values, world)
+        ctx["now"]["tick"] = tick
         places = {str(p["id"]) for p in ctx["places"]}
         msgs = [{"role": "system", "content": SYSTEM}, {"role": "user", "content": json.dumps(ctx)}]
         entry: dict[str, Any] = {"tick": tick, "kind": "goal_writer", "dialogue_lines": len(ctx["dialogue"])}

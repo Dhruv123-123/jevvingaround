@@ -105,6 +105,7 @@ def save_checkpoint(agent, path: str) -> str:
         "remembered": agent.remembered,
         "discovered": disc.dump() if disc is not None and getattr(disc, "found", None) else None,
         "audit": agent.auditor.dump() if getattr(agent, "auditor", None) is not None else None,
+        "glyphs": _glyph_books(),
     }
     tmp = os.path.join(path, "run.json.tmp")
     with open(tmp, "w") as f:
@@ -143,4 +144,13 @@ def load_checkpoint(agent, path: str) -> dict[str, Any]:
         agent.quest = agent.goalbook.quest()
     if d.get("audit") and getattr(agent, "auditor", None) is not None:
         agent.auditor.load(d["audit"])
+    if d.get("glyphs"):
+        from .perceive import tiletext
+        tiletext.restore_books(d["glyphs"])
     return d
+
+
+def _glyph_books() -> dict[str, Any]:
+    import sys
+    tt = sys.modules.get("anygame.perceive.tiletext")      # only when this run reads tile text
+    return tt.books() if tt is not None else {}
