@@ -29,8 +29,22 @@ def test_it_learns_the_floor_is_fatal_and_sends_the_player_back_to_where_it_refi
 def test_a_number_that_hits_zero_without_consequence_is_watched_but_a_big_drop_warns_early():
     k = Upkeep()
     k.see(1, hp(20), place="lab")
-    k.see(2, hp(9), place="lab")                              # dropped 11 at once: one more such turn reaches 0
+    k.see(2, hp(18), place="lab")
+    k.see(3, hp(9), place="lab")                              # dropped 9 at once: one more such turn reaches 0
     assert "one bad turn" in k.advice()["why"]
+
+
+def test_a_count_the_player_spends_is_not_health_and_the_fatal_one_is_the_last_to_come_down():
+    k = Upkeep()
+    pp = lambda v: {"TYPE/ NORMAL #/# (2)": {"value": v, "of": 10}}
+    for t, v in enumerate((10, 9, 8, 5, 2, 1, 0)):            # spent where the player chooses: never a reason to leave
+        k.see(t, pp(v), screen="choice")
+    assert k.advice() is None
+    for t, v in enumerate((20, 14, 9, 1), start=10):          # taken while the game plays on, by different amounts
+        k.see(t, {**hp(v), **pp(0)}, screen="text")
+    assert k.advice()["number"] == "HP #/#"
+    k.see(20, None, moved=True)                               # a blackout: HP came down last, the PP long before
+    assert k.tracks["HP #/#"].fatal is True and k.tracks["TYPE/ NORMAL #/# (2)"].fatal is None
 
 
 def test_exits_are_choices_that_come_back_to_the_world_soonest():
