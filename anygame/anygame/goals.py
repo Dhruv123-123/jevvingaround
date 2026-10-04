@@ -206,6 +206,8 @@ class GoalBook:
             self._set(dict(EXPLORE), tick, values)
         return self.quest()
 
+    need_met: dict[str, Any] | None = None
+
     def impose(self, goal: dict[str, Any], tick: int, values: dict[str, Any], source: str = "upkeep", world=None) -> bool:
         """A goal from the run itself, not the writer (a number to get back up, anygame/upkeep.py): set unless the
         current goal already checks the same condition. Returns whether it was set."""
@@ -222,6 +224,8 @@ class GoalBook:
 
     def _close(self, g: dict[str, Any], outcome: str, tick: int) -> None:
         g["outcome"], g["closed_tick"] = outcome, tick
+        if outcome == "reached" and g.get("source") == "upkeep":
+            self.need_met = g        # the loop holds that number's advice until it is read again
         self.ended = outcome
         self.memory.event(tick, "goal " + outcome, id=g["id"], instruction=g["instruction"])
         self.current = None
@@ -295,7 +299,12 @@ class GoalBook:
                 return entry
             goal = a.get("goal") or {}
             if need is not None:
-                goal = {**goal, "done": need["done"]}      # how is the writer's; what counts as done is the run's
+                # how is the writer's; done is the run's number, or what the writer says shows it refilled (a rest
+                # given): the number may not be on screen again for a long time (health off the battle screen)
+                alt = goal.get("done")
+                ok_alt = alt and alt != need["done"] and "number" not in alt and \
+                    check(alt, places, numbers=set(values.get("numbers") or {})) is None
+                goal = {**goal, "done": {"any": [need["done"], alt]} if ok_alt else need["done"]}
             err = None if goal.get("instruction") else "no instruction"
             err = err or check(goal.get("done"), places, numbers=set(values.get("numbers") or {}) | _need_numbers(need)) or check_target(goal.get("target"), places, len(self.memory.dialogue))
             if err:

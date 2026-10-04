@@ -534,8 +534,11 @@ def test_upkeep_need_without_a_refill_place_asks_the_writer_how():
     assert gb.impose(goal, 5, walk)
     assert chat.seen[0]["need"]["done"] == goal["done"]
     g = gb.current
-    assert g["instruction"] == "Talk to Mom at home" and g["done"] == goal["done"] and g["target"] == {"place": 3}
+    assert g["instruction"] == "Talk to Mom at home" and g["target"] == {"place": 3}
+    assert g["done"] == {"any": [goal["done"], {"talks": 1}]}     # the rest given counts: HP is off screen
     assert g["source"] == "upkeep" and not gb.impose(goal, 6, walk)
+    gb._close(g, "reached", 9)
+    assert gb.need_met is g
 
 
 def test_upkeep_tracks_come_back_from_a_checkpoint_with_their_sets(tmp_path):
