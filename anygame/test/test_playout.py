@@ -86,3 +86,20 @@ def test_a_screen_where_neither_a_nor_a_direction_does_anything_waits():
     g.press = lambda k, hold=4, after=10: setattr(g, "frames", g.frames + hold + after)    # every button ignored
     r = play_out(g, [], lambda img: "PAUSE START: exit", step=5, max_frames=600)
     assert r["end"] == "waits" and r["frames"] < 600 and "waits for another button" in describe(r)
+
+
+def test_a_screen_that_never_stands_still_ends_busy_when_asked():
+    g = Game()
+    g.PAGES = []
+    g.screen = lambda: np.full((144, 160, 3), (g.frames * 7) % 250, np.uint8)        # moving every frame
+    g.press = lambda k, hold=4, after=10: setattr(g, "frames", g.frames + hold + after)
+    r = play_out(g, [], lambda img: "", step=5, max_frames=1200, restless=300)
+    assert r["end"] == "busy" and r["frames"] < 400 and "keeps moving" in describe(r)
+    assert play_out(g, [], lambda img: "", step=5, max_frames=600)["end"] == "cap"   # off by default
+
+
+def test_small_is_the_grey_screen_at_native_size():
+    from anygame.playout import _small
+    img = np.random.default_rng(0).integers(0, 255, (432, 480, 3), dtype=np.uint8)
+    want = img.mean(axis=2)[::3, ::3].astype(np.int16)
+    assert _small(img).shape == (144, 160) and np.array_equal(_small(img), want)
