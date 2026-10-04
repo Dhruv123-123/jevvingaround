@@ -658,3 +658,26 @@ def test_a_step_that_went_off_and_then_another_map_is_learned_as_a_door():
     w._moves, w._walking = ["down"], True
     w.read({"map": 11, "x": 13, "y": 7, "screen": "walk"})
     assert w.plans["explore_up"][:2] != ["up", "up"]      # explores round the door, not into it
+
+
+def test_with_nothing_left_to_explore_a_known_door_out_is_offered():
+    from anygame.perceive.world import WorldTracker
+    w = WorldTracker({"x": "x", "y": "y", "map": "map"})
+    w.read({"map": 5, "x": 1, "y": 1, "screen": "walk"})
+    room = w.here[0]
+    for x in range(0, 3):
+        for y in range(0, 3):
+            w.visit((room, x, y))
+    # block every way out of the 3x3 room except the mat at (1,2) going down, which is a known door
+    from anygame.perceive.world import DIRS
+    for x in range(3):
+        for y in range(3):
+            for d, (dx, dy) in DIRS.items():
+                nx, ny = x + dx, y + dy
+                if not (0 <= nx < 3 and 0 <= ny < 3) and (x, y, d) != (1, 2, "down"):
+                    w.blocked[(room, x, y, d)] = [3, 0]
+    w.inspected.update(w.blocked)                        # every wall pressed A at already
+    w.warps[(room, 1, 2, "down")] = ("town", 4, 4)
+    w.visited.setdefault("town", set()).update({(i, j) for i in range(10) for j in range(10)})
+    opts, plans = w.options((room, 1, 1), None)
+    assert "leave_1" in plans and plans["leave_1"][-1] == "down" and "wander" not in plans

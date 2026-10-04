@@ -379,6 +379,14 @@ class WorldTracker:
             what = "open floor on %d sides: likely a person or an object" % open_sides if open_sides >= 2 else "probably a wall"
             opts[lab] = f"walk to the blocked tile {COMPASS[k[3]]} of ({k[1]},{k[2]}), {where}, and press A at it ({what}; never inspected; {len(cands)} left on this map)"
         if not opts:
+            # nothing new reachable here: leave by a known door (nearest first), since what is left to find is elsewhere
+            outs = sorted(((tree[(k[0], k[1], k[2])][2], k, w) for k, w in self.warps.items()
+                           if k[0] == here[0] and w[0] != here[0] and (k[0], k[1], k[2]) in tree), key=lambda x: (x[0], str(x[1])))
+            for i, (_, k, w) in enumerate(outs[:2]):
+                p = self.path_to(tree, (k[0], k[1], k[2])) + [k[3]]
+                plans[f"leave_{i + 1}"] = p
+                opts[f"leave_{i + 1}"] = f"nothing new is left here: walk {len(p)} steps out through the door at ({k[1]},{k[2]}) to map {w[0]}"
+        if not opts:
             # nothing new reachable: blocks seen once may have been people who moved; wander and look again
             d = list(DIRS)[(self.steps // 3) % 4]
             plans["wander"] = [d] * 3
