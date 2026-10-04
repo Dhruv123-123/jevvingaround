@@ -150,7 +150,18 @@ class PyBoyDevice(Device):
         # only the last frame is drawn: the screen is always current, and the frames before it cost no rendering
         if n > 0:
             self._at = None                         # the game moved on from any snapshot
-        if n > 1:
+        if n > 1 and self.discoverer is not None:
+            # a fade between drawn frames is a map change discovery would miss (stairs that move the player one step):
+            # the frames are run one by one and the first dark one (LCD off, or a palette of one shade) is shown to
+            # the discoverer as the blank frame it would have seen drawn. The registers are the console's, not the game's
+            from ..discover import ram
+            seen = False
+            for _ in range(n - 1):
+                self._pb.tick(1, False)
+                if not seen and self._dark():
+                    seen = True
+                    self.discoverer.frame(ram(self._pb.memory), True)
+        elif n > 1:
             self._pb.tick(n - 1, False)
         if n > 0:
             self._pb.tick(1, True)
@@ -158,6 +169,12 @@ class PyBoyDevice(Device):
             if self.discoverer is not None:
                 from ..discover import ram
                 self.discoverer.frame(ram(self._pb.memory), bool(self._pb.screen.ndarray[:, :, :3].std() < 3))
+
+    def _dark(self) -> bool:
+        """The console shows nothing: the LCD is off, or the background palette maps every shade to one (a fade's
+        last step). Game Boy registers; a Color game fades in its colour palettes, which only the drawn frame shows."""
+        m = self._pb.memory
+        return not (m[0xFF40] & 0x80) or m[0xFF47] in (0x00, 0xFF)
 
     def wait(self, frames: int) -> None:
         self._tick(int(frames), render=False)
