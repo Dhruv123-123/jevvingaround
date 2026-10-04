@@ -119,6 +119,33 @@ def fresh_process_state() -> None:
         pass
 
 
+class _ExploreMeter:
+    """Counts the agent's menu explores and their wall time (measurement only: the call is passed through unchanged)."""
+    def __init__(self):
+        self.n, self.s = 0, 0.0
+        try:
+            from anygame.perceive.menu import MenuTracker
+        except ImportError:
+            self.cls = None
+            return
+        self.cls, self.orig = MenuTracker, MenuTracker.explore
+        meter = self
+
+        def explore(tracker, *a, **k):
+            t0 = time.time()
+            try:
+                return meter.orig(tracker, *a, **k)
+            finally:
+                meter.n += 1
+                meter.s += time.time() - t0
+        MenuTracker.explore = explore
+
+    def close(self) -> dict[str, Any]:
+        if self.cls is not None:
+            self.cls.explore = self.orig
+        return {"explores": self.n, "explore_s": round(self.s, 1)}
+
+
 def _book_size(path: Path) -> int:
     try:
         return len(json.loads(path.read_text()).get("labels") or {})
@@ -211,6 +238,7 @@ def run_one(suite: dict[str, Any], gid: str, decider: str, seed: int, out: Path,
         azure_log.unlink(missing_ok=True)
         os.environ["ANYGAME_USAGE_LOG"] = str(azure_log)     # this run's chat-model calls, priced, in a ledger of its own
         agent = Agent(pack, device, sensor, None, background=False)
+        meter = _ExploreMeter()
         gb = getattr(agent, "goalbook", None)
         if gb is not None and goals and os.environ.get("ANYGAME_LLM_BASE"):
             # a pack that writes goals from dialogue gets the chat model (Azure, ANYGAME_LLM_*), exactly as `anygame play`
@@ -269,7 +297,7 @@ def run_one(suite: dict[str, Any], gid: str, decider: str, seed: int, out: Path,
                    steps=steps, presses=presses, frames=device.frames, wall_s=round(time.perf_counter() - t0, 1),
                    decider_calls=calls, cost_usd=round(agent.total_cost, 6), sensor_errors=agent.errors,
                    goal_writer=(gb.report() if gb is not None and gb.chat is not None else None),
-                   azure=azure_spend(azure_log),
+                   azure=azure_spend(azure_log), **meter.close(),
                    distinct_screens=len(screens), unchanged_screen_rate=round(noop / max(1, steps), 3),
                    stalled_before=(nxt or {}).get("desc"),
                    frames_since_progress=device.frames - (last["frame"] if last else 0))
