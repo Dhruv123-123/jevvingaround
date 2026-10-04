@@ -89,6 +89,24 @@ def test_a_door_taken_again_leads_where_it_did_whatever_the_name_reads_and_the_w
     assert b.route(town, house)["dir"] == "up"
 
 
+def test_a_name_switch_on_the_same_tile_is_not_a_door():
+    """Long-horizon's Blue's house stall (tick 45,700): the name read switched while the player stood at (3, 7), the
+    book recorded a door from place 2 at (3, 7) to place 82 at (3, 7), and routes and the frontier went back in."""
+    b = PlaceBook()
+    b.see("T", 5, 5)
+    b.see("T", 5, 4, moves=["up"], walking=True)
+    house = b.see("H", 3, 7, moves=["up"], walking=True)              # a real door: the tile changes
+    b.see("H", 3, 6, moves=["up"], walking=True)
+    b.see("H", 3, 7, moves=["down"], walking=True)
+    b.see("NOISE", 3, 7, moves=["down"], walking=True)                # the name switches; the player stays put
+    assert all(a[1:] != v[1:3] for a, v in b.doors.items())
+    assert len(b.doors) == 2                                          # only the real door, both ways
+    # a book saved with such a door drops it on load
+    d = b.to_dict()
+    d["doors"].append([[house, 3, 7], [99, 3, 7, "up"]])
+    assert len(PlaceBook.from_dict(d).doors) == 2
+
+
 def test_joins_route_both_ways():
     b = PlaceBook()
     town = b.see("A", 10, 0)
