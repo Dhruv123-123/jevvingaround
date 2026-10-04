@@ -1,6 +1,7 @@
 """The play loop: frame → reads → state → Jev → action → device, at tick_hz. One audit line per tick."""
 from __future__ import annotations
 import hashlib
+import re
 import sys
 import json
 import os
@@ -493,6 +494,10 @@ class Agent:
             if self.goalbook is not None:
                 self.quest = self.goalbook.update(self.tick, placed, w, getattr(self.device, "frames", None))
                 adv = self.keep.advice() if getattr(self, "keep", None) is not None else None
+                # until upkeep tells health from other counters: a number that only ever fell by one at a time (a
+                # move's uses left) is not health, and its advice does not displace the goal
+                if adv and (self.keep.tracks.get(adv["number"]) is None or self.keep.tracks[adv["number"]].biggest_drop < 2):
+                    adv = None
                 for tr in self.worlds.values():
                     if hasattr(tr, "leave"):
                         tr.leave = bool(adv and adv.get("leave"))
@@ -510,7 +515,11 @@ class Agent:
                     if pr is not None:
                         self.worlds[rid].screen_kind = lambda pr=pr: self._probe(pr)
                 self.trackers[rid] = self.worlds[rid]
-                if r.get("when") and not self._task_ok(r["when"], values):
+                # a screen with no word on it is not a menu to explore (a platformer's play screen answers the probe
+                # like a choice: a direction changes it, no position is known): exploring it costs seconds a step
+                wordless = int(r.get("needs_words", 0)) > 0 and values.get("screen") == "choice" and \
+                    len(re.findall(r"[A-Za-z]{2,}", str(values.get(r.get("text_read", "text")) or ""))) < int(r["needs_words"])
+                if (r.get("when") and not self._task_ok(r["when"], values)) or wordless:
                     self.worlds[rid].see(self.device.screen(), values.get("text"))   # where a choice may lead back to
                     values[rid] = None
                     continue
