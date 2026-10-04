@@ -268,3 +268,29 @@ Re-ranked, by what each blocks between here and Brock:
 For the held-out set the ranking is unchanged until the re-score lands. Wall time ended 100% of the top-pick runs at 18
 presses a minute. The speed work since then (PR #21, 2.6x on Tobu) is what that re-score measures. Then come movement
 options from `motion.py` (Tobu's jump, Renegade's steering), which no decider offers yet.
+
+### The font's cold start (from the held-out re-score after the speed work)
+
+Each held-out run starts with an empty glyph book. On Tobu Tobu Girl and Renegade Rush the labeller hit its cap of
+40 calls, and the calls add up to 470–540 s. `scripts/glyph_coldstart.py` replays a cold start with a finished book
+answering in place of the model, so labelling policies compare without spending anything:
+
+| game | calls before (6 waiting lines start a call) | scenery settled in one reading | + 24 waiting lines start a call |
+|---|---|---|---|
+| Pokemon Red | 25 | 24 | 21 |
+| Renegade Rush | 27 (95% of text cells read) | 26 (97%) | 25 (97%) |
+| GBHack | 13 | 13 | 12 |
+
+What this shows:
+- **Fewer, larger batches do not cut much.** The number of calls follows how new text keeps appearing over play,
+  not how lines are grouped into calls.
+- **Picking lines with the most new glyphs first makes it worse** (Pokemon 25 to 38 calls). A glyph is trusted when
+  a line agrees with glyphs already known, and that pick leaves each line with fewer known glyphs.
+- **What does help is small.** A line the model reads as entirely not-text now settles its glyphs in one reading
+  (`scenery_once`). That is most of Tobu Tobu Girl, whose two-colour scenery tiles were 162 of the 164 glyphs it
+  learned.
+
+The labeller also runs in a background thread, so its seconds overlap play rather than add to it. Whether it costs
+wall time at all is what the held-out run with a kept book (`book-top`) measures. The lever that would matter is a
+book kept per game (Dhruv's decision card), or a deliberate first pass over the first text screen only. No measured
+policy turns a cold start into seconds.

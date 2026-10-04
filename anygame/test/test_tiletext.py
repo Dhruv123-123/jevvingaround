@@ -116,3 +116,13 @@ def test_a_second_glyph_for_a_character_already_known_needs_two_lines():
     keys3 = cells(screen({13: "HOTELS"}))[1][13][1:7]
     b.vote(keys3, "HOTELS", "chat")
     assert b.labels[keys3[5]] == "S"                      # a character no glyph has yet: one vouched line is enough
+
+
+def test_a_line_read_as_all_not_text_settles_its_glyphs_at_once():
+    from anygame.perceive.tiletext import GlyphBook
+    b = GlyphBook()
+    assert b.vote(["a", "b", None, "c"], "## #", "chat")
+    assert b.labels == {"a": "#", "b": "#", "c": "#"}
+    b2 = GlyphBook()
+    b2.vote(["a", "b", None, "c"], "Hi !", "chat")
+    assert b2.labels == {}                      # a line of characters still needs a second reading

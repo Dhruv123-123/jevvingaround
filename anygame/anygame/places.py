@@ -63,6 +63,7 @@ class PlaceBook:
         self._last: tuple[Hashable, int, int] | None = None
         self.reads = 0
         self._walked = -10
+        self._xy: tuple[int, int] = (0, 0)
         self._jumped: tuple[int, int, int] | None = None
         self.events: list[dict[str, Any]] = []  # joins, doors and renames, for the log
 
@@ -76,7 +77,7 @@ class PlaceBook:
         if self.here is not None and to is not self.here:
             self.here.left_at = self.reads
         self.events.append({"read": self.reads, "kind": kind, "from": None if self.here is None else self.here.id,
-                            "to": to.id, **why})
+                            "to": to.id, "at": list(self._xy), **why})
         self.here = to
 
     # ---- one read ---------------------------------------------------------------------------------------
@@ -87,6 +88,7 @@ class PlaceBook:
         fade or a blank between the reads), which makes a signature change a door even on a one-tile step (stairs);
         `idle`: nothing was pressed since the last read (a wait), so a new name now belongs to the walk before it."""
         self.reads += 1
+        self._xy = (x, y)
         last = self._last
         self._last = (sig, x, y)
         if self.here is None or last is None:
