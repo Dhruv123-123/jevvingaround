@@ -522,3 +522,21 @@ Go-back checks:
   never checked as reached, because the lab came back under a new name.
 
 Logs with the grader's map: `longhorizon/pk-jev-poweron/lab-door-loop/gaps-{s8600,poweron}-0cab0e1-full.jsonl`.
+
+**Re-measured on the lab-door fix (ad08a46).** These are the same live stand-in runs as for 0cab0e1.
+
+| run | returns known again | wrong place (mixed) | maps sharing one signature |
+|---|---|---|---|
+| fresh power-on, 1,500 steps | 4 of 7 (57%; 43% without door memory) | 1.4% (was 7.9%) | Red's 1F and 2F, only a few reads each |
+| from the 8600 save, 1,500 steps | 130 of 139 (94%) | 35.6% (was 18.1%) | 0: Oak's lab 310, Red's 1F 111, Pallet 69, Blue's house 38; 37: Pallet 514, Red's 2F 80 |
+
+- **Power-on is clean now.** It has only 7 returns, because the stand-in stayed in the lab for most of the run.
+- **The save run is worse.** This time the stand-in stayed in town and never reached Route 1. Mixing per 300 steps
+  was 2%, 35%, 50%, 11% and 4%.
+- **Go-back:**
+  - From the save, Pallet back to Oak's lab: the player arrived within 10 to 13 steps, before and after. The goal
+    never checked as reached, because the "lab" place the book held was mostly Pallet reads (136 Pallet, 3 lab).
+  - From power-on, Pallet to Red's 1F: before arrived in 68 steps, but the goal was not reached. After, there was no
+    arrival.
+
+Logs: `longhorizon/pk-jev-poweron/lab-door-loop/gaps-{s8600,poweron}-ad08a46-full.jsonl`.
