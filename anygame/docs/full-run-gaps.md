@@ -183,3 +183,10 @@ Azure goal and glyph calls (seconds, rate-limited; the glyph labeller needs a fe
 `anygame/perceive/tiletext.py`, a new read kind `tiletext` (no device, scanner, probe, grader or runner change).
 Landed: `docs/tiletext.md`. On Pokemon it reads 98.9% of learned cells right, 1.00 similarity to the true text late
 in a 400-press run against OCR's 0.93, at 0.75 ms a read instead of 217 ms.
+
+## Built second: gap 2, choices played out to the next decision
+
+`anygame/playout.py`, see `docs/playout.md`. In Pokemon's rival battle, TACKLE now reads "SQUIRTLE used TACKLE!
+Enemy BULBASAUR used TACKLE!" then back at the menu, and RUN reads "No! There's no running from a trainer battle!".
+In Aevilia, a character pick plays out through the narrator to "Use the d-pad to move around.". The call site is
+`menu.py`'s `_outcome` (the long-horizon thread's).
