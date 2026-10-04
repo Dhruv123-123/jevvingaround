@@ -64,7 +64,8 @@ class RunMemory:
                     e["text"] = text           # the same line, typed out further or read better
                 return None
         last_pos = next((d for d in reversed(self.dialogue) if d.get("x") is not None), None)
-        e = {"tick": tick, "frames": frames, "map": m, "x": x, "y": y, "tile": list(tile) if tile else None, "text": text}
+        e = {"tick": tick, "frames": frames, "map": m, "x": x, "y": y, "tile": list(tile) if tile else None, "text": text,
+             "screen": values.get("screen")}
         if x is None and last_pos is not None:
             e.update({"map": last_pos["map"], "x": last_pos["x"], "y": last_pos["y"], "tile": last_pos.get("tile"), "pos": "last known"})
         self.dialogue.append(e)

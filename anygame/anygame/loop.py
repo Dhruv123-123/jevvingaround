@@ -478,7 +478,7 @@ class Agent:
             self.memory.observe(self.tick, getattr(self.device, "frames", None), placed,
                                 values.get(self.base.raw.get("dialogue_read", "text")), (t[1], t[2]) if t else None)
             if self.goalbook is not None:
-                self.quest = self.goalbook.update(self.tick, placed, w)
+                self.quest = self.goalbook.update(self.tick, placed, w, getattr(self.device, "frames", None))
         for rid, r in pack.reads.items():
             if r.get("kind") == "menu":
                 if rid not in self.worlds:

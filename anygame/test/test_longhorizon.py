@@ -367,3 +367,19 @@ def test_a_jump_that_does_not_happen_again_is_forgotten():
     w.learn((0, 3, 3), "up", (0, 9, 9))
     w.learn((0, 3, 3), "up", (0, 3, 3))           # bumped: not a jump either
     assert (0, 3, 3, "up") not in w.warps
+
+
+def test_the_writer_is_not_asked_again_without_news():
+    """A goal reached with nothing new said since: the generic goal follows, for free. A new line asks again."""
+    m = RunMemory()
+    chat = FakeChat([json.dumps({"goal": {"instruction": "leave the house", "done": {"new_place": True}}}),
+                     json.dumps({"goal": {"instruction": "find the old man", "done": {"talks": 1}}})])
+    gb = GoalBook(m, chat, {"min_gap": 1})
+    walk = {"map": 1, "x": 0, "y": 0, "screen": "walk"}
+    m.observe(1, 0, {**walk, "screen": "text"}, "Mom: go outside and play!", (0, 0))
+    assert gb.update(2, walk)["instruction"] == "leave the house"
+    m.observe(3, 0, {**walk, "map": 2}, None)
+    q = gb.update(4, {**walk, "map": 2})
+    assert q["id"].startswith("explore") and gb.calls == 1
+    m.observe(5, 0, {**walk, "map": 2, "screen": "text"}, "An old man waits by the river north of town", (0, 0))
+    assert gb.update(6, {**walk, "map": 2})["instruction"] == "find the old man" and gb.calls == 2
