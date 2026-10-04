@@ -31,6 +31,14 @@ class LiveWriter:
     def __init__(self, out: str, every: int = 10, keep_frames: bool = True):
         self.dir = Path(out)
         self.dir.mkdir(parents=True, exist_ok=True)
+        # an earlier run's frames and status move to previous/<when it ended>, so ticks of two runs never mix
+        old = [p for p in ("frames", "status.json", "status.jsonl", "frame.png") if (self.dir / p).exists()]
+        if old:
+            when = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime((self.dir / old[0]).stat().st_mtime))
+            dest = self.dir / "previous" / when
+            dest.mkdir(parents=True, exist_ok=True)
+            for p in old:
+                os.replace(self.dir / p, dest / p)
         self.every = max(1, int(every))
         self.keep = keep_frames
         self.recent: deque[dict[str, Any]] = deque(maxlen=12)
