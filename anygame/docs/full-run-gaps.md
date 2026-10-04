@@ -224,3 +224,47 @@ Tobu Tobu Girl B is a jump and A with a direction a dash; on Renegade Rush left 
 would have had anyway: the same goal kept, rewritten as itself, or the generic one. The gate asks only on text the
 run has not seen before, when a goal ends after news was kept over, or once after a give-up, from a budget that grows
 with game time. Replayed on two Pokemon runs, it makes 13-14 calls where 34 were made.
+
+## Second pass (2026-10-04): what stands between the agent and the first badge
+
+All seven gaps above are built. This pass re-reads the Pokemon Jev run from power-on to Route 1
+(`longhorizon/pk-jev-route1/`, three parts, 2,476 ticks). It also re-scores every logged run's places against the grader's map,
+using `scripts/place_check.py`. The held-out re-score after the speed work has not landed yet. The held-out lines below use the last table in
+`heldout-score.md`.
+
+What the Route 1 run shows:
+
+- **The world memory has two places for the whole game so far.** Red's house (two floors), Pallet Town, Oak's lab
+  and Route 1 are 5 maps. The run's world memory names 2 places, and in part 3, 27% of ticks are spent in a place that is
+  mostly another map. Two things cause it:
+  - Pallet Town and Route 1 join without a door or a fade. The map signature does not change at the join, and the
+    position jumps from row 0 to row 35. The world records it as a warp inside one place, so Route 1's tiles land on
+    top of Pallet Town's.
+  - When the signature does change (to Route 1's map byte, five steps in), the change came on a one-tile step. It is
+    made a permanent alias of Pallet Town.
+
+  So a "new place" goal cannot fire on Route 1 and will not fire at Viridian City. The walls and visited tiles of two
+  maps are mixed together, and "go back to the lab" has no place to point at.
+- **The run blacked out once, and was heading for a second.** The report's "walked home to Red's house" at the end of
+  part 2 was a blackout: "RED is out of useable POKéMON", "RED blacked out". Bulbasaur fought every wild battle in
+  the grass with FIGHT and never ran or healed. In part 3 it was at 1 HP of 24 when the run stopped. The game puts the
+  player back home, so each blackout undoes the walk.
+- **Route 1 is mostly battles.** 88% of Route 1 ticks were battle screens. In 870 Route 1 ticks the best the run did
+  was 13 rows of Route 1's 36.
+- **The goal writer ran out.** The 60-call cap was hit at tick 1744, before Route 1. Every goal after that was the
+  generic explore with no direction, so the walk drifted sideways. Gap 7's gate is the fix, once it is wired.
+- **The rival was lost** with FIGHT/TACKLE on every turn. Brock needs the better move picked by its played-out effect.
+
+Re-ranked, by what each blocks between here and Brock:
+
+| rank | gap | blocks | mechanism (general) |
+|---|---|---|---|
+| **8** | **Place identity: joins without a door, and aliases that are guesses** | Viridian City (next milestone), the parcel's return to the lab, any "go back to" | a place book: a step that lands on the far side of the map is a join to a neighbour place, and an alias stays a guess until the tiles agree |
+| 9 | Upkeep: notice a number falling (HP), leave the fight (a choice whose played-out text ends it), and go back to where it last refilled | every route with grass; Viridian Forest; Brock | numbers (gap 3) + places (8) + played-out choices (gap 2) |
+| 7 | Goal budget: wire the gate (built) | everything after tick ~1,700 | `goalgate.py` call sites |
+| 10 | A heading: keep walking the way new places were found instead of the nearest unexplored tile | Route 1, Viridian Forest | world frontier, scored by direction |
+| 11 | A battle choice judged by what it does to the other side's number (the enemy's HP bar) | the rival, Brock | numbers + played-out choices |
+
+For the held-out set the ranking is unchanged until the re-score lands. Wall time ended 100% of the top-pick runs at 18
+presses a minute. The speed work since then (PR #21, 2.6x on Tobu) is what that re-score measures. Then come movement
+options from `motion.py` (Tobu's jump, Renegade's steering), which no decider offers yet.
