@@ -251,19 +251,29 @@ def test_audit_agree_and_played_out_verdicts():
 
 
 # ---- places and checkpoints on the grid world --------------------------------------------------------------
-def test_a_signature_change_without_a_jump_is_the_same_place():
+def test_places_come_from_the_place_book_and_survive_a_checkpoint():
+    """Tiles are keyed by place id (anygame/places.py): a new name while standing is the same place, a jump with a new
+    name is a door, a walk off the far side is a join; a merge moves what was learned to the surviving id."""
     from anygame.perceive.world import WorldTracker
     w = WorldTracker({"x": "x", "y": "y", "map": "map"})
-    assert w.tile_of({"map": 11, "x": 3, "y": 3}) == (11, 3, 3)
-    assert w.tile_of({"map": 99, "x": 3, "y": 4}) == (11, 3, 4)       # a byte of the signature changed mid-dialogue
-    assert w.tile_of({"map": 42, "x": 9, "y": 1}) == (42, 9, 1)       # the position jumped with it: a door
-    assert w.tile_of({"map": 99, "x": 9, "y": 2}) == (11, 9, 2)       # an alias stays one for the run
-    assert w.tile_of({"map": 7, "x": 9, "y": 2}, stepping=True) == (7, 9, 2)   # stairs onto the same tile, while walking
-    assert w.tile_of({"map": 8, "x": 9, "y": 3}, stepping=True) == (7, 9, 3)   # one plain step: scenery, not a door
+    town = w.tile_of({"map": 11, "x": 3, "y": 3})[0]
+    assert w.tile_of({"map": 99, "x": 3, "y": 3})[0] == town          # a byte of the signature changed mid-dialogue
+    w._moves, w._walking = ["up"], True
+    assert w.tile_of({"map": 42, "x": 9, "y": 9})[0] != town          # the position jumped with it: a door
+    w._moves, w._walking = ["down"], True
+    assert w.tile_of({"map": 11, "x": 3, "y": 4})[0] == town          # back out to the town
+    w._moves, w._walking = ["up"] * 4, True
+    w.tile_of({"map": 11, "x": 3, "y": 0})
+    w._moves, w._walking = ["up"], True
+    route = w.tile_of({"map": 11, "x": 3, "y": 35})[0]                # off the top, onto the bottom row: a join
+    assert route != town
+    w.visit((route, 3, 35))
+    w._rekey(route, town)
+    assert (3, 35) in w.visited[town] and route not in w.visited
     d = w.dump()
     w2 = WorldTracker({"x": "x", "y": "y", "map": "map"})
     w2.load(json.loads(json.dumps(d)))
-    assert w2.alias == {99: 11, 8: 7}
+    assert w2.book.to_dict()["joins"] == w.book.to_dict()["joins"]
 
 
 def test_checkpoint_resumes_the_run(tmp_path):

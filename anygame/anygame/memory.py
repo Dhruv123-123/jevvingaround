@@ -123,6 +123,9 @@ def load_checkpoint(agent, path: str) -> dict[str, Any]:
     if os.path.exists(st) and hasattr(dev, "load_state"):
         dev.load_state(st)
     disc = getattr(dev, "discoverer", None)
+    if os.environ.get("ANYGAME_REDISCOVER"):
+        # what the game's memory means is found again from here: the world memory keyed by the old reading goes too
+        d = {**d, "discovered": None, "worlds": {}}
     if disc is not None and d.get("discovered"):
         disc.load(d["discovered"])
     agent.tick = int(d.get("tick", 0))
