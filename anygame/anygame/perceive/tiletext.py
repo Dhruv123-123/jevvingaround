@@ -382,6 +382,42 @@ def reader(r: dict[str, Any], pack_dir: str | None = None) -> TileText:
     return t
 
 
+def boxes(img: np.ndarray, r: dict[str, Any], cold: int = 30) -> list[tuple[float, float, float, float, str]] | None:
+    """(x0, y0, x1, y1, text) for every run of known text on a screen, read from its cells: what a menu reader needs
+    (the entries and where they sit), at a fraction of a millisecond, where OCR takes a fifth of a second.
+
+    None only when most of the screen's text is unknown while the book is cold, with fewer than `cold` characters
+    learned: then the caller reads it by OCR meanwhile. A game with a small font (PostBot's book has fewer) is read
+    from its cells whenever the screen's text is known. Once the font is known, cells that are not (a platformer's scenery,
+    an animation frame) are skipped rather than sending the whole screen to OCR: those screens are where OCR spent
+    40% of a held-out run (Tobu Tobu Girl) and found no words."""
+    t = reader(r, None)
+    _, st = t.read(img)                          # also queues unlearned lines for the labeller, as the text read does
+    if st["unknown"] > max(2, st["known"]) and sum(1 for v in t.book.labels.values() if v != NOT_TEXT) < cold:
+        return None
+    _, keys, kinds = cells(img, t.size, t.cell, t.offset)
+    s = max(1, img.shape[0] // t.size[1])
+    c, (ox, oy) = t.cell * s, t.offset
+    out = []
+    for rr, row in enumerate(keys):
+        run: list[tuple[int, str]] = []
+        for q, k in enumerate(row + [None]):
+            kind = kinds[rr, q] if q < len(row) else 2
+            lab = t.book.labels.get(k) if kind == 1 else None
+            if kind == 1 and lab not in (None, NOT_TEXT):
+                run.append((q, lab))
+                continue
+            if kind == 0 and run and q + 1 < len(row) and kinds[rr, q + 1] == 1:
+                run.append((q, " "))          # one blank cell between words
+                continue
+            text = "".join(ch for _, ch in run).strip()
+            if len(text) >= 2:
+                x0, x1 = ox * s + run[0][0] * c, ox * s + (run[-1][0] + 1) * c
+                out.append((float(x0), float(oy * s + rr * c), float(x1), float(oy * s + (rr + 1) * c), text))
+            run = []
+    return out
+
+
 def read(frame: np.ndarray, r: dict[str, Any], pack_dir: str | None = None, rect=None, zone=None) -> str:
     t = reader(r, pack_dir)
     text, st = t.read(frame)
