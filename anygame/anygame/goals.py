@@ -14,6 +14,7 @@ Conditions (all over discovered reads and the run memory, nothing game-specific)
     {said: [word, ...]}          the game says a line containing one of these words after the goal was set
     {talks: n}                   n new lines of dialogue after the goal was set (talk to people)
     {screen: choice}             a menu or a choice is on screen
+    {number: {name, at_least|at_most|share_at_least|share_at_most}}   a number the game prints (anygame/numbers.py)
     {any: [<condition>, ...]}    one of them
 
 Targets (hints for the navigator, optional): {toward: up|down|left|right}, {place: <signature>} (walk the known
@@ -53,6 +54,8 @@ Conditions (pick the one that checks the outcome the game asked for):
   {"said": ["word", ...]}   the game says a line containing one of these words (a name, an item, "received")
   {"talks": <n>}            hear n new lines of dialogue (talk to people here)
   {"screen": "choice"}      open a menu or reach a choice
+  {"number": {"name": <a name from the numbers list>, "at_least" | "at_most" | "share_at_least" | "share_at_most": <n>}}
+                            a number the game shows reaches a value (HP back to 80%: share_at_least 0.8; a level)
   {"any": [<condition>, ...]}
 Targets (where to head, or null): {"toward": "up"|"down"|"left"|"right"} (up is north),
   {"place": <id>} (a known place), {"line": <index of a dialogue line>} (back to where it was said).
@@ -61,7 +64,7 @@ Prefer what the dialogue asks for (someone told you to go somewhere, find someon
 asked, explore: a new place, or talk to people. Do not repeat a goal that was just given up unless something changed."""
 
 
-def check(cond: Any, places: set[str] | None = None, depth: int = 0) -> str | None:
+def check(cond: Any, places: set[str] | None = None, depth: int = 0, numbers: set[str] | None = None) -> str | None:
     """None when the condition is well formed, else what is wrong."""
     if not isinstance(cond, dict) or len(cond) != 1 or depth > 2:
         return f"a condition is one key: {cond!r}"
@@ -77,11 +80,14 @@ def check(cond: Any, places: set[str] | None = None, depth: int = 0) -> str | No
         return None if isinstance(v, int) and 1 <= v <= 20 else "talks takes 1..20"
     if k == "screen":
         return None if v in ("choice", "text", "walk") else "screen takes choice|text|walk"
+    if k == "number":
+        from .numbers import check as number_check
+        return number_check({"number": v}, numbers)
     if k == "any":
         if not isinstance(v, list) or not v:
             return "any takes a list"
         for c in v:
-            e = check(c, places, depth + 1)
+            e = check(c, places, depth + 1, numbers)
             if e:
                 return e
         return None
@@ -146,6 +152,9 @@ class GoalBook:
             return len(self.memory.dialogue) - g["line_at_set"] >= int(v)
         if k == "screen":
             return values.get("screen") == v
+        if k == "number":
+            from .numbers import holds
+            return holds({"number": v}, values.get("numbers") or {})
         if k == "any":
             return any(self._holds(c, g, values) for c in v)
         return False
@@ -214,6 +223,7 @@ class GoalBook:
             places.append({"id": _as_map(k), "first_seen_tick": p["first_tick"], "times_entered": p["entered"], "tiles_walked": tiles, "doors_found": doors})
         return {
             "now": {"place": values.get("map"), "screen": values.get("screen")},
+            "numbers": {n: (f"{v['value']}/{v['of']}" if v.get("of") else v["value"]) for n, v in (values.get("numbers") or {}).items()},
             "dialogue": [{"i": start + i, "place": d.get("map"), "tick": d["tick"], "text": d["text"][:200]} for i, d in enumerate(lines[start:])],
             "places": places,
             "goals_so_far": [{"instruction": g["instruction"], "done": g["done"], "outcome": g["outcome"] or "current"} for g in self.goals[-8:]],
@@ -240,7 +250,7 @@ class GoalBook:
                 return
             goal = a.get("goal") or {}
             err = None if goal.get("instruction") else "no instruction"
-            err = err or check(goal.get("done"), places) or check_target(goal.get("target"), places, len(self.memory.dialogue))
+            err = err or check(goal.get("done"), places, numbers=set(values.get("numbers") or {})) or check_target(goal.get("target"), places, len(self.memory.dialogue))
             if err:
                 self.failures += 1
                 entry["result"] = f"rejected: {err}"

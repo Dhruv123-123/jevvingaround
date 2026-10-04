@@ -44,6 +44,20 @@ def test_conditions_are_checked_before_a_goal_is_set():
     assert check_target({"line": 0}, set(), 1) is None and check_target({"line": 3}, set(), 1)
 
 
+def test_a_number_goal_checks_and_holds():
+    m = RunMemory()
+    chat = FakeChat([json.dumps({"goal": {"instruction": "heal up", "done": {"number": {"name": "SQUIRTLE #/#", "share_at_least": 0.8}}}})])
+    gb = GoalBook(m, chat)
+    low = {"map": 1, "x": 0, "y": 0, "screen": "walk", "numbers": {"SQUIRTLE #/#": {"value": 4, "of": 19, "share": 0.21}}}
+    assert gb.update(1, low)["instruction"] == "heal up"
+    assert chat.seen[0]["numbers"] == {"SQUIRTLE #/#": "4/19"}
+    gb.update(2, low)
+    assert gb.goals[0]["outcome"] is None
+    gb.update(3, {**low, "numbers": {"SQUIRTLE #/#": {"value": 19, "of": 19, "share": 1.0}}})
+    assert gb.goals[0]["outcome"] == "reached"
+    assert check({"number": {"name": "LEVEL", "at_least": 14}}, numbers={"SQUIRTLE #/#"})
+
+
 def test_goal_from_dialogue_then_reached_then_the_next_one():
     m = RunMemory()
     chat = FakeChat([
@@ -293,3 +307,15 @@ def test_the_generic_game_boy_pack_loads():
     from anygame.pack import load_pack
     pack = load_pack(os.path.join(os.path.dirname(__file__), "..", "packs", "gameboy"))
     assert pack.reads["text"]["kind"] == "tiletext" and pack.reads["menu"]["text"] == "tiletext"
+
+
+def test_a_walk_that_ends_back_on_its_tile_twice_is_dropped():
+    from anygame.perceive.world import WorldTracker
+    w = WorldTracker({"x": "x", "y": "y", "map": "map"})
+    v = {"map": 1, "x": 4, "y": 5}
+    lands = w.read(v)["landings"]
+    lab = next(k for k in lands if k.startswith("explore_"))
+    for _ in range(2):
+        w._pending = (w.here, tuple(w.plans[lab]))     # walked it (a script pushed the player back)...
+        lands = w.read(v)["landings"]                 # ...and the next decision is on the same tile
+    assert lab not in lands and lands
