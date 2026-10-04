@@ -494,10 +494,6 @@ class Agent:
             if self.goalbook is not None:
                 self.quest = self.goalbook.update(self.tick, placed, w, getattr(self.device, "frames", None))
                 adv = self.keep.advice() if getattr(self, "keep", None) is not None else None
-                # until upkeep tells health from other counters: a number that only ever fell by one at a time (a
-                # move's uses left) is not health, and its advice does not displace the goal
-                if adv and (self.keep.tracks.get(adv["number"]) is None or self.keep.tracks[adv["number"]].biggest_drop < 2):
-                    adv = None
                 for tr in self.worlds.values():
                     if hasattr(tr, "leave"):
                         tr.leave = bool(adv and adv.get("leave"))
