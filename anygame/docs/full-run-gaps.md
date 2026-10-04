@@ -481,3 +481,22 @@ A door known from another place on the very same tiles (`door_any`) raised retur
 76%, and on fresh runs from 80% to 84%. It also raised mixing by 0.3 to 0.7 points, so it is off.
 
 First-visit place naming is being built on the emulator side (05:45Z). These checks are re-run on its commit.
+
+**Re-measured on first-visit naming (90fb48a).**
+
+| run | returns known again | wrong place (mixed) | maps sharing one name |
+|---|---|---|---|
+| fresh power-on, 1,500 steps | 53 of 56 (95%; 91% without door memory) | 5.1% | Pallet and Blue's house (768); Oak's lab and Red's 2F (129174661) |
+| from the 8600 save, 1,500 steps | 124 of 126 (98%) | 37.5% | Red's 1F, Red's 2F and Pallet (512) |
+
+Returns look known because maps now share names. On the save, 37.5% of reads sit in a place that is mostly another
+map, against 15.1% on 17e108c.
+
+Go-back checks:
+- From power-on to Red's house 1F, before and after: the target place was the place the player stood in (Pallet
+  and the house merged), so there was nothing to measure.
+- From the save, Pallet back to Oak's lab: the player reached the lab after 268 steps before and 144 after. In
+  neither run did the goal check as reached, because the lab came back under a new name.
+
+These are findings for the emulator thread. Logs with the grader's map:
+`longhorizon/pk-jev-poweron/lab-door-loop/gaps-{s8600,poweron}-90fb48a-full.jsonl`.
