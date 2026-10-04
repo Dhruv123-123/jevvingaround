@@ -68,7 +68,9 @@ asked, explore: a new place, or talk to people. Do not repeat a goal that was ju
 earlier ticks may be about something already over (a battle that ended, a menu that closed).
 When the context has "need", the run itself needs that condition (a number to get back up) and does not know where
 or how: write the goal for it, with its "done" exactly as given, and an instruction and target saying how, from what
-the game has said and shown (someone who offered rest or help, a place it refilled before)."""
+the game has said and shown (someone who offered rest or help, a place it refilled before). Do not send the player
+to a place the game has not shown or named; when nothing says where, talk to the people in the nearest building
+(a family member, a nurse, an innkeeper often restore it)."""
 
 
 def check(cond: Any, places: set[str] | None = None, depth: int = 0, numbers: set[str] | None = None) -> str | None:
