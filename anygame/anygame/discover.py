@@ -722,9 +722,10 @@ class Discoverer:
             self._seen = np.unpackbits(z["_seen"], axis=1)[:, :256].astype(bool)
             self._seen_walking = np.unpackbits(z["_seen_walking"], axis=1)[:, :256].astype(bool)
             self.walks, self.pad_presses, self.other_presses, self.warps = (int(v) for v in z["counts"])
-            if "full_w" not in z:
-                # saved before the changes off the warps were counted over the warps' stretch: the warps can't be
-                # weighed against them, so they are counted afresh from here (the position and the rest are kept)
+            if "full_w" not in z or "fade_w" not in z:
+                # saved before the changes off the warps (and those a fade explains) were counted over the warps'
+                # stretch: the warps can't be weighed against them, so they are counted afresh from here (the
+                # position and the rest are kept)
                 self.by_warp[:] = 0
                 self.returned[:] = 0
                 self.warps = 0
