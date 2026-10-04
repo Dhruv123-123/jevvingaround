@@ -52,7 +52,8 @@ Use "keep": true (and no goal) when the current goal is still right.
 Conditions (pick the one that checks the outcome the game asked for):
   {"new_place": true}       enter a place not entered yet (leave a house, go to a new area, go downstairs)
   {"leave_place": true}     get out of the current place
-  {"place": <id>}           go back to a known place (ids from the places list)
+  {"place": <id>}           go back to a known place (ids from the places list; a place's "heard_here" names
+                            who and what the game named there most: someone to bring something back to, or a home)
   {"said": ["word", ...]}   the game says a line containing one of these words (a name, an item, "received")
   {"talks": <n>}            hear n new lines of dialogue (talk to people here)
   {"screen": "choice"}      open a menu or reach a choice
@@ -210,7 +211,8 @@ class GoalBook:
 
     need_met: dict[str, Any] | None = None
 
-    def impose(self, goal: dict[str, Any], tick: int, values: dict[str, Any], source: str = "upkeep", world=None) -> bool:
+    def impose(self, goal: dict[str, Any], tick: int, values: dict[str, Any], source: str = "upkeep", world=None,
+               ask: bool = True) -> bool:
         """A goal from the run itself, not the writer (a number to get back up, anygame/upkeep.py): set unless the
         current goal already checks the same condition. Returns whether it was set."""
         if self.current is not None and (self.current.get("done") == goal.get("done") or
@@ -219,7 +221,7 @@ class GoalBook:
         if self.current is not None:
             self._close(self.current, "replaced", tick)
         self._set({**goal, "source": source}, tick, values)
-        if not goal.get("target") and self.chat is not None:
+        if ask and not goal.get("target") and self.chat is not None:
             # the run knows what it needs but not where to get it: the writer reads the game for how (once per goal)
             self._write(tick, values, world, need=self.current)
         return True
@@ -262,11 +264,17 @@ class GoalBook:
     # ---- the writer -----------------------------------------------------------------------------------
     def context(self, values: dict[str, Any], world=None) -> dict[str, Any]:
         lines = compact(self.memory.dialogue)
+        if getattr(self, "marks", None) is None:
+            from .landmarks import Landmarks
+            self.marks = Landmarks()        # who and what was named where (anygame/landmarks.py)
+        book = getattr(world, "book", None)
+        self.marks.update(self.memory.dialogue, canonical=book.canonical if book is not None else None)
         places = []
         for k, p in self.memory.places.items():
             tiles = len(world.visited.get(_as_map(k), ())) if world is not None else None
             doors = sum(1 for kk, w in world.warps.items() if str(kk[0]) == k and str(w[0]) != k) if world is not None else None
-            places.append({"id": _as_map(k), "first_seen_tick": p["first_tick"], "times_entered": p["entered"], "tiles_walked": tiles, "doors_found": doors})
+            places.append({"id": _as_map(k), "first_seen_tick": p["first_tick"], "times_entered": p["entered"], "tiles_walked": tiles, "doors_found": doors,
+                           "heard_here": self.marks.heard_at(_as_map(k))})
         return {
             # the tick and what is on screen now: older dialogue may be over (a battle that ended, a menu closed)
             "now": {"tick": values.get("tick"), "place": values.get("map"), "screen": values.get("screen"),

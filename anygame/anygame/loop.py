@@ -506,6 +506,15 @@ class Agent:
                     self._held = (n, tr_.reads if tr_ else 0)
                     self.goalbook.need_met = None
                 held = getattr(self, "_held", None)
+                er = getattr(self, "_errand", None)
+                if er is not None and self.goalbook.current is None and self.goalbook.goals and \
+                        self.goalbook.goals[-1].get("source") == "errand":
+                    last = self.goalbook.goals[-1]
+                    g = er.next() if last.get("outcome") == "reached" else None
+                    self._errand = None if g is None else er
+                    if g is not None:
+                        self.goalbook.impose(g, self.tick, placed, source="errand", ask=False)
+                        self.quest = self.goalbook.quest()
                 if held and adv and adv["number"] == held[0]:
                     tr_ = self.keep.tracks.get(held[0])
                     if tr_ is not None and tr_.reads == held[1]:
@@ -1198,6 +1207,20 @@ class Agent:
                     out[rid] = ["".join(str(v.get(f"c{c}r{rr}", "?"))[:1] for c in range(1, cols + 1)) for rr in range(1, rows + 1)]
         return out
 
+    def _start_errand(self, v: dict[str, Any], s: dict[str, Any]) -> None:
+        """A stall on a walking screen where the game named someone met elsewhere: go there, talk, come back
+        (anygame/landmarks.py Errand). Only while no other errand runs and the goal is not upkeep's."""
+        gb = getattr(self, "goalbook", None)
+        if gb is None or v.get("screen") != "walk" or getattr(self, "_errand", None) is not None or \
+                getattr(gb, "marks", None) is None or (gb.current or {}).get("source") == "upkeep":
+            return
+        from .landmarks import errand_from
+        e = errand_from(gb.marks, gb.memory.dialogue, here=v.get("map"), since=int(s.get("since") or 0))
+        if e is not None and gb.impose(e.goal(), self.tick, v, source="errand", ask=False):
+            self._errand = e
+            self.quest = gb.quest()
+            print(f"errand at tick {self.tick}: {e.goal()['instruction'][:100]}", file=sys.stderr)
+
     def _hold_position(self) -> None:
         """`pos_lock`: ticks after which a found x and y that have not changed are kept. A byte that follows walking
         just as well (a map view's scroll, a menu cursor) can outscore the position on a stretch of door-heavy walking
@@ -1240,6 +1263,7 @@ class Agent:
                 print(f"stall at tick {self.tick}: {s['counts']} since {s['since']}", file=sys.stderr)
                 if hasattr(self.device, "press"):
                     self.device.press("b", hold=4, after=8)
+                self._start_errand(v, s)
         if self.on_record is not None:
             self.on_record(rec, frame)
         if self.log:
