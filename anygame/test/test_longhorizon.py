@@ -412,3 +412,20 @@ def test_a_button_that_jumps_becomes_an_option(monkeypatch):
     assert w.learn_motion(Dev(), 0) is None                     # once per place
     out = w.read({"map": 0, "x": 1, "y": 1})
     assert w.plans["move_b"] == ["hold:b:32"] and "jumps" in out["landings"]["move_b"]
+
+
+def test_a_stalled_said_goal_offers_a_menu_chain_search_once():
+    """A goal waiting for the game to tell of something, with the walk stalled: one menu-chain search is offered."""
+    from anygame.perceive.world import WorldTracker
+    w = WorldTracker({"x": "x", "y": "y", "map": "map", "chain_after": 2})
+    calls = []
+    w.chain_fn = lambda dev, words: calls.append(words) or "played start > a: Got POTION"
+    w.wants = ("g7", ["POTION"])
+    w.read({"map": 0, "x": 1, "y": 1})                  # the first read is news: the tile is new
+    w.stale = 5
+    out = w.read({"map": 0, "x": 1, "y": 1})
+    assert "search_menus" in out["landings"]
+    r = w.run(object(), "search_menus", lambda: {"map": 0, "x": 1, "y": 1})
+    assert calls == [["POTION"]] and "Got POTION" in r
+    w.stale = 5
+    assert "search_menus" not in w.read({"map": 0, "x": 1, "y": 1})["landings"]

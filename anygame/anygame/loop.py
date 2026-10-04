@@ -498,6 +498,13 @@ class Agent:
                     from .perceive.world import WorldTracker
                     self.worlds[rid] = WorldTracker(r)
                 self.trackers[rid] = self.worlds[rid]
+                cur = getattr(getattr(self, "goalbook", None), "current", None)
+                said = (cur or {}).get("done", {}).get("said") if isinstance((cur or {}).get("done"), dict) else None
+                # a goal that waits for the game to tell of something (an item got, a move learned): a chain of menu
+                # picks found by playing them out (anygame/chains.py) is offered once the walk has stalled
+                self.worlds[rid].wants = (cur["id"], [str(x) for x in said]) if said else None
+                if getattr(self.worlds[rid], "chain_fn", None) is None:
+                    self.worlds[rid].chain_fn = self._chain
                 tgt = dict((self.quest or {}).get("target") or {}) or None
                 if tgt is not None:
                     tgt.setdefault("label", self.quest["id"])
@@ -887,6 +894,24 @@ class Agent:
         st = self.device.state() if hasattr(self.device, "state") else None
         values, _, _ = read_all(self.pack, frame, tick=self.tick, previous=self.last_values, state=st)
         return self._present(values, self.pack)
+
+    def _chain(self, device, words: list[str]) -> str:
+        """Menu chains from now until the game tells of a gain naming one of `words`; the first found is played."""
+        from .chains import replay, says, search
+        r = next((x for x in self.base.reads.values() if x.get("kind") == "tiletext"), None)
+        if r is not None:
+            from .perceive import tiletext
+            read_text = lambda img: tiletext.reader(r, str(self.base.assets_dir())).read(img)[0]
+        else:
+            from .perceive.ocr import _text
+            read_text = lambda img: _text(img, 0.67)
+        tests = [says(w) for w in words]
+        found = search(device, read_text, lambda d, res, ln: any(t(d, res, ln) for t in tests),
+                       max_tries=int(self.base.raw.get("chain_tries", 60)))
+        if not found["found"]:
+            return f"no menu chain told of {', '.join(words)} in {found['tries']} tries"
+        replay(device, found["trace"])
+        return "played " + " > ".join("+".join(s["keys"]) for s in found["steps"]) + ": " + " | ".join(found["lines"])[:120]
 
     def _probe(self, r: dict[str, Any], values: dict[str, Any] | None = None) -> str | None:
         """What kind of screen is this, found by trying, with no knowledge of the game: branch from a save state and

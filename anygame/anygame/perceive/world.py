@@ -93,6 +93,9 @@ class WorldTracker:
         self.walls_at: dict[Any, set[tuple[int, int]]] = {}   # tiles a step into was refused: not a place to explore
         self.moves: dict[str, dict] = {}         # label → {keys, hold, line}: inputs that do more than a step (motion.py)
         self.motion_at: set = set()               # places where what each button does was learned
+        self.wants: tuple | None = None           # (goal id, words) when the goal waits for the game to tell of them
+        self.chain_fn = None                      # (device, words) → what a menu-chain search did (set by the loop)
+        self.chained: set = set()                 # goal ids a chain search was tried for
         self.stuck: dict[tuple, int] = {}       # (tile, plan) → times walking that plan from that tile ended back on it
         self._pending: tuple | None = None
         self.steps = 0                                  # steps tried over the run: the clock blocked edges age by
@@ -398,6 +401,11 @@ class WorldTracker:
             for k in dead:      # walked twice from here and came back here: not offered again from this tile
                 plans.pop(k)
                 opts.pop(k, None)
+        if self.wants and self.chain_fn is not None and self.wants[0] not in self.chained and \
+                self.stale >= int(self.r.get("chain_after", 12)):
+            plans["search_menus"] = ["chain"]
+            opts["search_menus"] = (f"nothing new for {self.stale} decisions: try chains of menu picks until the game "
+                                    f"tells of {', '.join(self.wants[1][:3])}")
         for k, mv in self.moves.items():
             # a jump, a dash, a run: offered next to the walks, as what learning the buttons found it does
             plans[k] = [f"hold:{'+'.join(mv['keys'])}:{mv['hold']}"]
@@ -462,6 +470,11 @@ class WorldTracker:
                 self._idle = False
                 done.append("A")
                 continue
+            if step == "chain":
+                self.chained.add(self.wants[0] if self.wants else None)
+                self._idle = False
+                done.append(self.chain_fn(device, list(self.wants[1]) if self.wants else []))
+                break
             if step.startswith("hold:"):
                 _, ks, h = step.split(":")
                 keys = ks.split("+")
