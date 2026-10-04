@@ -381,6 +381,18 @@ class Discoverer:
             self.blank = False
             self.before_blank = None
         self._last = now
+        m = self.found.get("map") or {}
+        if playing and not blank and len(m.get("addrs", ())) == 2:
+            # which values of a signature's two bytes are seen together: an id's other half follows the id
+            i, j = (a - LO for a in m["addrs"])
+            pairs = getattr(self, "_pairs", None)
+            if pairs is None:
+                pairs = self._pairs = {}
+            for a, b in ((i, j), (j, i)):
+                p = pairs.setdefault((a, b), {"seen": {}, "split": set()})
+                seen = p["seen"].setdefault(int(now[a]), int(now[b]))
+                if seen != int(now[b]):
+                    p["split"].add(int(now[a]))
 
     def _credit(self, ch: np.ndarray) -> None:
         new = ch & (self.credited < self.transitions)
@@ -607,6 +619,11 @@ class Discoverer:
             # player came from also comes back, but on other presses, and would split a place by its entrance
             group = back[self._hist[back] == self._hist[back[0]]]
             back = group[:2]
+            if len(back) == 2 and len(getattr(self, "_pairs", {}).get((int(back[0]), int(back[1])), {}).get("split", ())):
+                # the second byte took two values while the first held one (the map the player came from, read in
+                # a place entered by two doors): not the id's other half, and it would split a place by its entrance
+                back = back[:1]
+                group = group[:1]
             if keep and set(a - LO for a in cur["addrs"]) <= set(group.tolist()):
                 return {**cur, "doors": int(self.by_pad[back].max()), "rule": MAP_RULE}   # still the best: kept
             return {"addrs": sorted(int(LO + i) for i in back), "doors": int(self.by_pad[back].max()),
