@@ -504,6 +504,8 @@ class Agent:
                 if rid not in self.worlds:
                     from .perceive.menu import MenuTracker
                     self.worlds[rid] = MenuTracker(r)
+                if getattr(self.worlds[rid], "screen_kind", None) is None:
+                    # also for a tracker a checkpoint made: what an entry's play-out ends on, for leaving a fight
                     pr = next((x for x in pack.reads.values() if x.get("kind") == "probe"), None)
                     if pr is not None:
                         self.worlds[rid].screen_kind = lambda pr=pr: self._probe(pr)
