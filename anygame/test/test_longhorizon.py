@@ -307,3 +307,15 @@ def test_the_generic_game_boy_pack_loads():
     from anygame.pack import load_pack
     pack = load_pack(os.path.join(os.path.dirname(__file__), "..", "packs", "gameboy"))
     assert pack.reads["text"]["kind"] == "tiletext" and pack.reads["menu"]["text"] == "tiletext"
+
+
+def test_a_walk_that_ends_back_on_its_tile_twice_is_dropped():
+    from anygame.perceive.world import WorldTracker
+    w = WorldTracker({"x": "x", "y": "y", "map": "map"})
+    v = {"map": 1, "x": 4, "y": 5}
+    lands = w.read(v)["landings"]
+    lab = next(k for k in lands if k.startswith("explore_"))
+    for _ in range(2):
+        w._pending = (w.here, tuple(w.plans[lab]))     # walked it (a script pushed the player back)...
+        lands = w.read(v)["landings"]                 # ...and the next decision is on the same tile
+    assert lab not in lands and lands
