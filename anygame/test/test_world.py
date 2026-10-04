@@ -543,6 +543,64 @@ def test_discoverer_leaves_out_a_byte_that_records_where_the_player_came_from():
     assert d.found["map"]["addrs"] == [0xD35E]
     assert all(len(v) == 1 for v in seen.values()) and len(seen) == 3
 
+def test_discoverer_forgives_the_id_written_before_a_fade_in_the_same_press():
+    """Stairs between two floors (37, 38) that share their tiles, and a door out to the town (0): the id changes on
+    the step onto the stairs and the screen goes dark before the next press, so the step and the fade are judged as
+    one press. The id changed before the dark and is forgiven; a tile-set byte that never changes on the stairs
+    would otherwise win and read both floors as one place."""
+    from anygame.discover import Discoverer, LO, N
+    rng = np.random.default_rng(7)
+    d = Discoverer()
+    d.found.update({"x": {"addr": 0xD362, "type": "u8"}, "y": {"addr": 0xD361, "type": "u8"}, "cell": 1})
+    mem = np.zeros(N, np.int32)
+    X, Y, ID, SET, TILES = 0xD362 - LO, 0xD361 - LO, 0xD35E - LO, 0xD4E4 - LO, 0xC3A0 - LO
+    mem[X], mem[Y], mem[ID], mem[SET] = 5, 5, 0, 1
+    seen: dict = {}
+
+    def press(b, change=None, fade=False):
+        before = mem.copy()
+        if change:
+            change()
+        mem[TILES: TILES + 40] = rng.integers(0, 256, 40)
+        d.press(b, before, mem.copy(), full=True, continues=True)
+        if fade:
+            d.frame(mem.copy(), blank=False)  # the player on the stairs, the id already written
+            d.frame(mem.copy(), blank=True)   # then the fade, before the next press
+        d.frame(mem.copy(), blank=False)
+        if d.found.get("map", {}).get("addrs"):
+            seen.setdefault(int(mem[ID]), set()).add(d.state(mem)["map"])
+
+    def walk(n):
+        for _ in range(n):
+            b = ["left", "right"][int(rng.integers(2))]
+            press(b, lambda: mem.__setitem__(X, min(9, max(1, int(mem[X]) + (1 if b == "right" else -1)))))
+
+    def door(to, tiles, pos):
+        def go():
+            mem[ID], mem[SET] = to, tiles
+            mem[X], mem[Y] = pos
+        press("up", go)
+
+    def stairs(to):
+        def go():
+            mem[ID] = to
+            mem[X] = min(9, int(mem[X]) + 1)  # stairs land beside where they were taken: no further than a step
+        press("right", go, fade=True)
+
+    for _ in range(10):
+        walk(15)
+        door(37, 2, (3, 30))          # into the house's ground floor
+        walk(15)
+        stairs(38)
+        walk(15)
+        stairs(37)
+        walk(15)
+        door(0, 1, (5, 5))            # back out to the town
+    walk(20)
+    assert d.found["map"]["addrs"] == [0xD35E]
+    assert len(seen[37] | seen[38]) == 2 and not seen[37] & seen[38]
+
+
 def test_discoverer_keeps_y_through_a_menu_whose_cursor_follows_the_pad():
     """A menu with a cursor on both axes (a battle's grid of choices, a job grid): the d-pad moves the cursor's bytes
     on every press while the position never moves, and the battle's flashes start new visits until the walking ones

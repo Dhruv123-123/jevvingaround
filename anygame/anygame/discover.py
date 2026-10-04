@@ -267,7 +267,12 @@ class Discoverer:
                     # beside where they left move the player no further than a step). A byte the press before changed
                     # (the id is written as the player steps onto the stairs) is not held against it; one that changes
                     # in the fade itself (sprites and tiles reloaded for the new map) still is
-                    self.fade_w += self._prev_c & ~c
+                    # A press is judged by the RAM just before the next one, so the step onto the stairs and the
+                    # fade can fall in one press: what had already changed before the screen went dark is the id's
+                    # too (sprites and tiles reload in the dark)
+                    pre = getattr(self, "_pre_fade", None)
+                    early = c & (pre != before) if pre is not None else np.zeros_like(c)
+                    self.fade_w += (self._prev_c & ~c) | early
                 self._faded = False
                 if warp:
                     self._came_from(before, after)
@@ -379,6 +384,8 @@ class Discoverer:
                     self.ema = net if self.ema == 0 else 0.98 * self.ema + 0.02 * net
         self.ring = (self.ring + [now])[-RING:]
         if blank:
+            if not getattr(self, "_faded", False) and last is not None:
+                self._pre_fade = last               # the RAM just before the screen went dark
             self._faded = True
         if blank and not self.blank:
             self.blank, self.before_blank = True, last if last is not None else now
