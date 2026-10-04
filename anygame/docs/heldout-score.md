@@ -311,3 +311,51 @@ code, not the harness.
 
     python -m heldout.run --pack gameboy --decider top --books runs/books --out runs/book-top
     python -m heldout.run --pack gameboy --decider jev --books runs/books --seeds 1 --out runs/book-jev
+
+
+## After the menu speed fixes: long-horizon 78d2b73 (2026-10-04)
+
+The long-horizon head 78d2b73 contains three changes:
+- the explore gate 987d030, which skips a menu explore when the screen text has no word of two or more letters;
+- PR #27, `tiletext.boxes`;
+- menu-tiletext.patch, so menu reads come from screen cells and fall back to OCR only while the glyph book is small.
+
+Same games, seeds, budget and four-way parallelism as before. Two rows: cold (no glyph book, the official protocol) and the per-game book. The harness now also counts the agent's menu explores and their wall time (`explores`, `explore_s` in each run's row). This is measurement only: the call passes through unchanged.
+
+| game | random | cold, top | cold, Jev | per-game book, top | per-game book, Jev |
+|---|---|---|---|---|---|
+| GBHack | 0.33 | 0.27, −0.10 | 0.40, +0.10 | 0.27, −0.10 | 0.20, −0.20 |
+| PostBot | 0.40 | 0.40, +0.00 | 0.40, +0.00 | 0.40, +0.00 | 0.40, +0.00 |
+| Renegade Rush | 0.20 | 0.20, +0.00 | 0.20, +0.00 | 0.27, +0.08 | 0.40, +0.25 |
+| Tobu Tobu Girl | 0.53 | 0.47, −0.14 | 0.60, +0.14 | 0.47, −0.14 | 0.40, −0.29 |
+| **suite median (games above 0.1)** | 0 | −0.05 (0 of 4) | +0.05 (1 of 4) | −0.05 (0 of 4) | −0.10 (1 of 4) |
+
+The scores do not move outside the run-to-run spread. GBHack seed 2 and Renegade Rush differ by a milestone between otherwise identical rows.
+
+**Throughput and spend**
+
+| agent | presses per wall-minute (median) | Tobu / PostBot / Renegade / GBHack | game frames per wall-minute | runs ended by the wall limit | Jev $ | Azure $ (calls) |
+|---|---|---|---|---|---|---|
+| speed-gaps 4cd17f3, cold, top | 60 | 10 / 213 / 26 / 81 | 2,459 | 6 of 12 (50%) | 0 | 0.700 (539) |
+| speed-gaps 4cd17f3, cold, Jev | 76 | 109 / 81 / 16 / 71 | 3,650 | 1 of 4 (25%) | 0.104 | 0.178 (129) |
+| **78d2b73, cold, top** | **148** | 128 / 292 / 23 / 225 | 3,195 | **3 of 12 (25%)** | 0 | 0.688 (376) |
+| **78d2b73, cold, Jev** | **93** | 148 / 106 / 71 / 80 | 4,662 | **1 of 4 (25%)** | 0.193 | 0.162 (109) |
+| 78d2b73, per-game book, top | 192 | 202 / 280 / 178 / 178 | 4,979 | **0 of 12** | 0 | 0.508 (297) |
+| 78d2b73, per-game book, Jev | 113 | 136 / 116 / 105 / 111 | 3,648 | **0 of 4** | 0.277 | 0.079 (70) |
+
+Jev spend rises because runs now reach more of their press budget.
+
+**Explores, steps explored per 100**
+
+| game | before (profile, 4cd17f3) | 78d2b73 cold, top (seeds 1–3) | 78d2b73 cold, Jev | wall seconds in explores, cold top |
+|---|---|---|---|---|
+| Tobu Tobu Girl | 67 | 9 / 8 / 8 | 1 | 214–266 of 509–594 |
+| PostBot | – | 1 / 1 / 1 | 1 | 6–9 |
+| GBHack | – | 1 / 22 / 1 | 3 | 28–261 |
+| Renegade Rush | – | 19 / 43 / 28 | 46 | **820–892 of 900–955** |
+
+**What this shows**
+
+- **Tobu Tobu Girl's explores dropped from 67 to about 8 per 100 steps.** Its top pick went from 10 to 128 presses per wall-minute. It now ends on the frame budget, not the clock.
+- **Renegade Rush is the one game still held back by the clock, and the cold book is why.** With no book, its explores take 820–892 of the 900 seconds. With the per-game book, explores take 224–620 s and every run ends on the press or frame budget (178 presses per wall-minute). The likely cause is that while the book is small, menu reads still fall back to OCR (the patch's "OCR only while the book is small"), and Renegade Rush's screen has letters on it, so the word gate lets explores through. The gate still lets through 19–46 explores per 100 steps there, so an explore that is cheap or skipped on an action screen is the next lever.
+- **The agent now uses its whole game budget on three of four games, cold.** The 92-presses-per-wall-minute target is met: median 148 for the top pick and 93 for Jev.
