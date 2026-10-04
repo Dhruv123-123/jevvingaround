@@ -283,7 +283,10 @@ class GoalBook:
         book = getattr(world, "book", None)
         self.marks.update(self.memory.dialogue, canonical=book.canonical if book is not None else None)
         places = []
+        since = int(getattr(self.memory, "since", 0) or 0)
         for k, p in self.memory.places.items():
+            if since and int(p.get("last_tick") or -1) < since:
+                continue            # a place from before a reload, under a name that may now mean nothing
             tiles = len(world.visited.get(_as_map(k), ())) if world is not None else None
             doors = sum(1 for kk, w in world.warps.items() if str(kk[0]) == k and str(w[0]) != k) if world is not None else None
             places.append({"id": _as_map(k), "first_seen_tick": p["first_tick"], "times_entered": p["entered"], "tiles_walked": tiles, "doors_found": doors,

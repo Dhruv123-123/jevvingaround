@@ -538,6 +538,11 @@ class Agent:
                 for tr in self.worlds.values():
                     if hasattr(tr, "leave"):
                         tr.leave = bool(adv and adv.get("leave"))
+                if adv and (adv["goal"].get("target") or {}).get("place") is not None:
+                    pl = self.goalbook.memory.places.get(str(adv["goal"]["target"]["place"])) or {}
+                    if int(pl.get("last_tick") or -1) < int(getattr(self.goalbook.memory, "since", 0) or 0):
+                        # a refill place named before a reload: the name may mean nothing now, so ask the writer how
+                        adv = {**adv, "goal": {**adv["goal"], "target": None}}
                 if adv and self.goalbook.impose(adv["goal"], self.tick, placed, world=w):
                     print(f"upkeep at tick {self.tick}: {adv['why']}", file=sys.stderr)
                     self.quest = self.goalbook.quest()
