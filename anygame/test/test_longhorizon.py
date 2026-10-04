@@ -611,6 +611,14 @@ def test_a_screen_that_never_ends_in_any_direction_is_not_explored_as_a_menu():
     tr = MenuTracker({"kind": "menu", "depth": 3})
     out = tr.explore(Endless())
     assert out.get("not_a_menu") and out["entries"] == []
+    # a game that never shows a position (Renegade Rush): not "lost", still not a menu
+    out = MenuTracker({"kind": "menu", "depth": 3}).explore(Endless(), pos=lambda: (None, None))
+    assert out.get("not_a_menu")
+    # had a position and lost it: the world taken for a menu, explored so walk options can be offered
+    tr = MenuTracker({"kind": "menu", "depth": 3})
+    tr.explore(Endless(), pos=lambda: (3, 4))
+    out = tr.explore(Endless(), pos=lambda: (None, None))
+    assert not out.get("not_a_menu") and out["entries"]
 
 
 def test_after_a_reload_the_writer_is_shown_only_places_seen_since():

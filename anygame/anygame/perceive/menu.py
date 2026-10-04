@@ -139,6 +139,7 @@ class MenuTracker:
         self.fight = Fight()                     # which entry lowers the other side's bar most (anygame/battle.py)
         self.loops: dict[str, dict[str, int]] = {}   # screen key → label → times it came straight back to this menu
         self._recent: list[list] = []                 # recent picks: [screen key, label, ticks since]
+        self._had_pos = False                         # a position was found once (so a missing one is lost, not unknown)
 
     def see(self, screen: np.ndarray, text: str | None = None) -> None:
         """A screen the run passed through (any tick): an outcome that looks like one of these leads back to it."""
@@ -191,7 +192,11 @@ class MenuTracker:
                         break       # the cursor stopped (an end of the list) or came round again (a wrapping list)
                     entries.append(([d] * n, img))
                     prev = img
-            lost = pos is not None and None in (pos() or (None,))
+            now = pos() if pos is not None else None
+            if now and None not in now:
+                self._had_pos = True
+            # lost = had a position and lost it; a game that never shows one (Renegade Rush) is not "lost"
+            lost = self._had_pos and (not now or None in now)
             if not ended and not lost and self.r.get("endless_is_not_menu", True):
                 # every direction kept changing the picture for `depth` presses and none came to an end or back round:
                 # a screen that moves on every press (a car, a ship), not a list to choose from (Renegade Rush spent
