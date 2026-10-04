@@ -126,3 +126,20 @@ def test_a_line_read_as_all_not_text_settles_its_glyphs_at_once():
     b2 = GlyphBook()
     b2.vote(["a", "b", None, "c"], "Hi !", "chat")
     assert b2.labels == {}                      # a line of characters still needs a second reading
+
+
+def test_menu_boxes_come_from_the_cells_once_the_font_is_known_and_skip_unknown_cells():
+    from anygame.perceive import tiletext
+    r = {"labeller": "none"}
+    t = tiletext.reader(r, None)
+    t.book = GlyphBook()
+    img = screen({13: "NEW GAME", 15: "OPTION"})
+    assert tiletext.boxes(img, r, cold=20) is None                      # a cold book: the menu reads by OCR meanwhile
+    for line in ("ABCDEFGHIJKLM", "NOPQRSTUVWXYZ"):
+        for k, ch in zip(cells(screen({13: line}))[1][13][1:], line):
+            t.book.labels[k] = ch
+    out = tiletext.boxes(img, r, cold=20)
+    assert [b[4] for b in out] == ["NEW GAME", "OPTION"] and out[0][1] == 13 * 8 * 3
+    junk = img.copy()
+    junk[16 * 24:17 * 24, 24:24 * 6] = rng.integers(0, 2, (24, 24 * 5, 1)) * 255   # cells no book knows
+    assert [b[4] for b in tiletext.boxes(junk, r, cold=20)] == ["NEW GAME", "OPTION"]       # skipped, not sent to OCR
