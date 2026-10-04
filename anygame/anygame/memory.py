@@ -109,6 +109,8 @@ def save_checkpoint(agent, path: str) -> str:
         "discovered": disc.dump() if disc is not None and getattr(disc, "found", None) else None,
         "audit": agent.auditor.dump() if getattr(agent, "auditor", None) is not None else None,
         "glyphs": _glyph_books(),
+        "pos_lock": getattr(agent, "_pos_lock", None),
+        "upkeep_held": getattr(agent, "_held", None),
         "upkeep": ({n: dict(t.__dict__) for n, t in agent.keep.tracks.items()}
                    if getattr(agent, "keep", None) is not None else None),
     }
@@ -152,11 +154,21 @@ def load_checkpoint(agent, path: str) -> dict[str, Any]:
         agent.quest = agent.goalbook.quest()
     if d.get("audit") and getattr(agent, "auditor", None) is not None:
         agent.auditor.load(d["audit"])
+    if d.get("upkeep_held"):
+        agent._held = tuple(d["upkeep_held"])
+    if d.get("pos_lock") and d.get("discovered"):
+        lk = dict(d["pos_lock"])
+        lk["addrs"] = tuple(lk["addrs"])
+        agent._pos_lock = lk
     if d.get("upkeep") and getattr(agent, "keep", None) is not None:
         from .upkeep import Track
         for n, td in d["upkeep"].items():
             t = Track(n)
+            fresh = dict(t.__dict__)
             t.__dict__.update(td)
+            for k, v in fresh.items():      # JSON keeps sets as lists: put back the type a new Track has
+                if isinstance(v, set) and isinstance(getattr(t, k), list):
+                    setattr(t, k, set(getattr(t, k)))
             t.since_low = [tuple(x) for x in t.since_low]
             agent.keep.tracks[n] = t
     if d.get("glyphs"):

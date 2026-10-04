@@ -347,3 +347,134 @@ no labeller, the same code before and after but for this change (four games at o
 Pokemon and Aevilia already read their menus from the cells (their screens' text is known), so nothing changes there.
 Tobu still spends most of a step exploring menus. With this change those explores cost no OCR. Long-horizon's
 explore gate is the change that removes the explores themselves.
+
+### Stall detector (2026-10-04)
+
+`anygame/stuck.py` notices the agent going round in circles. It sees what the agent sees, never the grader: each
+step's screen kind, text read, found position and map, and the frame reduced to a coarse print (18x20 blocks, four
+grey levels). A step is new when that observation or print has not been seen before in the run. It raises when 40
+steps bring at most 2 new ones and the agent took at most 4 different actions, then waits 20 steps before raising
+again. `suggest(options)` lists what to try instead: the options on this screen the loop did not take, then B, then
+the repeated ones (a caller with play-outs keeps the first that changes the screen). The loop's own `noops` list
+catches one screen where nothing changes; this catches cycles through several screens that each change.
+
+Today's Pokemon logs, replayed from the reads (`scripts/stuck_replay.py`, no frames), 7,464 steps of pk9–pk15:
+
+| stall | started | raised | steps to detect |
+|---|---|---|---|
+| Oak's "Don't go away yet!" sending the player back | 388 | 489 | 101 (the first walks up still find new tiles) |
+| the Pokemon menu opened and closed over and over | 5365 | 5404 | 39 |
+| Rattata's move menu walked "down" (cursor read as position) | ~5764 | 5835 | ~71 |
+
+That is 0.7 raises per 1000 steps on the replayed logs, every one a real loop. On Route 1 (pk-jev-route1) it raised
+once, on a pick-and-wait loop at 474–753.
+
+Live with frames (`scripts/step_profile.py --stuck`, top pick, the stand-in never acting on a raise):
+
+| game | steps | raises | what they were |
+|---|---|---|---|
+| GBHack | 1000 | 0 | |
+| Tobu Tobu Girl | 400 | 0 | |
+| Renegade Rush | 600 | 0 | |
+| Pokemon Red (power-on, through the rival fight) | 1000 | 0 | |
+| Aevilia (power-on) | 1000 | 3 stalls | waiting 40+ steps on a frozen screen; pacing left/right between two map edges (twice) |
+| PostBot | 1000 | 1 stall | A, SELECT, SELECT, A, B on the same five screens from step 22 to the end |
+
+No false alarms on the three held-out games or on Pokemon; every raise was a loop the stand-in never left. A stall
+the agent does not break re-raises every 20 steps, so counts here are in stalls, not raises.
+
+Runner call site (long-horizon's, in `Loop.step` after the action is chosen):
+
+    s = self.stuck.see(self.tick, rec["action"], kind=values.get("screen"), text=values.get("text"),
+                       pos=(x, y, map) if found else None, frame=frame)
+    if s: rec["stuck"] = s    # next step: steer by self.stuck.suggest(options) (exclude s["repeated"]),
+                              # then B, then play out each option and take the first that changes the screen
+
+### Going back where the text says (2026-10-04)
+
+Pewter's badge sits behind an errand. An old man closes the road north of Viridian until the player has fetched
+Oak's Parcel from the Mart, carried it back to Oak in Pallet Town, and come back. The general piece is going back
+to a place the run has been, because a line named it, and then on again.
+
+**What was there.** A goal can already target a known place (`{place: id}`), and the navigator walks the known door
+chain to it. On the live run (pk17–pk20, ticks 5701–9313, 3,900 walking ticks under goals) the navigator offered that
+walk on 28 of them.
+
+**Why it fails: the run does not know a place again when it gets back.** For each return to a map the run had been
+on, `scripts/reentry_check.py` asks whether the place book named it as before (the grader's map is used only for
+scoring). Over the Pokemon logs, 112 of 172 returns (65%) were known again. The live run's map signature reads
+Pallet Town as 15 values and Red's house as 9, so a place a goal names is left under one id and re-entered under
+another. That is the emulator thread's discovery: the live run sits on 0xC750/0xC751 since its tick 4300
+checkpoint, not 0xD35E.
+
+**Re-measured on the new map rule (10e1632).** Two fresh stand-in runs from power-on on the current branch
+(`step_profile.py --full` logs the grader's map), and one on Aevilia:
+
+| run | reads | maps | places | wrong place (mixed) |
+|---|---|---|---|---|
+| Pokemon, power-on, run 1 | 1,274 | 4 | 15 | 1.5% |
+| Pokemon, power-on, run 2 | 852 | 4 | 15 | 1.1% |
+| Aevilia, from Startham | 1,492 | 1 | 4 (7 without door memory) | 0% |
+
+The new rule mixes little. But until a map has been revisited it falls back to the old rule, and in the first 1,200
+steps Red's house 1F reads as 7 signature values and Pallet Town as 7. So 4 maps are split into 15 places.
+
+**Built (anygame/places.py, anygame/landmarks.py):**
+
+- *Door memory.* A door taken again from the very tile it was taken from, arriving on the very tile it arrived on
+  before, leads to the place it led to before, whatever the signature reads. It is kept both ways (out is the reverse
+  of in). On the Pokemon logs, returns known again went from 65% to 69% (112 to 119 of 172), and places from 205 to
+  186. Mixing went from 5.8% to 5.9%. Allowing one tile of slack mixed more (6.6%), so the match is exact.
+- *Tried and dropped:* knowing a place by how the screen looks at a tile. Look-alike rooms got merged (mixing 6.2–6.9%).
+- *`PlaceBook.route(src, dst)`* gives the first move on the shortest known way over joins walked and doors taken,
+  both ways: `{kind: join, dir}` or `{kind: door, x, y, dir}`. A place entered on trial (a new name on an ordinary
+  step) borrows the way of the place it was entered from.
+- *Landmarks* are names the game writes with a capital and never in lower case, filed where they were said; a
+  speaker tag counts three times. On the live logs OAK's place is the lab and MOM's is the house's ground floor
+  (`scripts/landmark_check.py`). The goal writer gets each place's `heard_here`, so "take this to PROF.OAK" can
+  become `{place: <lab>}`.
+- *Errand.* When the way on stalls and a line said here names a known place elsewhere, the run makes three goals: go
+  there, talk, and come back to where the way was closed.
+
+**Live check (`scripts/goback_check.py`).** The stand-in plays from power-on, and on its first walking step in
+Pallet Town after step 250 it is sent back to Red's house (place id from the grader's map, for choosing only). It
+had 300 steps. Before (long-horizon a9e946c), it was sent to 1F and 2F: once it walked into 1F by chance after 233
+steps, but the goal never checked as reached; the 2F try never arrived. After (route option), it was sent to 1F three
+times and 2F once, and never arrived. On the try with options logged, the route was found ("walk 7 steps back
+through the door at (5,5)"). But the next step's signature change put the player in a new place (ids 9, 10, 11 within
+20 steps of Pallet Town), and from there no way was known. **Going back works only once a map keeps one name;**
+until then the route breaks on the next misread.
+
+Aevilia has no fetch-or-return step the player walks: Tom's "let's talk a bit, but inside" moves the player into the
+house by a scripted walk (run 3, ticks 455–459).
+
+**Hand-off.** For long-horizon: `pokemon-red/world-goback.patch` (world.py: the route option when no door chain is
+known; goals.py: `heard_here` and its line in the writer's prompt). Errand call site: on a stuck raise on a walking
+screen, `errand_from(goalbook.marks, memory.dialogue, here, since)`, then impose its goals in turn. For the emulator
+thread, the blocker: a map signature that stays one value per map from the first visit.
+
+**Re-measured on the emulator fixes (17e108c and e80b499).**
+
+| run | returns known again | wrong place (mixed) |
+|---|---|---|
+| fresh power-on, 1,500 steps (17e108c; e80b499 the same) | 16 of 22 (73%) | 5.1% |
+| from long-horizon's tick-8600 save, ticks 8931–9324 (after the map byte settled) | 32 of 34 (94%) | — |
+| from the 8600 save, all 724 steps | 32 of 36 (89%) | 4.7% |
+
+From power-on the first 1,500 steps still read Pallet Town as 7 values and Red's house 2F as 10. The map locks
+only at the first revisit (the emulator thread's limit). e80b499 changes nothing here; it helps after a faint.
+
+On the save, once the byte has settled, the place book knows 94% of returns again. Door memory adds nothing there,
+because the name alone is enough.
+
+Go-back checks:
+- From power-on, Pallet Town to Red's house 1F and 2F: no arrival in 2 tries before and 2 tries after, on either
+  fix.
+- From the 8600 save, Pallet Town back to Oak's lab: arrived after 166 steps before, and not within 300 after. Both
+  runs lost Pallet Town to a new place one step after leaving the lab (the byte was still settling), so this is one
+  try each and luck decides.
+
+A door known from another place on the very same tiles (`door_any`) raised returns known on the logs from 73% to
+76%, and on fresh runs from 80% to 84%. It also raised mixing by 0.3 to 0.7 points, so it is off.
+
+First-visit place naming is being built on the emulator side (05:45Z). These checks are re-run on its commit.

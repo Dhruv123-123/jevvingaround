@@ -529,10 +529,85 @@ def test_upkeep_need_without_a_refill_place_asks_the_writer_how():
                       "done": {"talks": 1}, "target": {"place": 3}, "ticks": 200}})
     chat = FakeChat([ans])
     gb = GoalBook(m, chat)
-    walk = {"map": 1, "x": 0, "y": 0, "screen": "walk", "numbers": {"HP": {"value": 1, "of": 14}}}
+    walk = {"map": 1, "x": 0, "y": 0, "screen": "walk"}           # HP is not on a walking screen
     goal = {"instruction": "Get HP back up", "done": {"number": {"name": "HP", "share_at_least": 0.9}}, "target": None}
     assert gb.impose(goal, 5, walk)
     assert chat.seen[0]["need"]["done"] == goal["done"]
     g = gb.current
-    assert g["instruction"] == "Talk to Mom at home" and g["done"] == goal["done"] and g["target"] == {"place": 3}
+    assert g["instruction"] == "Talk to Mom at home" and g["target"] == {"place": 3}
+    assert g["done"] == {"any": [goal["done"], {"talks": 1}]}     # the rest given counts: HP is off screen
     assert g["source"] == "upkeep" and not gb.impose(goal, 6, walk)
+    gb._close(g, "reached", 9)
+    assert gb.need_met is g
+
+
+def test_upkeep_tracks_come_back_from_a_checkpoint_with_their_sets(tmp_path):
+    """JSON stores a Track's set of drop sizes as a list; a resumed run adds to it, so it must be a set again."""
+    import types
+    from anygame.memory import load_checkpoint
+    from anygame.upkeep import Upkeep, Track
+    t = Track("HP")
+    t.drops.add(3)
+    (tmp_path / "run.json").write_text(json.dumps({"tick": 9, "worlds": {}, "upkeep": {"HP": dict(t.__dict__, drops=[3])}}))
+    agent = types.SimpleNamespace(device=object(), worlds={}, keep=Upkeep())
+    load_checkpoint(agent, str(tmp_path))
+    agent.keep.tracks["HP"].drops.add(5)
+    assert agent.keep.tracks["HP"].drops == {3, 5}
+
+
+def test_a_stall_leaves_the_repeated_options_out_of_the_next_questions():
+    from anygame.loop import _without
+    qs = {"go__option": {"type": "choice", "instructions": "?", "criteria": {"explore_down": "a", "door_1": "b"}},
+          "pick__option": {"type": "choice", "instructions": "?", "criteria": {"explore_down": "only"}}}
+    out = _without(qs, {"explore_down"})
+    assert list(out["go__option"]["criteria"]) == ["door_1"]
+    assert list(out["pick__option"]["criteria"]) == ["explore_down"]     # nothing else to take: left as it was
+
+
+def test_a_position_held_long_is_put_back_when_discovery_swaps_it():
+    import types
+    from anygame.loop import Agent as Loop
+    disc = types.SimpleNamespace(found={"x": {"addr": 1, "type": "u8"}, "y": {"addr": 2, "type": "u8"}})
+    lp = types.SimpleNamespace(base=types.SimpleNamespace(raw={"pos_lock": 3}), device=types.SimpleNamespace(discoverer=disc), tick=0)
+    for t in range(5):
+        lp.tick = t
+        Loop._hold_position(lp)
+    disc.found["y"] = {"addr": 9, "type": "u8"}        # a scroll byte wins a stretch
+    lp.tick = 6
+    Loop._hold_position(lp)
+    assert disc.found["y"]["addr"] == 2
+
+
+def test_a_refill_sign_said_meets_the_need_even_under_another_goal():
+    m = RunMemory()
+    gb = GoalBook(m, None)
+    gb.goals = [{"id": "g1", "source": "upkeep", "outcome": "given up",
+                 "done": {"any": [{"number": {"name": "HP", "share_at_least": 0.9}}, {"said": ["looking great"]}]}}]
+    gb._refill_sign("MOM: Your POKEMON are looking great!")
+    assert gb.need_met is gb.goals[0]
+
+
+def test_a_screen_that_never_ends_in_any_direction_is_not_explored_as_a_menu():
+    import numpy as np
+    from anygame.perceive.menu import MenuTracker
+
+    class Endless:
+        def __init__(self):
+            self.n, self.frames = 0, 0
+        def snapshot(self):
+            return self.n
+        def restore(self, s):
+            self.n = s
+        def press(self, k, hold=0, after=0):
+            self.n += {"up": 1, "down": 7, "left": 31, "right": 97}.get(k, 0)
+        def wait(self, n=1):
+            pass
+        def screen(self):
+            img = np.zeros((144, 160), np.uint8)
+            img[(self.n * 13) % 140:(self.n * 13) % 140 + 4, :] = 255
+            img[:, (self.n * 29) % 150:(self.n * 29) % 150 + 6] = 255
+            return img
+        frame = screen
+    tr = MenuTracker({"kind": "menu", "depth": 3})
+    out = tr.explore(Endless())
+    assert out.get("not_a_menu") and out["entries"] == []

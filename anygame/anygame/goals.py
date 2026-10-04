@@ -52,7 +52,8 @@ Use "keep": true (and no goal) when the current goal is still right.
 Conditions (pick the one that checks the outcome the game asked for):
   {"new_place": true}       enter a place not entered yet (leave a house, go to a new area, go downstairs)
   {"leave_place": true}     get out of the current place
-  {"place": <id>}           go back to a known place (ids from the places list)
+  {"place": <id>}           go back to a known place (ids from the places list; a place's "heard_here" names
+                            who and what the game named there most: someone to bring something back to, or a home)
   {"said": ["word", ...]}   the game says a line containing one of these words (a name, an item, "received")
   {"talks": <n>}            hear n new lines of dialogue (talk to people here)
   {"screen": "choice"}      open a menu or reach a choice
@@ -67,8 +68,12 @@ asked, explore: a new place, or talk to people. Do not repeat a goal that was ju
 "now" is the present: its screen and text_on_screen say what the game shows at this moment; a dialogue line from
 earlier ticks may be about something already over (a battle that ended, a menu that closed).
 When the context has "need", the run itself needs that condition (a number to get back up) and does not know where
-or how: write the goal for it, with its "done" exactly as given, and an instruction and target saying how, from what
-the game has said and shown (someone who offered rest or help, a place it refilled before)."""
+or how: write the goal for it, with an instruction and target saying how, and as "done" a sign the program can see
+that it happened ({"said": [...]} words the game says when it restores it, or {"talks": n}), not the number itself
+(it is often off screen; the run checks the number too). Say how from what
+the game has said and shown (someone who offered rest or help, a place it refilled before). Do not send the player
+to a place the game has not shown or named; when nothing says where, talk to the people in the nearest building
+(a family member, a nurse, an innkeeper often restore it)."""
 
 
 def check(cond: Any, places: set[str] | None = None, depth: int = 0, numbers: set[str] | None = None) -> str | None:
@@ -178,6 +183,7 @@ class GoalBook:
             seen[id(d)] = len(d["text"])
             if self._gate_lines.get(id(d)) != len(d["text"]):
                 self.gate.see(d["text"], d.get("screen"))
+                self._refill_sign(d["text"])
         self._gate_lines = seen
         g = self.current
         if g is not None:
@@ -204,7 +210,22 @@ class GoalBook:
             self._set(dict(EXPLORE), tick, values)
         return self.quest()
 
-    def impose(self, goal: dict[str, Any], tick: int, values: dict[str, Any], source: str = "upkeep", world=None) -> bool:
+    need_met: dict[str, Any] | None = None
+
+    def _refill_sign(self, text: str) -> None:
+        """A line with the words a need's goal took as its sign (a rest given) meets that need whenever it is said,
+        under that goal or not: the number itself may not be shown again until the next fight."""
+        low = text.lower()
+        for g in reversed(self.goals):
+            if g.get("source") != "upkeep":
+                continue
+            for c in (g.get("done") or {}).get("any") or []:
+                if any(str(w).lower() in low for w in c.get("said") or []):
+                    self.need_met = g
+                    return
+
+    def impose(self, goal: dict[str, Any], tick: int, values: dict[str, Any], source: str = "upkeep", world=None,
+               ask: bool = True) -> bool:
         """A goal from the run itself, not the writer (a number to get back up, anygame/upkeep.py): set unless the
         current goal already checks the same condition. Returns whether it was set."""
         if self.current is not None and (self.current.get("done") == goal.get("done") or
@@ -213,13 +234,15 @@ class GoalBook:
         if self.current is not None:
             self._close(self.current, "replaced", tick)
         self._set({**goal, "source": source}, tick, values)
-        if not goal.get("target") and self.chat is not None:
+        if ask and not goal.get("target") and self.chat is not None:
             # the run knows what it needs but not where to get it: the writer reads the game for how (once per goal)
             self._write(tick, values, world, need=self.current)
         return True
 
     def _close(self, g: dict[str, Any], outcome: str, tick: int) -> None:
         g["outcome"], g["closed_tick"] = outcome, tick
+        if outcome == "reached" and g.get("source") == "upkeep":
+            self.need_met = g        # the loop holds that number's advice until it is read again
         self.ended = outcome
         self.memory.event(tick, "goal " + outcome, id=g["id"], instruction=g["instruction"])
         self.current = None
@@ -254,11 +277,17 @@ class GoalBook:
     # ---- the writer -----------------------------------------------------------------------------------
     def context(self, values: dict[str, Any], world=None) -> dict[str, Any]:
         lines = compact(self.memory.dialogue)
+        if getattr(self, "marks", None) is None:
+            from .landmarks import Landmarks
+            self.marks = Landmarks()        # who and what was named where (anygame/landmarks.py)
+        book = getattr(world, "book", None)
+        self.marks.update(self.memory.dialogue, canonical=book.canonical if book is not None else None)
         places = []
         for k, p in self.memory.places.items():
             tiles = len(world.visited.get(_as_map(k), ())) if world is not None else None
             doors = sum(1 for kk, w in world.warps.items() if str(kk[0]) == k and str(w[0]) != k) if world is not None else None
-            places.append({"id": _as_map(k), "first_seen_tick": p["first_tick"], "times_entered": p["entered"], "tiles_walked": tiles, "doors_found": doors})
+            places.append({"id": _as_map(k), "first_seen_tick": p["first_tick"], "times_entered": p["entered"], "tiles_walked": tiles, "doors_found": doors,
+                           "heard_here": self.marks.heard_at(_as_map(k))})
         return {
             # the tick and what is on screen now: older dialogue may be over (a battle that ended, a menu closed)
             "now": {"tick": values.get("tick"), "place": values.get("map"), "screen": values.get("screen"),
@@ -293,9 +322,14 @@ class GoalBook:
                 return entry
             goal = a.get("goal") or {}
             if need is not None:
-                goal = {**goal, "done": need["done"]}      # how is the writer's; what counts as done is the run's
+                # how is the writer's; done is the run's number, or what the writer says shows it refilled (a rest
+                # given): the number may not be on screen again for a long time (health off the battle screen)
+                alt = goal.get("done")
+                ok_alt = alt and alt != need["done"] and "number" not in alt and \
+                    check(alt, places, numbers=set(values.get("numbers") or {})) is None
+                goal = {**goal, "done": {"any": [need["done"], alt]} if ok_alt else need["done"]}
             err = None if goal.get("instruction") else "no instruction"
-            err = err or check(goal.get("done"), places, numbers=set(values.get("numbers") or {})) or check_target(goal.get("target"), places, len(self.memory.dialogue))
+            err = err or check(goal.get("done"), places, numbers=set(values.get("numbers") or {}) | _need_numbers(need)) or check_target(goal.get("target"), places, len(self.memory.dialogue))
             if err:
                 self.failures += 1
                 entry["result"] = f"rejected: {err}"
@@ -341,6 +375,12 @@ class GoalBook:
         return {"calls": self.calls, "rejected_or_failed": self.failures, "gate": self.gate.report(),
                 "median_ms": sorted(self.latency_ms)[len(self.latency_ms) // 2] if self.latency_ms else None,
                 "goals": [{k: g.get(k) for k in ("id", "instruction", "done", "target", "source", "set_tick", "closed_tick", "outcome")} for g in self.goals]}
+
+
+def _need_numbers(need: dict[str, Any] | None) -> set[str]:
+    """The number a run's own need is about counts as known even while the screen does not show it (a walk)."""
+    n = ((need or {}).get("done") or {}).get("number") or {}
+    return {n["name"]} if n.get("name") else set()
 
 
 def _as_map(k: Any) -> Any:

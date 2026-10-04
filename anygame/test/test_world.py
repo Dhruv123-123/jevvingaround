@@ -455,6 +455,44 @@ def test_discoverer_takes_the_map_id_from_warps_and_returns():
     assert all(len(v) == 1 for v in seen.values() if v) and len(set().union(*seen.values())) == len(seen)
 
 
+def test_discoverer_keeps_y_through_a_menu_whose_cursor_follows_the_pad():
+    """A menu with a cursor on both axes (a battle's grid of choices, a job grid): the d-pad moves the cursor's bytes
+    on every press while the position never moves, and the battle's flashes start new visits until the walking ones
+    are forgotten. The position found while walking stays; without the guard the cursor takes x and y."""
+    from anygame.discover import Discoverer, LO, N
+    rng = np.random.default_rng(4)
+    d = Discoverer()
+    mem = np.zeros(N, np.int32)
+    X, Y, CUR, CURX = 0xD362 - LO, 0xD361 - LO, 0xCC2A - LO, 0xCC2B - LO
+    mem[X], mem[Y] = 20, 20
+    for _ in range(300):
+        b = ["up", "down", "left", "right"][rng.integers(4)]
+        before = mem.copy()
+        nx, ny = mem[X] + {"left": -1, "right": 1}.get(b, 0), mem[Y] + {"up": -1, "down": 1}.get(b, 0)
+        if 16 <= nx <= 24 and 18 <= ny <= 22:                            # a room: some presses hit a wall
+            mem[X], mem[Y] = nx, ny
+        mem[0xC300 - LO: 0xC340 - LO] = rng.integers(0, 256, 64)         # a step redraws part of the screen
+        d.press(b, before, mem.copy(), full=True, continues=True)
+        d.frame(mem.copy(), blank=False)
+    assert d.found["y"]["addr"] == 0xD361 and d.found["x"]["addr"] == 0xD362
+    for t in range(400):
+        if t % 80 == 79:                                                 # a flash: a burst of changes, a new visit
+            mem[0xC400 - LO: 0xCC00 - LO] = rng.integers(0, 256, 0x800)
+            for _ in range(4):
+                d.frame(mem.copy(), blank=False)
+            mem[0xC400 - LO: 0xCC00 - LO] = 0
+            for _ in range(4):
+                d.frame(mem.copy(), blank=False)
+        b = ["up", "down", "left", "right"][rng.integers(4)]
+        before = mem.copy()
+        mem[CUR] = (mem[CUR] + {"up": -1, "down": 1}.get(b, 0)) % 256
+        mem[CURX] = (mem[CURX] + {"left": -1, "right": 1}.get(b, 0)) % 256
+        mem[0xC300 - LO: 0xC340 - LO] = rng.integers(0, 256, 64)         # the battle animates
+        d.press(b, before, mem.copy(), full=True, continues=True)
+        d.frame(mem.copy(), blank=False)
+    assert d.found["y"]["addr"] == 0xD361 and d.found["x"]["addr"] == 0xD362
+
+
 def test_pyboy_snapshot_is_reused_until_the_game_moves():
     pytest.importorskip("pyboy")
     from anygame.device import open_device
@@ -496,6 +534,20 @@ def test_pyboy_save_state_carries_what_discovery_found(tmp_path):
         b.close()
 
 
+def test_discovery_trace_is_appended_and_survives_a_killed_run(tmp_path):
+    from anygame.discover import append_trace, load_trace
+    p = str(tmp_path / "t.bin")
+    tr = [("f", False, b"a")]
+    done = append_trace(p, tr, 0)
+    tr += [("p", "up", b"b", b"c", True, True)]
+    done = append_trace(p, tr, done)
+    assert load_trace(p) == tr
+    with open(p, "ab") as f:
+        f.write(b"\x40\x00\x00\x00partial")       # a chunk the run was killed while writing
+    assert load_trace(p) == tr
+    assert append_trace(p, tr[:1], done) == 1 and load_trace(p) == tr[:1]   # a shorter trace: written whole
+
+
 def test_pyboy_holds_several_buttons_together():
     pytest.importorskip("pyboy")
     from anygame.device import open_device
@@ -532,3 +584,43 @@ def test_discoverer_evidence_survives_a_checkpoint():
     e.load(saved)
     assert (e.by_pad == d.by_pad).all() and (e._seen == d._seen).all() and e.pad_presses == d.pad_presses
     assert "evidence" not in d.dump(evidence=False)
+
+
+def test_discoverer_drops_an_old_rule_signature_but_keeps_the_position():
+    """A checkpoint saved under an older map rule: its signature is judged again, the position resumes as it was."""
+    from anygame.discover import Discoverer, MAP_RULE
+    d = Discoverer()
+    d.load({"x": {"addr": 0xD362, "type": "u8", "score": 1.0}, "y": {"addr": 0xD361, "type": "u8", "score": 1.0},
+            "map": {"addrs": [0xC750, 0xC751], "doors": 23, "transitions": 4, "rule": MAP_RULE - 1}, "cell": 1})
+    assert "map" not in d.found
+    assert d.found["x"]["addr"] == 0xD362 and d.found["y"]["addr"] == 0xD361
+
+
+def test_discoverer_keeps_place_names_when_the_signature_changes_hands():
+    """A place named under one signature keeps its name when another signature takes over and tells the same places
+    apart; a name an early signature gave two maps alike does not carry over."""
+    from anygame.discover import Discoverer, LO, N
+    d = Discoverer()
+    d.found.update({"x": {"addr": 0xD362, "type": "u8"}, "y": {"addr": 0xD361, "type": "u8"}})
+    A, B, J = 0xC750, 0xD35E, 0xC110               # A: a sprite table loaded with each map; B: the map's id; J: junk
+
+    def at(place, junk):
+        mem = np.zeros(N, np.int32)
+        mem[A - LO], mem[B - LO], mem[J - LO] = 10 + place, place, junk
+        return mem
+    d.found["map"] = {"addrs": [A]}
+    names = {}
+    for place in (0, 1, 2, 0, 1):
+        for _ in range(12):
+            names.setdefault(place, set()).add(d.state(at(place, 0))["map"])
+    assert all(len(v) == 1 for v in names.values()) and len(set().union(*names.values())) == 3
+    d.found["map"] = {"addrs": [B]}
+    for place in (2, 1, 0):
+        assert d.state(at(place, 0))["map"] in names[place]
+    # junk named maps 0 and 1 alike: under the id they part, so that name goes to neither
+    d.found["map"] = {"addrs": [J]}
+    for place in (0, 1):
+        for _ in range(12):
+            joint = d.state(at(place, 7))["map"]
+    d.found["map"] = {"addrs": [B]}
+    assert d.state(at(1, 7))["map"] != joint and d.state(at(0, 7))["map"] != joint

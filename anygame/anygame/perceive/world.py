@@ -302,6 +302,8 @@ class WorldTracker:
                         p = self.path_to(tree, door) + [k[3]]
                         plans["goal"] = p
                         opts["goal"] = f"walk {len(p)} steps through the known door toward {why} ({len(chain)} door(s) away)"
+                elif self.r.get("goback") and self._route_option(here, gm, tree, why, plans, opts):
+                    pass                # the place book knows a way back (joins walked, doors taken both ways)
                 elif goal.get("toward"):
                     # a direction hint for a map not reached yet: explore that way
                     goal = {**goal, "_toward": goal["toward"]}
@@ -381,6 +383,37 @@ class WorldTracker:
             plans["wander"] = [d] * 3
             opts["wander"] = f"nothing unexplored or uninspected is reachable: wander {COMPASS[d]} 3 steps"
         return opts, plans
+
+    def _route_option(self, here: Tile, gm: Any, tree, why: str, plans: dict, opts: dict) -> bool:
+        """No door in the world memory leads to the goal's place: the place book's way there (places.py route()),
+        which knows joins walked and doors taken in both directions. A door: walk to the tile it was taken from (or
+        arrived at) and press the way through. A join: walk to the explored edge on that side and on off it."""
+        try:
+            hop = self.book.route(here[0], gm)
+        except (IndexError, TypeError):
+            return False
+        if not hop or hop["kind"] == "here":
+            return False
+        if hop["kind"] == "door":
+            t = (here[0], hop["x"], hop["y"])
+            if t not in tree:
+                return False
+            p = self.path_to(tree, t) + ([hop["dir"]] * 2 if hop.get("dir") else [])
+            if not p:
+                return False
+            plans["goal"] = p
+            opts["goal"] = f"walk {len(p)} steps back through the door at ({hop['x']},{hop['y']}) toward {why} ({hop['hops']} place(s) away)"
+            return True
+        d = hop["dir"]
+        dx, dy = DIRS[d]
+        vis = self.visited.get(here[0], set())
+        edge = max((t for t in tree if (t[1], t[2]) in vis), key=lambda t: (t[1] * dx + t[2] * dy, -tree[t][2]), default=None)
+        if edge is None:
+            return False
+        p = self.path_to(tree, edge) + [d] * 3
+        plans["goal"] = p
+        opts["goal"] = f"walk {len(p)} steps {COMPASS[d]} off this place toward {why} ({hop['hops']} place(s) away)"
+        return True
 
     # ---- the read -------------------------------------------------------------------------------------
     def read(self, values: dict[str, Any], goal: dict[str, Any] | None = None) -> dict[str, Any] | None:
