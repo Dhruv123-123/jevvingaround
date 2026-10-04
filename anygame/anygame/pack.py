@@ -273,6 +273,8 @@ def load_pack(path: str | os.PathLike, _allow_no_tests: bool = False) -> Pack:
             pass                   # branches from a save state on the device; optional when_any, keys, frames
         elif r.get("kind") == "menu":
             pass                   # tries a choice screen's entries from a save state (anygame/perceive/menu.py)
+        elif r.get("kind") == "tiletext":
+            pass                   # the whole screen's 8x8 cells (anygame/perceive/tiletext.py); zone/rect only for its OCR fallback
         elif r.get("kind") == "world":
             if "x" not in r or "y" not in r:
                 raise PackError(f"{p}: read '{rid}': world needs x and y (read ids or state paths of the player's position), optionally map, cell, step_hold, learn_when")

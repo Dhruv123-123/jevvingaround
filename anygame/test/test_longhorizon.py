@@ -286,3 +286,10 @@ def test_checkpoint_resumes_the_run(tmp_path):
     assert b.memory.places == a.memory.places and b.goalbook.quest() == a.goalbook.quest()
     b.run()
     assert b.tick == 60
+
+
+def test_the_generic_game_boy_pack_loads():
+    import os
+    from anygame.pack import load_pack
+    pack = load_pack(os.path.join(os.path.dirname(__file__), "..", "packs", "gameboy"))
+    assert pack.reads["text"]["kind"] == "tiletext" and pack.reads["menu"]["text"] == "tiletext"
