@@ -159,6 +159,8 @@ class MenuTracker:
         self.seen: dict[str, tuple[np.ndarray, str]] = {}   # screens the run has shown: small image, its text
         self.leave = False                       # a number is low (anygame/upkeep.py): entries that get out come first
         self.screen_kind = None                  # () → the screen kind now (the loop's probe), to tell what an entry ends on
+        from ..battle import Fight
+        self.fight = Fight()                     # which entry lowers the other side's bar most (anygame/battle.py)
         self.loops: dict[str, dict[str, int]] = {}   # screen key → label → times it came straight back to this menu
         self._recent: list[list] = []                 # recent picks: [screen key, label, ticks since]
 
@@ -233,15 +235,22 @@ class MenuTracker:
                 # an entry that does something is also played on until the game asks again (anygame/playout.py): a
                 # battle move's result is seconds of text later, past the short watch above
                 from ..playout import play_out, describe
-                for (keys, _), oc in zip(entries, outcomes):
+                effects = {}
+                for i, ((keys, _), oc) in enumerate(zip(entries, outcomes)):
                     if oc["same_screen"]:
                         continue
                     device.restore(snap)
                     r = play_out(device, [k for k in keys] + ["a"], self._read_text, hold=self.hold, gap=self.gap,
                                  max_frames=int(self.r.get("playout_frames", 1800)))
                     oc["playout"] = describe(r, 200)
+                    effects[i] = self.fight.effect(str(i), r)
                     if self.leave and self.screen_kind is not None:
                         oc["ends_on"], oc["frames"] = self.screen_kind(), r["frames"]
+                order = self.fight.rank(effects)
+                if order:
+                    # a fight: the entry that left the other side's bar lowest, against what the others did
+                    outcomes[order[0]]["playout"] += f"; {self.fight.say(effects[order[0]])}"
+                    outcomes[order[0]]["hurts_most"] = True
             device.restore(snap)
             back = self._outcome(device, ["b"], total, base, pos)
             buttons = {}
@@ -374,9 +383,15 @@ class MenuTracker:
             for lab in exits:
                 landings[lab] += " [gets out of here: a number is low]"
 
+        hurts = {f"pick_{i + 1}" for i, e in enumerate(m["entries"]) if e.get("hurts_most") and f"pick_{i + 1}" in landings}
+        for lab in hurts:
+            landings[lab] += " [lowers the other side's bar most]"
+
         def group(lab):
             if lab in exits:
                 return -1
+            if lab in hurts:
+                return -0.5
             if lab in idle:
                 return 4
             if lab == "back_out" or lab.startswith("press_"):
