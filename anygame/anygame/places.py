@@ -63,6 +63,7 @@ class PlaceBook:
         self._last: tuple[Hashable, int, int] | None = None
         self.reads = 0
         self._walked = -10
+        self._jumped: tuple[int, int, int] | None = None
         self.events: list[dict[str, Any]] = []  # joins, doors and renames, for the log
 
     # ---- places -----------------------------------------------------------------------------------------
@@ -94,6 +95,12 @@ class PlaceBook:
         sig0, x0, y0 = last
         dx, dy = x - x0, y - y0
         moves = [m for m in moves if m in DIRS]
+        j, self._jumped = self._jumped, None
+        if j is not None and j[2] == self.reads - 1 and abs(x - j[0]) + abs(y - j[1]) <= max(1, len(moves)):
+            self._move(self._door_to(sig, j[0], j[1]), "door", jump="forced", forced=True)
+            self.here.sigs.add(sig)
+            self.here.tiles.add((j[0], j[1]))
+            return self._stand(x, y)
         d = self._join_direction(dx, dy, moves)
         if d is not None:
             to = self.joins.get((self.here.id, d))
@@ -141,6 +148,13 @@ class PlaceBook:
                     to.trial = {"from": frm.id, "read": self.reads, "tiles": {(x0, y0), (x, y)}}
             else:
                 self._move(self._door_to(sig, x, y), "door", jump=[dx, dy])
+        elif sig == sig0 and not moves and abs(dx) + abs(dy) > 1 and abs(dx) + abs(dy) <= self.span \
+                and not self.here.near(x, y):
+            # moved with nothing pressed, same name, somewhere this place has not been: the game put the player
+            # elsewhere (a respawn after losing, a scripted walk into a building), or the position was misread.
+            # Taken when the next read stands there too
+            self._jumped = (x, y, self.reads)
+            return self.here.id
         elif sig != sig0 and not self._walk_explains(dx, dy, moves, walking):
             # back to a name this place already has, by a jump: a door to another place with that name, or a warp
             # inside this one when the place has been seen there
