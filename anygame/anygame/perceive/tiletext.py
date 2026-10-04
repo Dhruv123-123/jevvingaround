@@ -386,13 +386,14 @@ def boxes(img: np.ndarray, r: dict[str, Any], cold: int = 30) -> list[tuple[floa
     """(x0, y0, x1, y1, text) for every run of known text on a screen, read from its cells: what a menu reader needs
     (the entries and where they sit), at a fraction of a millisecond, where OCR takes a fifth of a second.
 
-    None only while the book is cold, with fewer than `cold` characters learned: then nothing on screen can be read
-    yet and the caller reads it by OCR meanwhile. Once the font is known, cells that are not (a platformer's scenery,
+    None only when most of the screen's text is unknown while the book is cold, with fewer than `cold` characters
+    learned: then the caller reads it by OCR meanwhile. A game with a small font (PostBot's book has fewer) is read
+    from its cells whenever the screen's text is known. Once the font is known, cells that are not (a platformer's scenery,
     an animation frame) are skipped rather than sending the whole screen to OCR: those screens are where OCR spent
     40% of a held-out run (Tobu Tobu Girl) and found no words."""
     t = reader(r, None)
-    t.read(img)                                  # also queues unlearned lines for the labeller, as the text read does
-    if sum(1 for v in t.book.labels.values() if v != NOT_TEXT) < cold:
+    _, st = t.read(img)                          # also queues unlearned lines for the labeller, as the text read does
+    if st["unknown"] > max(2, st["known"]) and sum(1 for v in t.book.labels.values() if v != NOT_TEXT) < cold:
         return None
     _, keys, kinds = cells(img, t.size, t.cell, t.offset)
     s = max(1, img.shape[0] // t.size[1])
