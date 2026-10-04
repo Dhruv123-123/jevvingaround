@@ -23,9 +23,10 @@ LO, HI = 0xC000, 0xE000
 MAP_RULE = 5        # bumped when the map rule changes: a signature saved under another is not loaded
 EVIDENCE_RULE = 4   # bumped when what the evidence counts changes: evidence saved under another is not loaded
 EVIDENCE = ("changes", "ups", "holds", "holds_walked", "walks_at", "by_pad", "by_other", "full_any", "follows_pos",
-            "_from", "_to", "_old", "_hist", "n_values", "by_warp", "returned", "full_w", "chg_w")
+            "_from", "_to", "_old", "_hist", "n_values", "by_warp", "returned", "full_w", "chg_w", "fade_w")
 LOADED_HOLD = 150   # presses on an axis this run judges for itself before a position loaded from a save can change
 SETTLED = 300       # updates the position held unchanged before lookaheads stop teaching it (early on they correct it)
+FADE_WAIT = 16      # frames after a map byte changed off a warp during which a fade may still come to explain it
 STILL_MAX = 600     # such presses in a row after which a position that never moves is judged again (it froze)
 RECENT = 40         # real d-pad presses looked back on to tell walking from a menu
 MOVED = 0.2         # a position byte moves on at least this share of its axis's presses (walls and turns take the rest)
@@ -155,7 +156,7 @@ class Discoverer:
         self.full_any = z()              # changed by a press the game went on from (not a probe from a save state)
         # the same two counts (presses, all frames) since the warps were last counted afresh: a byte's changes
         # off the warps are judged against the warps counted over the same stretch
-        self.full_w, self.chg_w = z(), z()
+        self.full_w, self.chg_w, self.fade_w = z(), z(), z()
         self.other_presses = 0
         self.walks = 0
         self.walks_at = np.zeros(N, np.int64)
@@ -260,6 +261,13 @@ class Discoverer:
                     self.by_other += c
                 self.other_presses += 1
             if real:
+                if not warp and getattr(self, "_faded", False):
+                    # the screen went blank after this press: a fade, which only a map change does (stairs that land
+                    # beside where they left move the player no further than a step). A byte the press before changed
+                    # (the id is written as the player steps onto the stairs) is not held against it; one that changes
+                    # in the fade itself (sprites and tiles reloaded for the new map) still is
+                    self.fade_w += self._prev_c & ~c
+                self._faded = False
                 self._prev_c, self._prev_back = c, back
                 self._trans_seen = self.transitions
             if real:
@@ -365,6 +373,8 @@ class Discoverer:
                 if not self.in_burst:
                     self.ema = net if self.ema == 0 else 0.98 * self.ema + 0.02 * net
         self.ring = (self.ring + [now])[-RING:]
+        if blank:
+            self._faded = True
         if blank and not self.blank:
             self.blank, self.before_blank = True, last if last is not None else now
         elif not blank and self.blank:
@@ -520,6 +530,7 @@ class Discoverer:
             self.returned[:] = 0
             self.full_w[:] = 0
             self.chg_w[:] = 0
+            self.fade_w[:] = 0
             self.warps = 0
         if pos == getattr(self, "_warp_pos", None) and None not in pos:
             self._pos_age = getattr(self, "_pos_age", 0) + 1
@@ -564,14 +575,19 @@ class Discoverer:
             # bytes that changed on most warps and on few plain steps or buttons: a map's, even before it held
             # (no cap on its changes: a long game goes through hundreds of doors)
             W = (self.by_warp >= max(1, 0.5 * self.warps)) & (self.follows_pos == 0) & \
-                (self.full_w - self.by_warp <= np.maximum(2, 0.3 * self.by_warp)) & (self.by_other <= 1 + 0.5 * self.by_warp) & \
-                (self.chg_w <= 2 * self.by_warp + 2)
+                (self.full_w - self.by_warp - self.fade_w <= np.maximum(2, 0.3 * self.by_warp)) & \
+                (self.by_other <= 1 + 0.5 * self.by_warp) & (self.chg_w - self.fade_w <= 2 * self.by_warp + 2)
             for ax in "xy":
                 a = self.found[ax]["addr"] - LO
                 W[a: a + (2 if self.found[ax]["type"] == "u16le" else 1)] = False
             held |= W
             P |= W
         cur = self.found.get("map", {})
+        if cur.get("addrs") and self.warps and all(
+                self.by_warp[a - LO] >= 0.8 * self.warps and self.returned[a - LO] >= 1 and
+                self.event - self.last_change[a - LO] <= FADE_WAIT for a in cur["addrs"]):
+            # it changed a moment ago off a warp: stairs, whose fade (which clears it) comes a press or two later
+            return {**cur}
         keep = bool(cur.get("addrs")) and all(held[a - LO] for a in cur["addrs"])
         if not P.any():
             return {**cur} if keep else None
@@ -580,7 +596,8 @@ class Discoverer:
         if len(back):
             # a place's bytes come back when the player does; the one that took the most values tells the most
             # places apart (a byte that only says indoors or out takes two)
-            off = np.maximum(self.full_w[back] - self.by_warp[back], 0) + np.maximum(self.chg_w[back] - self.by_warp[back], 0)
+            fw = self.by_warp[back] + self.fade_w[back]
+            off = np.maximum(self.full_w[back] - fw, 0) + np.maximum(self.chg_w[back] - fw, 0)
             # ties (a map's sprite table loads with its id and comes back with it too): the byte lookaheads into a
             # door changed most (the id is written as the player steps onto the door, sprites and tiles only after
             # the fade), then the higher address (sprite tables and buffers sit low)
