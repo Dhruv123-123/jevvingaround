@@ -359,3 +359,34 @@ Jev spend rises because runs now reach more of their press budget.
 - **Tobu Tobu Girl's explores dropped from 67 to about 8 per 100 steps.** Its top pick went from 10 to 128 presses per wall-minute. It now ends on the frame budget, not the clock.
 - **Renegade Rush is the one game still held back by the clock, and the cold book is why.** With no book, its explores take 820–892 of the 900 seconds. With the per-game book, explores take 224–620 s and every run ends on the press or frame budget (178 presses per wall-minute). The likely cause is that while the book is small, menu reads still fall back to OCR (the patch's "OCR only while the book is small"), and Renegade Rush's screen has letters on it, so the word gate lets explores through. The gate still lets through 19–46 explores per 100 steps there, so an explore that is cheap or skipped on an action screen is the next lever.
 - **The agent now uses its whole game budget on three of four games, cold.** The 92-presses-per-wall-minute target is met: median 148 for the top pick and 93 for Jev.
+
+### Where Renegade Rush's cold 900 s go (profile, 2026-10-04)
+
+One cold top-pick run on long-horizon 78d2b73, profiled with cProfile on the main thread. Settings: seed 2, budget scaled to 310 s, run alone, same method as the Tobu profile.
+
+The run made 22 presses in 310 s and explored a "menu" 8 times. **The 8 explores took 303 s (98%), 38 s each.**
+
+| where (inside the 8 explores) | seconds of 310 | share |
+|---|---|---|
+| play-outs of every entry found (`playout.play_out`, 580 calls, about 72 per explore) | 150 | 48% |
+| screen comparisons between entries (`menu._same` 40 s + `menu._cursor_box` 40 s), each new entry against all earlier ones | 81 | 26% |
+| emulator ticks (`pyboy._tick`, partly inside play-outs) | 57 | 18% |
+| RapidOCR (`ocr._text`; 28 s of it in `menu._outcome`, 9 s in `menu._read_text`) | 40 | 13% |
+| save-state restore and snapshot | 30 | 10% |
+| `battle.bars` (fight effect of each play-out) | 16 | 5% |
+| tiletext cell boxes (`tiletext.boxes`) | 9 | 3% |
+
+Rows overlap: ticks, OCR and restores also happen inside play-outs.
+
+**The guess was only partly right.** The OCR fallback costs 13%. The main cost is the size of each explore.
+
+On an action screen, every direction moves the picture, so the explore never finds an end of the list. It records an entry for each of up to 5 presses in each direction, then for every down/up entry it tries left and right as a grid. That gave about 76 entries per explore, against a maximum of 121.
+
+Each entry is then pressed, watched, compared against every other entry, and played out for up to 1,800 frames. Play-outs and the quadratic screen comparisons alone account for 74% of the run.
+
+The word gate lets these explores through because Renegade Rush's screen shows letters (its score and distance display). The fix belongs in the menu explore, owned by the long-horizon thread. Options:
+- stop and drop the explore when, say, the first two presses in a direction each change the screen;
+- cap the number of entries;
+- play out only the entries whose short outcome differs.
+
+Moving `_outcome`'s reads from OCR to tiletext would recover at most the 13%.
