@@ -585,3 +585,29 @@ def test_a_refill_sign_said_meets_the_need_even_under_another_goal():
                  "done": {"any": [{"number": {"name": "HP", "share_at_least": 0.9}}, {"said": ["looking great"]}]}}]
     gb._refill_sign("MOM: Your POKEMON are looking great!")
     assert gb.need_met is gb.goals[0]
+
+
+def test_a_screen_that_never_ends_in_any_direction_is_not_explored_as_a_menu():
+    import numpy as np
+    from anygame.perceive.menu import MenuTracker
+
+    class Endless:
+        def __init__(self):
+            self.n, self.frames = 0, 0
+        def snapshot(self):
+            return self.n
+        def restore(self, s):
+            self.n = s
+        def press(self, k, hold=0, after=0):
+            self.n += {"up": 1, "down": 7, "left": 31, "right": 97}.get(k, 0)
+        def wait(self, n=1):
+            pass
+        def screen(self):
+            img = np.zeros((144, 160), np.uint8)
+            img[(self.n * 13) % 140:(self.n * 13) % 140 + 4, :] = 255
+            img[:, (self.n * 29) % 150:(self.n * 29) % 150 + 6] = 255
+            return img
+        frame = screen
+    tr = MenuTracker({"kind": "menu", "depth": 3})
+    out = tr.explore(Endless())
+    assert out.get("not_a_menu") and out["entries"] == []

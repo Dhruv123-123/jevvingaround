@@ -180,15 +180,25 @@ class MenuTracker:
             base = self._play(device, [], total)
             device.restore(snap)
             entries: list[tuple[list[str], np.ndarray]] = [([], base)]
+            ended = 0
             for d in DIRS:
                 prev = base
                 for n in range(1, self.depth + 1):
                     device.restore(snap)
                     img = self._play(device, [d] * n, total)
                     if _same(img, prev) or any(_same(img, e[1]) for e in entries):
+                        ended += 1
                         break       # the cursor stopped (an end of the list) or came round again (a wrapping list)
                     entries.append(([d] * n, img))
                     prev = img
+            lost = pos is not None and None in (pos() or (None,))
+            if not ended and not lost and self.r.get("endless_is_not_menu", True):
+                # every direction kept changing the picture for `depth` presses and none came to an end or back round:
+                # a screen that moves on every press (a car, a ship), not a list to choose from (Renegade Rush spent
+                # 98% of a cold run exploring such screens, about 76 entries each). Not while the position is lost:
+                # the world taken for a menu is walked from the walk options read() offers then
+                return {"entries": [], "back": {"same_screen": True}, "buttons": {}, "base_text": "", "pos_before": None,
+                        "not_a_menu": True}
             # a grid (a battle's FIGHT / PKMN / ITEM / RUN): from each place one axis reached, the other axis too
             for keys0, _ in [e for e in entries if e[0] and e[0][0] in ("down", "up")]:
                 for d in ("right", "left"):
