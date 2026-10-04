@@ -15,9 +15,11 @@ and the choices are compared with each other:
     left the bars than that. What every choice does alike cancels: the other side's own move, the menu box redrawn,
     the player's bar going down by the same hit. A choice that changes nothing the others do not scores 0.
   - **Whose.** A bar whose share of full matches one of the player's own shown numbers ("16/ 19") after every
-    play-out, and is below full, is the player's: a choice that lowers it more than its siblings scores less.
-  - **Ending.** A play-out that leaves the scene (most pixels changed) with the player's own numbers above zero
-    ended the encounter, and scores what the other side's bars had left.
+    play-out of a menu, below full, and is the only bar that does, in two menus, is the player's: a choice that
+    lowers it more than its siblings scores less. A bar that once did not match is never the player's.
+  - **Ending.** A play-out that leaves the scene (most pixels changed) with the player's own numbers above zero,
+    from a screen showing a bar some choice has lowered before, ended the fight: it scores above any hit. Leaving
+    any other screen is closing a menu and scores nothing.
 
 A choice's label is not used to remember it across turns: in Pokemon the cursor box of the move list reads the PP
 ("35/35"), not the move's name, and the cursor stays where it was last. Each menu is compared afresh.
@@ -107,6 +109,9 @@ class Fight:
         self.alike = 0.02                       # share of pixels, outside bars, two ends may differ by and be one screen
         self.full: dict[tuple[int, int, int], int] = {}     # bar → the longest it has been seen
         self.own: set[tuple[int, int, int]] = set()          # bars that moved with the player's own numbers
+        self.own_votes: dict[tuple[int, int, int], int] = {}  # menus in which a bar alone followed them
+        self.not_own: set[tuple[int, int, int]] = set()      # bars seen not following them
+        self.hurt: set[tuple[int, int, int]] = set()         # the other side's bars a choice has lowered
         self.events: list[dict[str, Any]] = []
 
     # ---- every play-out -------------------------------------------------------------------------------------
@@ -121,6 +126,7 @@ class Fight:
         own = _shares(r.get("numbers_after"))
         ended = not same_scene(a, b) and all(s > 0 for s in own or [1.0])
         return {"label": label, "after": {k: n / self.full[k] for k, n in bb.items()}, "own": own, "ended": ended,
+                "before": set(ba),
                 "screen": _grey(b)}
 
     # ---- what to choose ---------------------------------------------------------------------------------------
@@ -135,18 +141,29 @@ class Fight:
             return {}
         common = set.intersection(*(set(e["after"]) for e in live))
         own = [e["own"] for e in live]
-        for k in common:
-            if k in self.own:
-                continue
-            shares = [e["after"][k] for e in live]
-            if min(shares) < 0.95 and all(o and min(abs(s - n) for n in o) <= self.match for s, o in zip(shares, own)):
-                self.own.add(k)
-                self.events.append({"kind": "own bar", "bar": list(k)})
+        if all(own):
+            fits = []
+            for k in common:
+                shares = [e["after"][k] for e in live]
+                if all(min(abs(x - n) for n in o) <= self.match for x, o in zip(shares, own)):
+                    if min(shares) < 0.95:
+                        fits.append(k)
+                else:
+                    self.not_own.add(k)         # a bar that once did not follow the player's numbers never is theirs
+            if len(fits) == 1 and fits[0] not in self.not_own:
+                k = fits[0]
+                self.own_votes[k] = self.own_votes.get(k, 0) + 1
+                if self.own_votes[k] >= 2 and k not in self.own:
+                    self.own.add(k)
+                    self.events.append({"kind": "own bar", "bar": list(k)})
+            self.own -= self.not_own
         base = {k: max(e["after"][k] for e in live) for k in common}
         out = {}
         for lab, e in es.items():
             if e["ended"]:
-                score = 1.0
+                # leaving the scene is winning only where a choice has lowered the other side's bar before (a
+                # fight); in any other menu it is just closing the menu
+                score = 1.0 if self.hurt & e["before"] else 0.0
             else:
                 score = sum(base[k] - e["after"][k] for k in common if k not in self.own) - \
                         sum(base[k] - e["after"][k] for k in common if k in self.own)
@@ -154,6 +171,7 @@ class Fight:
             e["moved"] = {k: (round(base[k], 2), round(e["after"][k], 2)) for k in common
                           if not e["ended"] and e["after"][k] < base[k] - 1e-9}
             out[lab] = e["score"]
+            self.hurt |= {k for k in e["moved"] if k not in self.own}
         self.events.append({"kind": "compare", "scores": dict(out)})
         return out
 

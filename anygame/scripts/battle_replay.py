@@ -14,6 +14,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from anygame.device.pyboy import PyBoyDevice
 from anygame.playout import play_out, asks
 from anygame.battle import Fight
+from anygame.perceive import tiletext
+
+# the text is read from the screen's cells with a finished glyph book and no labeller (no model calls): the own
+# numbers ("16/ 19") that tell the player's bar from the other side's
+TEXT = {"kind": "tiletext", "book": "/tmp/claude-0/sp/pk-glyphs.json", "labeller": "none"}
 
 ROM = "/mnt/project-files/roms/pokemon-red.gb"
 IN_BATTLE, MENU_ITEM, MY_HP, ENEMY_HP, MOVES = 0xD057, 0xCC26, 0xD015, 0xCFE6, 0xD01C   # grading and driving only
@@ -24,20 +29,28 @@ def word(d, a):
     return hi * 256 + lo
 
 
-def fight_once(state: str, policy: str, seed: int, max_turns: int = 40, ocr: bool = True) -> dict:
+def fight_once(state: str, policy: str, seed: int, max_turns: int = 40, ocr: bool = True, book: str | None = None) -> dict:
     d = PyBoyDevice(f"pyboy://{ROM}?state={state}")
     rng = random.Random(seed)
     d.wait(seed * 3)
+    if d.peek(IN_BATTLE)[0] == 0:
+        # not in a fight yet: walk up and down in the grass until one starts, then page to the first menu
+        for i in range(400):
+            d.press(("up", "down")[i % 2], hold=16, after=8)
+            if d.peek(IN_BATTLE)[0]:
+                break
+        for _ in range(30):
+            if asks(d):
+                break
+            d.press("a", hold=4, after=40)
     fight = Fight()
-    from anygame.perceive.ocr import _text
-    none = (lambda img: _text(img, 0.67)) if ocr else (lambda img: "")
+    none = (lambda img: tiletext.read(img, TEXT)) if ocr else (lambda img: "")
     turns, chose, ranked = 0, [], 0
     while turns < max_turns and d.peek(IN_BATTLE)[0] not in (0, 0xFF):
         # at FIGHT / ITEM / RUN: open the move list
         d.press("a", hold=4, after=40)
         moves = [m for m in d.peek(MOVES, 4) if m]
         cur = max(0, min(len(moves) - 1, d.peek(MENU_ITEM)[0] - 1))   # the move list counts from 1
-        print("dbg", turns, moves, cur, d.peek(IN_BATTLE)[0], word(d, MY_HP), word(d, ENEMY_HP), file=sys.stderr)
         entries = [["up"] * (cur - i) if i < cur else ["down"] * (i - cur) for i in range(len(moves))]
         if policy == "cursor":
             pick = cur
@@ -47,7 +60,6 @@ def fight_once(state: str, policy: str, seed: int, max_turns: int = 40, ocr: boo
             effects = {i: fight.effect(str(i), play_out(d, keys + ["a"], none, max_frames=2400))
                        for i, keys in enumerate(entries)}
             order = fight.rank(effects)
-            print("dbg rank", order, {i: (e or {}).get("score") for i, e in effects.items()}, {i: (e or {}).get("ended") for i, e in effects.items()}, {i: {k: v for k, v in (e or {}).get("moved", {}).items()} for i, e in effects.items()}, file=sys.stderr)
             pick = order[0] if order else cur
             ranked += bool(order)
         chose.append(moves[pick])
@@ -59,7 +71,7 @@ def fight_once(state: str, policy: str, seed: int, max_turns: int = 40, ocr: boo
                     break
                 d.press("a", hold=4, after=30)
     won = word(d, ENEMY_HP) == 0 and word(d, MY_HP) > 0
-    return {"seed": seed, "won": won, "turns": turns, "my_hp": word(d, MY_HP), "enemy_hp": word(d, ENEMY_HP),
+    return {"seed": seed, "won": won, "enemy": d.peek(0xCFE5)[0], "turns": turns, "my_hp": word(d, MY_HP), "enemy_hp": word(d, ENEMY_HP),
             "moves": chose, "ranked_turns": ranked}
 
 
