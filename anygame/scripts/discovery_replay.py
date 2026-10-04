@@ -5,15 +5,13 @@ many map signatures each true map got. Seconds instead of a fresh run, so change
     python3 scripts/discovery_replay.py trace.bin aevilia
 """
 import collections
-import pickle
 import sys
-import zlib
 
 import numpy as np
 
-from anygame.discover import Discoverer, LO, _unz
+from anygame.discover import Discoverer, LO, _unz, load_trace
 
-trace = pickle.loads(zlib.decompress(open(sys.argv[1], "rb").read()))
+trace = load_trace(sys.argv[1])
 game = sys.argv[2] if len(sys.argv) > 2 else "aevilia"
 if game == "aevilia":
     from anygame.graders.aevilia import W_LOADED_MAP as M, W_X as X, W_Y as Y

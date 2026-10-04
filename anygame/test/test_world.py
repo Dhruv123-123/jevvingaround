@@ -496,6 +496,20 @@ def test_pyboy_save_state_carries_what_discovery_found(tmp_path):
         b.close()
 
 
+def test_discovery_trace_is_appended_and_survives_a_killed_run(tmp_path):
+    from anygame.discover import append_trace, load_trace
+    p = str(tmp_path / "t.bin")
+    tr = [("f", False, b"a")]
+    done = append_trace(p, tr, 0)
+    tr += [("p", "up", b"b", b"c", True, True)]
+    done = append_trace(p, tr, done)
+    assert load_trace(p) == tr
+    with open(p, "ab") as f:
+        f.write(b"\x40\x00\x00\x00partial")       # a chunk the run was killed while writing
+    assert load_trace(p) == tr
+    assert append_trace(p, tr[:1], done) == 1 and load_trace(p) == tr[:1]   # a shorter trace: written whole
+
+
 def test_pyboy_holds_several_buttons_together():
     pytest.importorskip("pyboy")
     from anygame.device import open_device
