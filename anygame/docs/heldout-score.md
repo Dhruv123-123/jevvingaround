@@ -213,3 +213,49 @@ clock stops it.
 Caveat: the discovered-state and long-horizon runs ran four at a time on a 4-core container, the baseline runs one
 at a time. A re-score after a throughput change runs the same way (four games in parallel, seeds 1–3 for top pick,
 seed 1 for Jev) so the before and after compare.
+
+
+## After gap 6 step 1: the speed-gaps agent (PR #21 @ 4cd17f3, 2026-10-04)
+
+The long-horizon agent with the full-run-gaps work on top (exact text by tiletext, play-outs, numbers, chains, gap 6
+speed step 1, the Azure usage ledger). Same four games, seeds, budget and parallelism as the long-horizon rows: top
+pick seeds 1–3, Jev seed 1, four games at a time on 4 cores.
+
+| game | random | long-horizon, top | long-horizon, Jev | speed-gaps, top | speed-gaps, Jev |
+|---|---|---|---|---|---|
+| GBHack | 0.33 | 0.27, −0.10 | 0.20, −0.20 | **0.53, +0.30** | 0.40, +0.10 |
+| PostBot | 0.40 | 0.40, +0.00 | 0.40, +0.00 | 0.40, +0.00 | 0.40, +0.00 |
+| Renegade Rush | 0.20 | 0.33, +0.17 | 0.20, +0.00 | 0.20, +0.00 | 0.20, +0.00 |
+| Tobu Tobu Girl | 0.53 | 0.40, −0.29 | 0.40, −0.29 | 0.40, −0.29 | 0.40, −0.29 |
+| **suite median (games above 0.1)** | 0 | −0.05 (1 of 4) | −0.10 (0 of 4) | **+0.00 (1 of 4)** | **+0.00 (0 of 4)** |
+
+Cells are milestone fraction, normalised. The first time an agent has reached random on the suite median; GBHack is
+the first game with a clear gain (3 of 5 milestones on two seeds: dungeon level 2 and experience level 2).
+Renegade Rush lost the +0.17 the long-horizon top pick had.
+
+| agent | presses per wall-minute (median) | per game: Tobu / PostBot / Renegade / GBHack | game frames per wall-minute (median) | runs ended by the wall-clock limit | Jev $ | Azure $ (calls) |
+|---|---|---|---|---|---|---|
+| long-horizon agent, top | 18 | 6 / 57 / 11 / 38 | 690 | 12 of 12 (100%) | 0 | not logged then |
+| long-horizon agent, Jev | 41 | 18 / 72 / 16 / 65 | 1,191 | 3 of 4 (75%) | 0.116 | not logged then (101 goal calls) |
+| speed-gaps agent, top | 60 | 10 / 213 / 26 / 81 | 2,459 | 6 of 12 (50%) | 0 | 0.700 (539) |
+| speed-gaps agent, Jev | 76 | 109 / 81 / 16 / 71 | 3,650 | 1 of 4 (25%) | 0.104 | 0.178 (129) |
+
+Azure dollars by game (top pick, three runs / Jev, one run): Tobu 0.226 / 0.038, PostBot 0.046 / 0.004, Renegade
+0.273 / 0.097, GBHack 0.155 / 0.039. Each run's chat-model calls go to its own ledger
+(`<game>-<agent>-<seed>.azure.jsonl` beside the run) and are copied into the project ledger afterwards.
+
+**Where the wall time goes now: labelling the font.** The harness starts every run with no glyph book (see below),
+so each run pays tiletext's Azure labelling again. On Tobu Tobu Girl and Renegade Rush that is 40 labelling calls
+per run, which looks like tiletext's per-run cap, taking 470–540 of the 900 wall seconds. Those are exactly the
+games still ended by the wall limit (Tobu 10 presses per minute, Renegade 26). Goal-writer calls cost 12–80 s per run.
+PostBot and GBHack, with few new glyphs, are now ended by the press or frame budget instead of the clock.
+
+**Glyph book: fresh every run.** The `gameboy` pack names no `book:`, so the tiletext glyph book lives in memory
+for one process. The harness clears it (with the OCR pixel cache) at the start of every run and ignores
+`ANYGAME_GLYPHS`, so seeds of one game do not share what an earlier seed learned. That is the strict held-out
+reading (the agent meets each game cold). A book kept per game across runs would remove most of the labelling time
+above after the first run; whether that counts as "never tuned on" is a choice for whoever owns the protocol. A
+book carried across games would be the general version.
+
+    python -m heldout.run --pack gameboy --decider top --out runs/gaps-top          # four games in parallel in practice
+    python -m heldout.run --pack gameboy --decider jev --seeds 1 --out runs/gaps-jev
