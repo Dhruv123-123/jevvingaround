@@ -8,10 +8,12 @@ purchase needs a confirmation, and an item needs its use played out. So from the
   2. let the game run; whenever the screen has stood still for a while, look at whether the game is asking: a
      direction that changes the screen differently from waiting (a cursor moves, the player walks) means it is,
      and the play-out ends there;
-  3. otherwise press A to page on (a text box waiting for a button), and keep going; when A has changed nothing
+  3. with `restless`, a screen that never stands still for that many frames is real-time play, not a message, and
+     the play-out ends there (off by default: an animated title screen can move for 30 s and then wait);
+  4. otherwise press A to page on (a text box waiting for a button), and keep going; when A has changed nothing
      twice, the game is waiting for some other button (a pause menu that lists them) and the play-out ends there;
-  4. keep every new text the screen showed, in order, and the numbers on screen before and after;
-  5. put the game back exactly as it was.
+  5. keep every new text the screen showed, in order, and the numbers on screen before and after;
+  6. put the game back exactly as it was.
 
 The emulator is the forward model, so nothing here knows a game. Randomness (a miss, a critical hit) makes one play-out
 a sample; `delays` plays the same choice after a few different wait lengths, which on most games changes the random
@@ -31,9 +33,13 @@ NUM = re.compile(r"\d+(?:\s*/\s*\d+)?")
 
 
 def _small(img: np.ndarray) -> np.ndarray:
-    g = img.mean(axis=2) if img.ndim == 3 else img
-    s = max(1, g.shape[0] // 144)
-    return g[::s, ::s].astype(np.int16)
+    """The screen at its native size in grey. Sampled first, then averaged: the same values as averaging the full
+    upscaled screen, in an eighth of the time (this runs on every frame a play-out looks at)."""
+    s = max(1, img.shape[0] // 144)
+    g = img[::s, ::s]
+    if g.ndim == 3:
+        g = g.astype(np.int16).sum(axis=2) // 3
+    return g.astype(np.int16)
 
 
 def _differs(a: np.ndarray, b: np.ndarray, thr: float = 0.5) -> bool:
@@ -55,9 +61,11 @@ def asks(device, frames: int = 24, dirs: tuple[str, ...] = ("down", "right")) ->
 
 
 def play_out(device, keys: list[str], read_text: Callable[[np.ndarray], str], *, max_frames: int = 2400, step: int = 20,
-             still: int = 2, hold: int = 4, gap: int = 10, delay: int = 0, restore: bool = True) -> dict[str, Any]:
+             still: int = 2, hold: int = 4, gap: int = 10, delay: int = 0, restore: bool = True,
+             restless: int = 0) -> dict[str, Any]:
     """Play `keys`, then run until the game asks again (end "asks"; "waits" when only another button does anything;
-    "cap" at `max_frames`). Returns {lines, end, frames, pages,
+    "busy" when the screen never stands still for `restless` frames (0: never); "cap" at `max_frames`).
+    Returns {lines, end, frames, pages,
     numbers_before, numbers_after, text_after}. The game is put back as it was unless `restore` is False."""
     snap = device.snapshot()
     disc, device.discoverer = getattr(device, "discoverer", None), None     # trying keys must not teach discovery
@@ -76,13 +84,21 @@ def play_out(device, keys: list[str], read_text: Callable[[np.ndarray], str], *,
         calm = 0
         dead = 0
         last_text = before
+        moving = 0
         while device.frames - t0 < max_frames:
             device.wait(step)
             img = device.screen()
             if _differs(img, prev):
                 calm = 0
                 prev = img
+                moving += step
+                if restless and moving >= restless:
+                    # the screen has not stood still for this long: real-time play (a platformer, a race), not a
+                    # message. Playing it on to the cap would only spend wall time
+                    end = "busy"
+                    break
                 continue
+            moving = 0
             calm += 1
             if calm < still:
                 continue
@@ -155,6 +171,7 @@ def describe(r: dict[str, Any] | list[dict[str, Any]], width: int = 240) -> str:
     secs = first["frames"] / 60
     bits.append(f"then asks again ({secs:.1f} s)" if ends == {"asks"} else
                 f"then waits for another button ({secs:.1f} s)" if ends == {"waits"} else
+                f"the screen keeps moving (real-time play, {secs:.0f} s watched)" if ends == {"busy"} else
                 f"still going after {secs:.0f} s" if ends == {"cap"} else "sometimes asks again, sometimes still going")
     nb, na = first["numbers_before"], first["numbers_after"]
     moved = [f"{a} → {b}" for a, b in zip(nb, na) if a != b] if len(nb) == len(na) else []
