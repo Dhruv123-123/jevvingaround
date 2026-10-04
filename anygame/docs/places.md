@@ -29,6 +29,9 @@ only works if places match the game's maps. They did not:
   - If the old name returns on the same tile later, it was a door and stays one.
   - If the old name returns anywhere else, it was one place under two names. The two places are merged: a `merge`
     event is logged, and `canonical(id)` maps old ids to the merged one.
+- **Forced move.** The position jumps with nothing pressed, to somewhere this place has not been, and the next read
+  stands there too. The game has put the player elsewhere: a respawn after losing, or a scripted walk. It is a door
+  marked `forced`, which upkeep (`upkeep.py`) uses to learn that a number's floor is fatal.
 - **Late name.** A new name on the read right after a walk counts as that walk's door. Games write it a little after
   the step, as with Pokemon's position.
 - `cut_between(before, after)` tells a scroll from a new scene, for a call site that has the two frames. Indoors in
@@ -44,23 +47,22 @@ remembered.
 
 | run | game | maps | world memory: places, mixed | place book: places, mixed |
 |---|---|---|---|---|
-| Jev from power-on, part 1 | Pokemon | 4 | 2, 24.2% | 6, 0.7% |
-| part 2 (to Route 1) | Pokemon | 4 | 2, 5.6% | 8, 1.9% |
-| part 3 (Route 1) | Pokemon | 4 | 2, 27.1% | 10, 18.7% |
-| stand-in, 1,500 ticks | Pokemon | 4 | 7, 25.3% | 39, 4.5% |
-| map-signature run | Pokemon | 3 | 2, 11.7% | 7, 1.0% |
-| run 2 | Aevilia | 3 | 11, 4.3% | 11, 0.8% |
-| run 3 | Aevilia | 4 | 22, 4.0% | 23, 2.4% |
-| top pick, 1,200 ticks (held-out; map = dungeon level) | GBHack | 2 | 4, 0.7% | 8, 0.7% |
+| Jev from power-on, part 1 | Pokemon | 4 | 2, 24.2% | 7, 0.7% |
+| part 2 (to Route 1) | Pokemon | 4 | 2, 5.6% | 11, 0.6% |
+| part 3 (Route 1) | Pokemon | 4 | 2, 27.1% | 11, 18.7% |
+| stand-in, 1,500 ticks | Pokemon | 4 | 7, 25.3% | 40, 4.5% |
+| map-signature run | Pokemon | 3 | 2, 11.7% | 9, 1.0% |
+| run 2 | Aevilia | 3 | 11, 4.3% | 13, 0.8% |
+| run 3 | Aevilia | 4 | 22, 4.0% | 33, 2.3% |
+| top pick, 1,200 ticks (held-out; map = dungeon level) | GBHack | 2 | 4, 0.7% | 28, 0.3% |
 
 Mixing goes down on every run. What is left:
 
 - **Part 3.** Its signature names 0 for both house floors and the town at different times. That run predates the
   emulator thread's map-signature v3 and position fixes. No rule on names can separate maps that share one name and
   one coordinate frame.
-- **GBHack (held-out) never left dungeon level 1.** Mixing is the same, and the book splits more (8 places, the
-  world 4). GBHack's discovered position still jumps (row 54, then -215), and each jump with a new name is a door.
-- **The stand-in run splits maps** (39 places for 4 maps). Its signature changes value often, and each change on a
+- **GBHack (held-out) never left dungeon level 1.** Mixing is lower (0.3% against 0.7%), but the book splits much more. GBHack's discovered position still jumps (row 54, then -215). A jump that holds for two reads is taken as a forced move, so the book splits level 1 into 28 places.
+- **The stand-in run splits maps** (40 places for 4 maps). Its signature changes value often, and each change on a
   step starts a door on trial. A split means a goal can call a known map new, so a split map gets explored twice. That
   is cheaper than a mix, where walls of one map block paths in another.
 
@@ -68,6 +70,12 @@ Pallet Town and Route 1 are now two places joined north–south in every run tha
 area" can be met, and Viridian City will be another join.
 
 ## Call sites (long-horizon thread: `perceive/world.py`, the runner's walk)
+
+The exact change is in `pokemon-red/world-places.patch`, applied from the repo root with `git apply`. It changes
+`world.py` and replaces one test in `test_longhorizon.py`, whose old test checked the permanent alias. The full suite
+passes with it applied (152 passed, 4 skipped). Only a walk step's own read passes `moves`. Other reads (the
+loop's read, held walks offered by the menu) pass none, so a name change with movement on those reads counts as a
+door, not a rename.
 
 1. `World.__init__`: `self.book = PlaceBook()`.
 2. `World.tile_of`: replace `return self._place(t, stepping)` with
