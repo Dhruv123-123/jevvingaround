@@ -559,7 +559,15 @@ class WorldTracker:
             d = next((plain[(k,)] for k in keys if k in DIRS and (k,) in plain), None)
             reach = abs(x["reach_x"]) + abs(x["reach_y"])
             base = abs(d["reach_x"]) + abs(d["reach_y"]) if d is not None else 0.0
-            if x["kind"] == "jump" or (reach >= 4 and reach > 1.5 * max(base, 1.0)):
+            # a button alone counts only as a jump (up and back down); a button with a direction counts when it goes
+            # further along that direction than the direction alone (a dash, a run). A drift on another axis (a talk
+            # that turns the player, a misread axis) is not a move
+            along = 0.0
+            if d is not None:
+                dk = next(k for k in keys if k in DIRS)
+                along = abs(x["reach_x"]) if DIRS[dk][0] else abs(x["reach_y"])
+                base = abs(d["reach_x"]) if DIRS[dk][0] else abs(d["reach_y"])
+            if x["kind"] == "jump" or (d is not None and along >= 4 and along > 1.5 * max(base, 1.0)):
                 self.moves["move_" + "_".join(keys)] = {"keys": list(keys), "hold": x["hold"], "line": f"hold {line}"}
         return lines
 
