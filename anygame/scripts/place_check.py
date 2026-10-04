@@ -53,7 +53,8 @@ def replay(path: str, **kw) -> dict[str, object]:
         moves = moves_of(a.get("action"))
         walking = (a.get("screen") or {}).get("screen") == "walk" and bool(moves)
         idle = str(a.get("action", "")).startswith("auto: wait")
-        pid = book.see(s.get("map", 0), int(s["x"]), int(s["y"]), moves=moves, walking=walking, idle=idle)
+        look = bytes.fromhex(b["print"]) if b.get("print") else None
+        pid = book.see(s.get("map", 0), int(s["x"]), int(s["y"]), moves=moves, walking=walking, idle=idle, look=look)
         new.append((t["map"], pid))
         if w:
             old.append((t["map"], w["map"]))

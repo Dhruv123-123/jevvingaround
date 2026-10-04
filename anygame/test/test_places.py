@@ -69,3 +69,34 @@ def test_round_trip():
     b.see("A", 10, 35, moves=["up"], walking=True)
     c = PlaceBook.from_dict(b.to_dict())
     assert c.report()["places"] == 2 and c.joins == b.joins and c.see("A", 10, 34, moves=["up"], walking=True) == b.here.id
+
+
+def test_a_door_taken_again_leads_where_it_did_whatever_the_name_reads_and_the_way_back_is_known():
+    b = PlaceBook()
+    town = b.see("T", 5, 5)
+    b.see("T", 5, 4, moves=["up"], walking=True)                     # onto the door tile
+    house = b.see("H1", 3, 7, moves=["up"], walking=True)            # through it: a new place
+    assert house != town
+    b.see("H1", 3, 6, moves=["up"], walking=True)
+    b.see("H1", 3, 7, moves=["down"], walking=True)
+    assert b.see("T", 5, 4, moves=["down"], walking=True) == town    # back out
+    b.see("T", 5, 5, moves=["down"], walking=True)
+    b.see("T", 5, 4, moves=["up"], walking=True)
+    # in again, but the name reads differently this time (a byte that is not only the map)
+    assert b.see("NOISE", 3, 7, moves=["up"], walking=True) == house
+    hop = b.route(house, town)
+    assert hop["kind"] == "door" and (hop["x"], hop["y"]) == (3, 7) and hop["dir"] == "down"
+    assert b.route(town, house)["dir"] == "up"
+
+
+def test_a_new_name_where_the_place_looks_as_it_did_is_a_rename_and_joins_route_both_ways():
+    b = PlaceBook()
+    look = bytes(range(200))
+    room = b.see("R", 4, 4, look=look)
+    b.see("R", 5, 4, moves=["right"], walking=True, look=bytes(200))
+    # back on (4,4), a new name on an ordinary step, the screen as it was: the same room
+    assert b.see("R2", 4, 4, moves=["left"], walking=True, look=look) == room
+    town = b.see("A", 10, 0)
+    route = b.see("A", 10, 35, moves=["up"], walking=True)
+    assert b.route(route, town) == {"kind": "join", "dir": "down", "hops": 1}
+    assert b.route(town, route)["dir"] == "up" and b.route(town, town)["kind"] == "here"

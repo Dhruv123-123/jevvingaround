@@ -27,6 +27,7 @@ def main():
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--state", default=None)
     ap.add_argument("--stuck", action="store_true", help="run anygame/stuck.py on every step, frames included, and log its raises")
+    ap.add_argument("--full", default=None, help="also write each step's record (screen, action, truth) here, for place_check.py")
     ap.add_argument("--shots", default=None, help="a folder: the screen of every 10th explored step")
     a = ap.parse_args()
     work = Path(tempfile.mkdtemp(prefix="stepprof-"))
@@ -57,6 +58,16 @@ def main():
     if a.stuck:
         from anygame.stuck import Stuck
         stuck = Stuck()
+    full = None
+    if a.full:
+        import os
+        os.environ["ANYGAME_LOG_TRUTH"] = "1"     # the grader's map beside the reads, for scoring only
+        full = open(a.full, "w")
+        grader = None
+        for g in ("pokemon_red", "aevilia"):
+            if g.split("_")[0] in Path(a.rom).name:
+                import importlib
+                grader = importlib.import_module(f"anygame.graders.{g}")
     with open(a.out, "w") as log:
         for i in range(a.steps):
             if mt is None:
@@ -78,6 +89,14 @@ def main():
                                   "x": s.get("x"), "explored": (getattr(mt, "reads", 0) if mt else 0) > before,
                                   "entries": (s.get("menu") or {}).get("entries")}) + "\n")
             log.flush()
+            if full is not None:
+                r = {k: rec.get(k) for k in ("tick", "screen", "action", "goal")}
+                from anygame.stuck import fingerprint
+                r["print"] = fingerprint(device.screen()).hex()      # what the screen looked like, coarsely
+                if grader is not None:
+                    f = grader.facts(device.memory)
+                    r["truth"] = {"map": f.get("map"), "map_name": f.get("map_name")}
+                full.write(json.dumps(r, default=str) + "\n")
             if a.shots and (getattr(mt, "reads", 0) if mt else 0) > before and mt.reads % 10 == 1:
                 import cv2
                 Path(a.shots).mkdir(parents=True, exist_ok=True)
