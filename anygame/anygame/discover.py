@@ -27,6 +27,7 @@ EVIDENCE = ("changes", "ups", "holds", "holds_walked", "walks_at", "by_pad", "by
 LOADED_HOLD = 150   # presses on an axis this run judges for itself before a position loaded from a save can change
 SETTLED = 300       # updates the position held unchanged before lookaheads stop teaching it (early on they correct it)
 FADE_WAIT = 16      # frames after a map byte changed off a warp during which a fade may still come to explain it
+WARP_MEMORY = 200   # doors the map evidence weighs fully: older ones count half, then a quarter...
 STILL_MAX = 600     # such presses in a row after which a position that never moves is judged again (it froze)
 RECENT = 40         # real d-pad presses looked back on to tell walking from a menu
 MOVED = 0.2         # a position byte moves on at least this share of its axis's presses (walls and turns take the rest)
@@ -580,6 +581,13 @@ class Discoverer:
         else:
             self._pos_age = 0
         self._warp_pos = pos
+        if WARP_MEMORY and self.warps >= 2 * WARP_MEMORY:
+            # what the doors showed long ago counts for less than what they show now: evidence gathered under an
+            # older rule or a stretch of missed doors (stairs before fades were seen) would otherwise hold the map
+            # byte out for good. The counts over the warps are halved together, so every ratio is kept
+            for k in ("by_warp", "returned", "full_w", "chg_w", "fade_w"):
+                setattr(self, k, getattr(self, k) // 2)
+            self.warps //= 2
         if "map" not in self.fixed and "x" in self.found and "y" in self.found:
             m = self._map()
             if m:
@@ -794,13 +802,16 @@ class Discoverer:
             self._seen = np.unpackbits(z["_seen"], axis=1)[:, :256].astype(bool)
             self._seen_walking = np.unpackbits(z["_seen_walking"], axis=1)[:, :256].astype(bool)
             self.walks, self.pad_presses, self.other_presses, self.warps = (int(v) for v in z["counts"])
-            if "full_w" not in z or "fade_w" not in z:
-                # saved before the changes off the warps (and those a fade explains) were counted over the warps'
-                # stretch: the warps can't be weighed against them, so they are counted afresh from here (the
-                # position and the rest are kept)
-                self.by_warp[:] = 0
-                self.returned[:] = 0
-                self.warps = 0
+            # the doors are counted afresh from here (the position, the values seen and the names are kept): what
+            # they showed under an older run's rules and misses (stairs before fades were seen, a door loop's missed
+            # warps) held the map byte out at the run's tick-21500 resume, and Pallet, the lab and both houses read
+            # as one place; a resumed run's own doors pick it again within a few dozen presses
+            self.by_warp[:] = 0
+            self.returned[:] = 0
+            self.full_w[:] = 0
+            self.chg_w[:] = 0
+            self.fade_w[:] = 0
+            self.warps = 0
         nm = d.get("names")
         if nm:
             import base64
