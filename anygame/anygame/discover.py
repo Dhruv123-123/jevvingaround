@@ -24,6 +24,7 @@ MAP_RULE = 4        # bumped when the map rule changes: a signature or evidence 
 EVIDENCE = ("changes", "ups", "holds", "holds_walked", "walks_at", "by_pad", "by_other", "full_any", "follows_pos",
             "_from", "_to", "_old", "_hist", "n_values", "by_warp", "returned")
 SETTLED = 300       # updates the position held unchanged before lookaheads stop teaching it (early on they correct it)
+RECENT = 40         # real d-pad presses looked back on to tell walking from a menu
 MOVED = 0.2         # a position byte moves on at least this share of its axis's presses (walls and turns take the rest)
 WALKED = 0.8        # a map value must have held through walking on this share of its holds
 HOLD_WALKS = 6      # a map value holds while the player walks at least this many moves (a step's bytes hold for one)
@@ -201,6 +202,10 @@ class Discoverer:
         self.n_values += new
         if "x" in self.found and "y" in self.found:
             c = after != before
+            if real and d and (d[0] or d[1]):
+                # which found axis the last real d-pad presses moved: on a menu or a battle screen neither does
+                moved_axes = {ax for ax in "xy" if self.decode(after, ax) != self.decode(before, ax)}
+                self._axis_moves = ((getattr(self, "_axis_moves", []) + [moved_axes])[-RECENT:])
             back = c & self._seen_walking[np.arange(N), v]     # back to a value it had while the player walked
             if real:
                 self._seen_walking[np.arange(N), v] = True
@@ -438,6 +443,12 @@ class Discoverer:
         # steps (the real position against a block coordinate or a sprite slot) takes over
         if held and not (best[3] >= held[3] + 0.15 and best[0] >= held[0] - 0.02):
             best = held
+        other = "y" if ax == "x" else "x"
+        if held and best is not held and other in self.found and \
+                not any(other in m for m in getattr(self, "_axis_moves", [])[-RECENT:]):
+            # the other axis has not moved on any recent press: the player is not walking (a menu, a battle), and a
+            # byte that follows the d-pad on one axis there is a cursor, not the position
+            best = held
         score, w, i, _ = best
         return {"addr": LO + i, "type": "u8" if w == 1 else "u16le", "score": round(score, 3)}
 
@@ -512,7 +523,7 @@ class Discoverer:
         if self.warps:
             # bytes that changed on most warps and on few plain steps or buttons: a map's, even before it held
             W = (self.by_warp >= max(1, 0.5 * self.warps)) & (self.changes < 64) & (self.follows_pos == 0) & \
-                (self.by_pad - self.by_warp <= np.maximum(2, 0.3 * self.by_warp)) & (self.by_other <= 1) & \
+                (self.full_any - self.by_warp <= np.maximum(2, 0.3 * self.by_warp)) & (self.by_other <= 1 + 0.5 * self.by_warp) & \
                 (self.changes <= 2 * self.by_warp + 2)
             for ax in "xy":
                 a = self.found[ax]["addr"] - LO
@@ -528,8 +539,11 @@ class Discoverer:
         if len(back):
             # a place's bytes come back when the player does; the one that took the most values tells the most
             # places apart (a byte that only says indoors or out takes two)
-            off = self.by_pad[back] - self.by_warp[back] + np.maximum(self.changes[back] - self.by_warp[back], 0)
-            order = np.lexsort((off, -self.n_values[back], -self.by_warp[back]))
+            off = np.maximum(self.full_any[back] - self.by_warp[back], 0) + np.maximum(self.changes[back] - self.by_warp[back], 0)
+            # ties (a map's sprite table loads with its id and comes back with it too): the byte lookaheads into a
+            # door changed most (the id is written as the player steps onto the door, sprites and tiles only after
+            # the fade), then the higher address (sprite tables and buffers sit low)
+            order = np.lexsort((-back, -self.by_pad[back], -self.n_values[back], off, -self.by_warp[back]))
             back = back[order]
             # a second byte only if it changed on exactly the same presses (an id's other half); the map the
             # player came from also comes back, but on other presses, and would split a place by its entrance

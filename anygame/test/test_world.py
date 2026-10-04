@@ -455,6 +455,35 @@ def test_discoverer_takes_the_map_id_from_warps_and_returns():
     assert all(len(v) == 1 for v in seen.values() if v) and len(set().union(*seen.values())) == len(seen)
 
 
+def test_discoverer_keeps_y_through_a_menu_whose_cursor_follows_the_pad():
+    """A menu with a cursor on both axes (a battle's grid of choices, a job grid): the d-pad moves the cursor's bytes
+    over many values while the position never moves. The position found while walking stays."""
+    from anygame.discover import Discoverer, LO, N
+    rng = np.random.default_rng(4)
+    d = Discoverer()
+    mem = np.zeros(N, np.int32)
+    X, Y, CUR, CURX = 0xD362 - LO, 0xD361 - LO, 0xCC2A - LO, 0xCC2B - LO
+    mem[X], mem[Y] = 20, 20
+    for _ in range(150):
+        b = ["up", "down", "left", "right"][rng.integers(4)]
+        before = mem.copy()
+        mem[X] += {"left": -1, "right": 1}.get(b, 0)
+        mem[Y] += {"up": -1, "down": 1}.get(b, 0)
+        mem[0xC300 - LO: 0xC400 - LO] = rng.integers(0, 256, 256)      # a step redraws the screen
+        d.press(b, before, mem.copy(), full=True)
+        d.frame(mem.copy(), blank=False)
+    assert d.found["y"]["addr"] == 0xD361
+    for _ in range(400):
+        b = ["up", "down", "left", "right"][rng.integers(4)]
+        before = mem.copy()
+        mem[CUR] = (mem[CUR] + {"up": -1, "down": 1}.get(b, 0)) % 256
+        mem[CURX] = (mem[CURX] + {"left": -1, "right": 1}.get(b, 0)) % 256
+        mem[0xC300 - LO: 0xC400 - LO] = rng.integers(0, 256, 256)      # the battle animates
+        d.press(b, before, mem.copy(), full=True)
+        d.frame(mem.copy(), blank=False)
+    assert d.found["y"]["addr"] == 0xD361 and d.found["x"]["addr"] == 0xD362
+
+
 def test_pyboy_snapshot_is_reused_until_the_game_moves():
     pytest.importorskip("pyboy")
     from anygame.device import open_device
