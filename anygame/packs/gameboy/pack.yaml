@@ -23,7 +23,7 @@ read:
   text: { kind: tiletext, size: [160, 144], cell: 8, fallback: ocr, when: { read: screen, in: [text, choice] }, otherwise: "" }
   # a choice on screen: its entries and what choosing each does, found by trying them from a save state
   menu: { kind: menu, needs_words: 1, when: { read: screen, in: [choice, button] }, pos: [found.x, found.y], depth: 5, settle: 90, text: tiletext, outcome: playout }
-  world: { kind: world, motion: true, goback: true, map: map, x: x, y: y, cell: cell, step_hold: 16, after: 6, max_steps: 8, radius: 40,
+  world: { kind: world, motion: true, map: map, x: x, y: y, cell: cell, step_hold: 16, after: 6, max_steps: 8, radius: 40,
            learn_when: { read: x, not: null } }
 remember: [text]
 auto:
