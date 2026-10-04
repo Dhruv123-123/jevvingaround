@@ -575,3 +575,13 @@ def test_discoverer_evidence_survives_a_checkpoint():
     e.load(saved)
     assert (e.by_pad == d.by_pad).all() and (e._seen == d._seen).all() and e.pad_presses == d.pad_presses
     assert "evidence" not in d.dump(evidence=False)
+
+
+def test_discoverer_drops_an_old_rule_signature_but_keeps_the_position():
+    """A checkpoint saved under an older map rule: its signature is judged again, the position resumes as it was."""
+    from anygame.discover import Discoverer, MAP_RULE
+    d = Discoverer()
+    d.load({"x": {"addr": 0xD362, "type": "u8", "score": 1.0}, "y": {"addr": 0xD361, "type": "u8", "score": 1.0},
+            "map": {"addrs": [0xC750, 0xC751], "doors": 23, "transitions": 4, "rule": MAP_RULE - 1}, "cell": 1})
+    assert "map" not in d.found
+    assert d.found["x"]["addr"] == 0xD362 and d.found["y"]["addr"] == 0xD361
