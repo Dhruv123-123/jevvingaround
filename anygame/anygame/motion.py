@@ -94,24 +94,12 @@ def _hold(device, keys, n):
     if callable(getattr(device, "hold_keys", None)):
         device.hold_keys(list(keys), n)
         return
-    pb = getattr(device, "_pb", None)
-    if pb is not None and hasattr(device, "_button"):
-        # the PyBoy device has no several-buttons-at-once call yet: press its emulator's buttons directly
-        for k in keys:
-            pb.button_press(device._button(k))
-        device._tick(n)
-        return
     device.press(keys[0], hold=n, after=0)          # any other device: the first button only
 
 
 def _release(device, keys):
     if callable(getattr(device, "release_keys", None)):
         device.release_keys(list(keys))
-        return
-    pb = getattr(device, "_pb", None)
-    if pb is not None and hasattr(device, "_button"):
-        for k in keys:
-            pb.button_release(device._button(k))
 
 
 def _rel(tr: np.ndarray, wait: np.ndarray) -> np.ndarray:
