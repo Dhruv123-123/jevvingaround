@@ -105,7 +105,10 @@ class GlyphBook:
                 v = self.votes.setdefault(k, Counter())
                 v[c] += 1
                 top, n = v.most_common(1)[0]
-                if (n >= 2 and n > 0.66 * sum(v.values())) or (agree >= 3 and len(v) == 1 and source == "chat"):
+                # two agreeing lines; or, from the chat model, one line whose other glyphs it read exactly as trusted
+                # (three of them, or every one of at least one: a short status line such as "19/ 19")
+                vouched = agree >= 3 or (agree >= 1 and agree == len(known))
+                if (n >= 2 and n > 0.66 * sum(v.values())) or (vouched and len(v) == 1 and source == "chat"):
                     self.labels[k] = top
         return True
 
@@ -227,6 +230,8 @@ class TileText:
         self.log = None
         self.last: dict[str, Any] = {}
         self.sync = bool(r.get("sync", False))
+        self.patience = int(r.get("patience", 20))      # reads a short queue waits before it is labelled anyway
+        self.reads_since = 0
         self._job = None
 
     def wait(self) -> None:
@@ -262,7 +267,12 @@ class TileText:
                 else:
                     seg.append((BLANK, None) if kind == 0 else (lab if lab is not None else "?", k))
             self._collect(img, row, kinds[r], r)
-        if b.pending() >= self.batch or (b.pending() and unknown and not known):
+        self.reads_since += 1
+        # a full batch, a screen with nothing known yet, or a few lines that have waited long enough (a status
+        # display's digits may be the only new glyphs for a long while)
+        waiting = b.pending()
+        if waiting and (waiting >= self.batch or (unknown and not known) or self.reads_since >= self.patience):
+            self.reads_since = 0
             chat = self._chat()
             if chat is None or b.calls < self.max_calls:
                 if self.sync:
