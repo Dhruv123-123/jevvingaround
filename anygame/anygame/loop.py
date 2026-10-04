@@ -989,11 +989,12 @@ class Agent:
         hold = int(r.get("hold", 16))
         res = self.device.branch({"wait": [], **{k: [k] for k in buttons}, **{k: [f"{k}:{hold}"] for k in dirs}}, frames=int(r.get("frames", 48)))
         disc = getattr(self.device, "discoverer", None)
-        if disc is not None and res["wait"].get("ram") is not None and not {"x", "y"} <= set(getattr(disc, "found", {}) or {}):
+        held = (getattr(self, "_pos_lock", None) or {}).get("locked")
+        if disc is not None and res["wait"].get("ram") is not None and not held:
             # each direction against waiting, from the same moment: what the press changed and nothing else, which is
             # what finding the position needs (a timer or an animation changes in both and cancels out)
-            # once x and y are known, probes stop teaching: in a battle menu the cursor byte follows up/down and
-            # stays on left/right exactly like a position, and probes there swapped y for it (Rattata stall, tick 5730)
+            # not once the position has held (pos_lock, kept across a resume, beside discovery's own a3d5429): in a
+            # battle menu the cursor byte follows up/down and stays on left/right like a position (Rattata, tick 5730)
             for k in dirs:
                 disc.press(k, res["wait"]["ram"], res[k]["ram"], full=False)
         base = res["wait"]["screen"].astype(_np.int16)
