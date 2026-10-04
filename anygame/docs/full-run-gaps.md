@@ -204,3 +204,9 @@ checks them.
 outcome the goal names: Pokemon's "Withdrew POTION." from Red's PC was found in 19 tries and replays exactly. On
 Aevilia it mapped the pause menu, which lists buttons rather than a cursor. A line that tells of a gain reopens the
 walls the world tracker had given up on.
+
+## Gap 6, step 1: wall time
+
+See `docs/speed.md`. Profiling the long-horizon agent on Tobu Tobu Girl showed menu trials taking 90% of the wall time.
+Faster screen comparison and an OCR cache took 91 ticks from 184 s to 69 s with identical decisions. The rest is in
+the menu reader's choice of when to explore.
