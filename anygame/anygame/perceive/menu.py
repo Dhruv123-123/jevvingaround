@@ -214,6 +214,17 @@ class MenuTracker:
             for keys, img in entries:
                 device.restore(snap)
                 outcomes.append(self._outcome(device, keys + ["a"], total, img, pos))     # against the entry, cursor on it
+            if self.r.get("outcome") == "playout":
+                # an entry that does something is also played on until the game asks again (anygame/playout.py): a
+                # battle move's result is seconds of text later, past the short watch above
+                from ..playout import play_out, describe
+                for (keys, _), oc in zip(entries, outcomes):
+                    if oc["same_screen"]:
+                        continue
+                    device.restore(snap)
+                    r = play_out(device, [k for k in keys] + ["a"], self._read_text, hold=self.hold, gap=self.gap,
+                                 max_frames=int(self.r.get("playout_frames", 1800)))
+                    oc["playout"] = describe(r, 200)
             device.restore(snap)
             back = self._outcome(device, ["b"], total, base, pos)
             buttons = {}
@@ -239,6 +250,13 @@ class MenuTracker:
             new = [w for w in _words(e.pop("_text", "")) if w not in base_words]
             e["new_text"] = " ".join(dict.fromkeys(new))[:120]
         return out
+
+    def _read_text(self, img: np.ndarray) -> str:
+        tb = self._boxes(img, ocr=False)
+        if tb is None:
+            from .ocr import _text
+            return _text(img, 0.67)
+        return " ".join(b[4] for b in tb)
 
     def _boxes(self, img: np.ndarray, ocr: bool = True):
         """Text boxes on a screen: from the cells (`text: tiletext`) where the glyphs are known, else by OCR."""
@@ -342,6 +360,9 @@ class MenuTracker:
     def _said(e: dict[str, Any]) -> str:
         if e["same_screen"]:
             return "nothing changes"
+        if e.get("playout"):
+            back = f"; first goes to a screen seen before ('{e['back_to']}')" if e.get("back_to") is not None else ""
+            return "played on: " + e["playout"] + back
         bits = []
         if e["walking"]:
             bits.append("you can walk after it")
