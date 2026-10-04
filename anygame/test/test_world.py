@@ -206,6 +206,28 @@ def test_pyboy_device_reads_ram_saves_and_restores_state(tmp_path):
         d.close()
 
 
+def test_pyboy_device_takes_the_found_file_of_a_save_named_in_the_url(tmp_path):
+    # the save in the URL is loaded before the pack turns discovery on: its .found must still be read (a run started
+    # from a mid-game save rediscovered everything from nothing, and its first doors went to sprite bytes)
+    pytest.importorskip("pyboy")
+    import json
+    from anygame.device import open_device
+    rom = os.path.join(ROOT, "roms", "2048gb", "2048.gb")
+    d = open_device("pyboy://" + rom + "?boot=60&clock=game&step=2", None)
+    try:
+        d.save_state(str(tmp_path / "a.state"))
+    finally:
+        d.close()
+    (tmp_path / "a.state.found").write_text(json.dumps({"x": {"addr": 0xD362, "type": "u8", "score": 1.0},
+                                                         "y": {"addr": 0xD361, "type": "u8", "score": 1.0}, "cell": 1}))
+    d = open_device("pyboy://" + rom + f"?clock=game&step=2&state={tmp_path / 'a.state'}", None)
+    try:
+        d.use_pack({"discover": True}, str(tmp_path))
+        assert d.discoverer.found["x"]["addr"] == 0xD362 and d.discoverer.found["y"]["addr"] == 0xD361
+    finally:
+        d.close()
+
+
 def test_discoverer_finds_position_and_map_from_ram_alone():
     from anygame.discover import Discoverer, LO, N
     rng = np.random.default_rng(0)
