@@ -681,3 +681,21 @@ def test_with_nothing_left_to_explore_a_known_door_out_is_offered():
     w.visited.setdefault("town", set()).update({(i, j) for i in range(10) for j in range(10)})
     opts, plans = w.options((room, 1, 1), None)
     assert "leave_1" in plans and plans["leave_1"][-1] == "down" and "wander" not in plans
+
+
+def test_a_town_with_all_exits_known_points_on_along_its_joins_and_heading_survives_a_save():
+    import json
+    from anygame.perceive.world import WorldTracker
+    w = WorldTracker({"x": "x", "y": "y", "map": "map"})
+    town = w.tile_of({"map": 11, "x": 3, "y": 3})[0]
+    w._moves, w._walking = ["up"] * 3, True
+    w.tile_of({"map": 11, "x": 3, "y": 0})
+    w._moves, w._walking = ["up"], True
+    route = w.tile_of({"map": 11, "x": 3, "y": 35})[0]            # walked off the top: a join north
+    w.visit((route, 3, 35))
+    assert route != town and w.heading.way_on(town) == ("up", route)
+    w.heading.toward(route)
+    before = dict(w.heading.entered)
+    w2 = WorldTracker({"x": "x", "y": "y", "map": "map"})
+    w2.load(json.loads(json.dumps(w.dump())))
+    assert w2.heading.entered.keys() == before.keys() and w2.heading.toward(route) == w.heading.toward(route)

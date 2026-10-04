@@ -62,3 +62,30 @@ class Heading:
             if reach > far:
                 best, far = dd, reach
         return best
+
+    def way_on(self, pid: int | None) -> tuple[str, int] | None:
+        """No way on from this place itself (a town walked through, its joins all known): follow each join straight on
+        (north, then north again, ...) to the place where that line of joins ends, as (direction, place). That end is a
+        route not walked past yet. After a reload the run may remember the town but not why it left it; the far end
+        of its joins is where exploring goes on. The end with the fewest tiles seen first (the least walked), then the longest
+        line."""
+        if pid is None or pid >= len(self.book.places):
+            return None
+        pid = self.book.canonical(pid)
+        best = None
+        for d, q in sorted(self.book.neighbours(pid).items()):
+            seen, n = {pid}, 0
+            q = self.book.canonical(q)
+            while q not in seen:
+                seen.add(q)
+                n += 1
+                nxt = self.book.neighbours(q).get(d)
+                if nxt is None:
+                    break
+                q = self.book.canonical(nxt)
+            else:
+                continue                     # the line came round to a place already on it
+            key = (len(self.book.places[q].tiles), -n)
+            if best is None or key < best[0]:
+                best = (key, d, q)
+        return None if best is None else (best[1], best[2])

@@ -357,6 +357,14 @@ class WorldTracker:
         for _, dist, d, n in sorted(explore):
             hint = ((" (the way on)" if own else " (the goal's direction)") if d == toward else "")
             opts[f"explore_{d}"] = f"explore {COMPASS[d]}{hint}: nearest unexplored tile {dist} step(s) away, up to {n} steps"
+        if own and toward is None:
+            # no way on from here (a town whose exits are all known): the join to a neighbour not walked to its end
+            wo = self.heading.way_on(here[0])
+            tp: dict = {}
+            to: dict = {}
+            if wo is not None and self._route_option(here, wo[1], tree, "a route not walked to its end", tp, to):
+                plans["way_on"] = tp["goal"]
+                opts = {"way_on": to["goal"].replace("walk", "the way on: walk", 1), **opts}
         # 4. inspect blocked tiles not inspected yet, nearest first: people, signs and objects block the way as walls do,
         # and the only general way to find the one a quest wants is to try them
         cands = []
@@ -628,7 +636,8 @@ class WorldTracker:
                 "inspected": [list(k) for k in self.inspected], "steps": self.steps,
                 "walls_at": {json.dumps(m): sorted(v) for m, v in self.walls_at.items()},
                 "book": self.book.to_dict(), "merged": self._merged, "places": sorted(self.places, key=str),
-                "moves": self.moves, "motion_at": sorted(self.motion_at, key=str)}
+                "moves": self.moves, "motion_at": sorted(self.motion_at, key=str),
+                "heading": [[pid, {**e, "at": list(e["at"]) if e.get("at") else None}] for pid, e in self.heading.entered.items()]}
 
     def load(self, d: dict[str, Any]) -> None:
         self.visited = {json.loads(m): {tuple(p) for p in v} for m, v in (d.get("visited") or {}).items()}
@@ -640,6 +649,9 @@ class WorldTracker:
         if d.get("book"):
             self.book = PlaceBook.from_dict(d["book"], far=int(self.r.get("join_far", 4)))
             self.heading = Heading(self.book)
+            self.heading._seen = len(self.book.events)       # how each place was entered comes back from the save
+            for pid, e in d.get("heading") or []:
+                self.heading.entered[int(pid)] = {**e, "at": tuple(e["at"]) if e.get("at") else None}
             self._merged = int(d.get("merged", 0))
         self.places = set(d.get("places") or []) | set(self.visited)
         self.moves = dict(d.get("moves") or {})
