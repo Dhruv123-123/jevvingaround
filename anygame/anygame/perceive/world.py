@@ -117,7 +117,12 @@ class WorldTracker:
         self.places: set[Any] = set()
 
     # ---- memory ---------------------------------------------------------------------------------------
-    def tile_of(self, values: dict[str, Any], stepping: bool = False) -> Tile | None:
+    def tile_of(self, values: dict[str, Any], stepping: bool = False, moves: tuple[str, ...] = ()) -> Tile | None:
+        """The tile (place id, x, y) for a read. `moves`: directions pressed since the last read, besides those the
+        tracker's own walks noted."""
+        if moves:
+            self._moves += [m for m in moves if m in DIRS]
+            self._walking, self._idle = True, False
         if isinstance(self.r.get("cell"), str):
             c = _get(values, self.r["cell"])
             if isinstance(c, (int, float)) and c > 0:

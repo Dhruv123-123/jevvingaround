@@ -429,3 +429,22 @@ def test_a_stalled_said_goal_offers_a_menu_chain_search_once():
     assert calls == [["POTION"]] and "Got POTION" in r
     w.stale = 5
     assert "search_menus" not in w.read({"map": 0, "x": 1, "y": 1})["landings"]
+
+
+def test_places_come_from_the_place_book():
+    from anygame.perceive.world import WorldTracker
+    w = WorldTracker({"x": "x", "y": "y", "map": "map"})
+    home = w.tile_of({"map": 11, "x": 3, "y": 3})[0]
+    assert w.tile_of({"map": 99, "x": 3, "y": 3})[0] == home          # a byte of the signature changed mid-dialogue
+    door = w.tile_of({"map": 42, "x": 9, "y": 1})[0]
+    assert door != home                                                 # the position jumped with it: a door
+    stairs = w.tile_of({"map": 7, "x": 9, "y": 1}, stepping=True, moves=("down",))[0]
+    assert stairs not in (home, door)                                   # stairs onto the same tile, while walking
+    w.tile_of({"map": 7, "x": 9, "y": 0}, stepping=True, moves=("up",))
+    route = w.tile_of({"map": 7, "x": 9, "y": 35}, stepping=True, moves=("up",))[0]
+    assert route != stairs                                              # off the top row onto the next map, no door
+    assert w.book.neighbours(stairs) == {"up": route}
+    d = w.dump()
+    w2 = WorldTracker({"x": "x", "y": "y", "map": "map"})
+    w2.load(json.loads(json.dumps(d)))
+    assert w2.book.joins == w.book.joins and w2.tile_of({"map": 7, "x": 9, "y": 34}, stepping=True, moves=("up",))[0] == route
