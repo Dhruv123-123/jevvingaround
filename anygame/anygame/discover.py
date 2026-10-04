@@ -23,9 +23,10 @@ LO, HI = 0xC000, 0xE000
 MAP_RULE = 5        # bumped when the map rule changes: a signature saved under another is not loaded
 EVIDENCE_RULE = 4   # bumped when what the evidence counts changes: evidence saved under another is not loaded
 EVIDENCE = ("changes", "ups", "holds", "holds_walked", "walks_at", "by_pad", "by_other", "full_any", "follows_pos",
-            "_from", "_to", "_old", "_hist", "n_values", "by_warp", "returned", "full_w", "chg_w")
+            "_from", "_to", "_old", "_hist", "n_values", "by_warp", "returned", "full_w", "chg_w", "fade_w")
 LOADED_HOLD = 150   # presses on an axis this run judges for itself before a position loaded from a save can change
 SETTLED = 300       # updates the position held unchanged before lookaheads stop teaching it (early on they correct it)
+FADE_WAIT = 16      # frames after a map byte changed off a warp during which a fade may still come to explain it
 STILL_MAX = 600     # such presses in a row after which a position that never moves is judged again (it froze)
 RECENT = 40         # real d-pad presses looked back on to tell walking from a menu
 MOVED = 0.2         # a position byte moves on at least this share of its axis's presses (walls and turns take the rest)
@@ -155,7 +156,7 @@ class Discoverer:
         self.full_any = z()              # changed by a press the game went on from (not a probe from a save state)
         # the same two counts (presses, all frames) since the warps were last counted afresh: a byte's changes
         # off the warps are judged against the warps counted over the same stretch
-        self.full_w, self.chg_w = z(), z()
+        self.full_w, self.chg_w, self.fade_w = z(), z(), z()
         self.other_presses = 0
         self.walks = 0
         self.walks_at = np.zeros(N, np.int64)
@@ -260,6 +261,17 @@ class Discoverer:
                     self.by_other += c
                 self.other_presses += 1
             if real:
+                if not warp and getattr(self, "_faded", False) and not getattr(self, "_prev_warp", False):
+                    # the screen went blank after this press: a fade, which only a map change does (stairs that land
+                    # beside where they left move the player no further than a step). A byte the press before changed
+                    # (the id is written as the player steps onto the stairs) is not held against it; one that changes
+                    # in the fade itself (sprites and tiles reloaded for the new map) still is
+                    self.fade_w += self._prev_c & ~c
+                self._faded = False
+                if warp:
+                    self._came_from(before, after)
+                self._prev_before = before
+                self._prev_warp = bool(warp)                # its changes are a warp's already: no fade credit for them
                 self._prev_c, self._prev_back = c, back
                 self._trans_seen = self.transitions
             if real:
@@ -365,12 +377,53 @@ class Discoverer:
                 if not self.in_burst:
                     self.ema = net if self.ema == 0 else 0.98 * self.ema + 0.02 * net
         self.ring = (self.ring + [now])[-RING:]
+        if blank:
+            self._faded = True
         if blank and not self.blank:
             self.blank, self.before_blank = True, last if last is not None else now
         elif not blank and self.blank:
             self.blank = False
             self.before_blank = None
         self._last = now
+        m = self.found.get("map") or {}
+        if playing and not blank and len(m.get("addrs", ())) == 2:
+            # which values of a signature's two bytes are seen together: an id's other half follows the id
+            i, j = (a - LO for a in m["addrs"])
+            pairs = getattr(self, "_pairs", None)
+            if pairs is None:
+                pairs = self._pairs = {}
+            for a, b in ((i, j), (j, i)):
+                p = pairs.setdefault((a, b), {"seen": {}, "split": set()})
+                seen = p["seen"].setdefault(int(now[a]), int(now[b]))
+                if seen != int(now[b]):
+                    p["split"].add(int(now[a]))
+
+    def _came_from(self, before: np.ndarray, after: np.ndarray) -> None:
+        """Among the leading map candidates, which byte took, through this door, the value another one had before it:
+        a record of the map the player came from (it reads the same in a place entered from one map, and differs
+        by entrance), not of where the player is. Counted for each pair that both changed."""
+        top = getattr(self, "_top", ())
+        if len(top) < 2:
+            return
+        pb = getattr(self, "_prev_before", before)          # the id may have been written on the press before
+        came, both = self.__dict__.setdefault("_came", {}), self.__dict__.setdefault("_both", {})
+        for i in top:
+            if after[i] == pb[i]:
+                continue
+            for j in top:
+                if i != j and after[j] != pb[j]:
+                    both[(i, j)] = both.get((i, j), 0) + 1
+                    if after[i] == pb[j]:
+                        came[(i, j)] = came.get((i, j), 0) + 1
+
+    def _comes_from(self, i: int) -> bool:
+        """`i` took the value another candidate left on (nearly) every door both went through, and more often than
+        the other way round (a door walked in and straight back out reads the same both ways)."""
+        came, both = getattr(self, "_came", {}), getattr(self, "_both", {})
+        for (a, b), n in came.items():
+            if a == i and n >= 2 and n >= 0.9 * both[(a, b)] and n > came.get((b, a), 0):
+                return True
+        return False
 
     def _credit(self, ch: np.ndarray) -> None:
         new = ch & (self.credited < self.transitions)
@@ -520,6 +573,7 @@ class Discoverer:
             self.returned[:] = 0
             self.full_w[:] = 0
             self.chg_w[:] = 0
+            self.fade_w[:] = 0
             self.warps = 0
         if pos == getattr(self, "_warp_pos", None) and None not in pos:
             self._pos_age = getattr(self, "_pos_age", 0) + 1
@@ -564,32 +618,54 @@ class Discoverer:
             # bytes that changed on most warps and on few plain steps or buttons: a map's, even before it held
             # (no cap on its changes: a long game goes through hundreds of doors)
             W = (self.by_warp >= max(1, 0.5 * self.warps)) & (self.follows_pos == 0) & \
-                (self.full_w - self.by_warp <= np.maximum(2, 0.3 * self.by_warp)) & (self.by_other <= 1 + 0.5 * self.by_warp) & \
-                (self.chg_w <= 2 * self.by_warp + 2)
+                (self.full_w - self.by_warp - self.fade_w <= np.maximum(2, 0.3 * self.by_warp)) & \
+                (self.by_other <= 1 + 0.5 * self.by_warp) & (self.chg_w - self.fade_w <= 2 * self.by_warp + 2)
             for ax in "xy":
                 a = self.found[ax]["addr"] - LO
                 W[a: a + (2 if self.found[ax]["type"] == "u16le" else 1)] = False
             held |= W
             P |= W
         cur = self.found.get("map", {})
+        if cur.get("addrs") and self.warps and all(
+                self.by_warp[a - LO] >= 0.8 * self.warps and self.returned[a - LO] >= 1 and
+                self.event - self.last_change[a - LO] <= FADE_WAIT for a in cur["addrs"]):
+            # it changed a moment ago off a warp: stairs, whose fade (which clears it) comes a press or two later
+            return {**cur}
         keep = bool(cur.get("addrs")) and all(held[a - LO] for a in cur["addrs"])
         if not P.any():
             return {**cur} if keep else None
         idx = np.where(P)[0]
         back = idx[(self.returned[idx] >= 1) & W[idx] & (self.by_warp[idx] >= 0.8 * self.warps)]
         if len(back):
+            fw = self.by_warp[back] + self.fade_w[back]
+            off = np.maximum(self.full_w[back] - fw, 0) + np.maximum(self.chg_w[back] - fw, 0)
+            most = self.by_warp[back] >= 0.95 * self.by_warp[back].max()
+            ranked = back[np.lexsort((-back, -self.by_pad[back], -self.n_values[back], off, ~most))]
+            # the leading candidates are watched at each door for one that records where the player came from
+            self._top = [int(i) for i in ranked[:8]] + [a - LO for a in cur.get("addrs", ()) if a - LO not in ranked[:8]]
+            back = np.array([i for i in back if not self._comes_from(int(i))], dtype=back.dtype)
+        if len(back):
             # a place's bytes come back when the player does; the one that took the most values tells the most
             # places apart (a byte that only says indoors or out takes two)
-            off = np.maximum(self.full_w[back] - self.by_warp[back], 0) + np.maximum(self.chg_w[back] - self.by_warp[back], 0)
+            fw = self.by_warp[back] + self.fade_w[back]
+            off = np.maximum(self.full_w[back] - fw, 0) + np.maximum(self.chg_w[back] - fw, 0)
             # ties (a map's sprite table loads with its id and comes back with it too): the byte lookaheads into a
             # door changed most (the id is written as the player steps onto the door, sprites and tiles only after
             # the fade), then the higher address (sprite tables and buffers sit low)
-            order = np.lexsort((-back, -self.by_pad[back], -self.n_values[back], off, -self.by_warp[back]))
+            # (a warp missed by one press, the position written a frame late, is no reason to lose: changing on
+            # nearly every warp is enough)
+            most = self.by_warp[back] >= 0.95 * self.by_warp[back].max()
+            order = np.lexsort((-back, -self.by_pad[back], -self.n_values[back], off, ~most))
             back = back[order]
             # a second byte only if it changed on exactly the same presses (an id's other half); the map the
             # player came from also comes back, but on other presses, and would split a place by its entrance
             group = back[self._hist[back] == self._hist[back[0]]]
             back = group[:2]
+            if len(back) == 2 and len(getattr(self, "_pairs", {}).get((int(back[0]), int(back[1])), {}).get("split", ())):
+                # the second byte took two values while the first held one (the map the player came from, read in
+                # a place entered by two doors): not the id's other half, and it would split a place by its entrance
+                back = back[:1]
+                group = group[:1]
             if keep and set(a - LO for a in cur["addrs"]) <= set(group.tolist()):
                 return {**cur, "doors": int(self.by_pad[back].max()), "rule": MAP_RULE}   # still the best: kept
             return {"addrs": sorted(int(LO + i) for i in back), "doors": int(self.by_pad[back].max()),
@@ -684,6 +760,19 @@ class Discoverer:
             arrays["_seen_walking"] = np.packbits(self._seen_walking, axis=1)
             np.savez_compressed(b, **arrays, counts=np.array([self.walks, self.pad_presses, self.other_presses, self.warps]))
             out["evidence"] = {"rule": EVIDENCE_RULE, "npz": base64.b64encode(b.getvalue()).decode()}
+            names = getattr(self, "_names", None)
+            if names and names["ram"]:
+                # the place names given so far and the RAM each was given from, so a resumed run calls every place
+                # what it called it before (the world memory and the goals are keyed by these names)
+                pids = [pid for pid, rams in names["ram"].items() for _ in rams]
+                b = io.BytesIO()
+                np.savez_compressed(b, pid=np.array(pids, np.int64),
+                                    ram=np.stack([r.astype(np.uint8) for rams in names["ram"].values() for r in rams]))
+                out["names"] = {"sig": list(names["sig"] or ()), "of": [[int(v), int(p)] for v, p in names["of"].items()],
+                                "given": sorted(int(p) for p in names["given"]), "npz": base64.b64encode(b.getvalue()).decode()}
+            if getattr(self, "_came", None):
+                out["came_from"] = {"came": [[int(a), int(b_), n] for (a, b_), n in self._came.items()],
+                                    "both": [[int(a), int(b_), n] for (a, b_), n in self._both.items()]}
         return out
 
     def load(self, d: dict[str, Any]) -> None:
@@ -705,12 +794,28 @@ class Discoverer:
             self._seen = np.unpackbits(z["_seen"], axis=1)[:, :256].astype(bool)
             self._seen_walking = np.unpackbits(z["_seen_walking"], axis=1)[:, :256].astype(bool)
             self.walks, self.pad_presses, self.other_presses, self.warps = (int(v) for v in z["counts"])
-            if "full_w" not in z:
-                # saved before the changes off the warps were counted over the warps' stretch: the warps can't be
-                # weighed against them, so they are counted afresh from here (the position and the rest are kept)
+            if "full_w" not in z or "fade_w" not in z:
+                # saved before the changes off the warps (and those a fade explains) were counted over the warps'
+                # stretch: the warps can't be weighed against them, so they are counted afresh from here (the
+                # position and the rest are kept)
                 self.by_warp[:] = 0
                 self.returned[:] = 0
                 self.warps = 0
+        nm = d.get("names")
+        if nm:
+            import base64
+            import io
+            z = np.load(io.BytesIO(base64.b64decode(nm["npz"])))
+            ram: dict = {}
+            for pid, r in zip(z["pid"].tolist(), z["ram"]):
+                ram.setdefault(int(pid), []).append(r.astype(np.int32))
+            # under another signature than the one saved, the names are worked out again from the kept RAM
+            self._names = {"sig": tuple(nm.get("sig") or ()) or None, "of": {int(v): int(p) for v, p in nm.get("of", [])},
+                           "ram": ram, "given": set(int(p) for p in nm.get("given", [])) | set(ram)}
+        cf = d.get("came_from")
+        if cf:
+            self._came = {(a, b): n for a, b, n in cf.get("came", [])}
+            self._both = {(a, b): n for a, b, n in cf.get("both", [])}
 
     def summary(self) -> str:
         return json.dumps({k: ({kk: (hex(vv) if kk == "addr" else vv) for kk, vv in v.items()} if isinstance(v, dict) else v) for k, v in self.found.items()})

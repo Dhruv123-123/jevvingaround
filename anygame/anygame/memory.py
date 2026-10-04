@@ -54,6 +54,7 @@ class RunMemory:
             if m != self.last_map:
                 self.places[k]["entered"] += 1
                 self.last_map = m
+            self.places[k]["last_tick"] = tick
         if not isinstance(text, str) or len(_norm(text)) < 3:
             return None
         text = text.strip()
@@ -154,6 +155,9 @@ def load_checkpoint(agent, path: str) -> dict[str, Any]:
         agent.quest = agent.goalbook.quest()
     if d.get("audit") and getattr(agent, "auditor", None) is not None:
         agent.auditor.load(d["audit"])
+    if getattr(agent, "memory", None) is not None:
+        # place names may not survive a reload (the map reading is found again): only places seen since count as known
+        agent.memory.since = int(d.get("tick") or 0)
     if d.get("upkeep_held"):
         agent._held = tuple(d["upkeep_held"])
     if d.get("pos_lock") and d.get("discovered"):

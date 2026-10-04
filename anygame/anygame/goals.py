@@ -66,7 +66,8 @@ Targets (where to head, or null): {"toward": "up"|"down"|"left"|"right"} (up is 
 Prefer what the dialogue asks for (someone told you to go somewhere, find someone, press a button). If nothing was
 asked, explore: a new place, or talk to people. Do not repeat a goal that was just given up unless something changed.
 "now" is the present: its screen and text_on_screen say what the game shows at this moment; a dialogue line from
-earlier ticks may be about something already over (a battle that ended, a menu that closed).
+earlier ticks may be about something already over (a battle that ended, a menu that closed). A place given as
+"earlier" cannot be targeted by id: head toward it by direction ({"toward": ...}) from what was walked.
 When the context has "need", the run itself needs that condition (a number to get back up) and does not know where
 or how: write the goal for it, with an instruction and target saying how, and as "done" a sign the program can see
 that it happened ({"said": [...]} words the game says when it restores it, or {"talks": n}), not the number itself
@@ -270,7 +271,9 @@ class GoalBook:
                 q["target"] = {"map": _as_map(t["place"])}
             elif "line" in t and 0 <= t["line"] < len(self.memory.dialogue):
                 d = self.memory.dialogue[t["line"]]
-                if d.get("tile") is not None:
+                since = int(getattr(self.memory, "since", 0) or 0)
+                fresh = not since or int((self.memory.places.get(str(d.get("map"))) or {}).get("last_tick") or -1) >= since
+                if d.get("tile") is not None and fresh:
                     q["target"] = {"map": d["map"], "x": d["tile"][0], "y": d["tile"][1]}
         return q
 
@@ -283,17 +286,22 @@ class GoalBook:
         book = getattr(world, "book", None)
         self.marks.update(self.memory.dialogue, canonical=book.canonical if book is not None else None)
         places = []
+        since = int(getattr(self.memory, "since", 0) or 0)
         for k, p in self.memory.places.items():
+            if since and int(p.get("last_tick") or -1) < since:
+                continue            # a place from before a reload, under a name that may now mean nothing
             tiles = len(world.visited.get(_as_map(k), ())) if world is not None else None
             doors = sum(1 for kk, w in world.warps.items() if str(kk[0]) == k and str(w[0]) != k) if world is not None else None
             places.append({"id": _as_map(k), "first_seen_tick": p["first_tick"], "times_entered": p["entered"], "tiles_walked": tiles, "doors_found": doors,
                            "heard_here": self.marks.heard_at(_as_map(k))})
+        known = {str(p["id"]) for p in places}
         return {
             # the tick and what is on screen now: older dialogue may be over (a battle that ended, a menu closed)
             "now": {"tick": values.get("tick"), "place": values.get("map"), "screen": values.get("screen"),
                     "text_on_screen": (values.get("text") or "")[:200]},
             "numbers": {n: (f"{v['value']}/{v['of']}" if v.get("of") else v["value"]) for n, v in (values.get("numbers") or {}).items()},
-            "dialogue": [{"i": d["i"], "place": d.get("map"), "tick": d["tick"], "text": d["text"][:200]} for d in lines],
+            "dialogue": [{"i": d["i"], "place": d.get("map") if not since or str(d.get("map")) in known else "earlier (name lost in a reload)",
+                          "tick": d["tick"], "text": d["text"][:200]} for d in lines],
             "places": places,
             "goals_so_far": [{"instruction": g["instruction"], "done": g["done"], "outcome": g["outcome"] or "current"} for g in self.goals[-8:]],
             "current_goal": ({"instruction": self.current["instruction"], "done": self.current["done"]} if self.current else None),
