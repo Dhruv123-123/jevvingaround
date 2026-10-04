@@ -21,16 +21,18 @@ Targets (hints for the navigator, optional): {toward: up|down|left|right}, {plac
 door chain there), {line: <index into the dialogue list>} (go back to where that line was said).
 
 The writer is called when there is no goal, when one is reached or given up, and when the game has said something
-new and the player is walking again; at most `max_calls` times a run and no more often than `min_gap` ticks. Without
+new and the player is walking again, as anygame/goalgate.py allows (news only, from a budget that grows with game
+time), no more often than `min_gap` ticks. Without
 a chat model (or when its answer does not check) the goal is the generic one: find a place not entered yet.
 
-Pack:   goals_from: dialogue        (optionally goals_cfg: {max_calls, min_gap, give_up})
+Pack:   goals_from: dialogue        (optionally goals_cfg: {per_hour, burst, min_gap, give_up})
 """
 from __future__ import annotations
 import json
 import re
 from typing import Any
 
+from .goalgate import GoalGate, compact
 from .memory import RunMemory, _norm
 
 DIRS = ("up", "down", "left", "right")
@@ -123,8 +125,13 @@ class GoalBook:
         cfg = cfg or {}
         self.memory = memory
         self.chat = chat                          # anygame.chat.Chat, or None: the generic goal only
-        self.max_calls = int(cfg.get("max_calls", 60))
         self.min_gap = int(cfg.get("min_gap", 12))
+        # when the writer is worth a call: news, a goal that ended over news, once after giving up; from a budget
+        # that grows with game time (anygame/goalgate.py)
+        self.gate = GoalGate(per_hour=float(cfg.get("per_hour", 20)), burst=int(cfg.get("burst", 16)),
+                             min_gap=self.min_gap)
+        self.ended: str | None = None
+        self._gate_lines: dict[int, int] = {}
         self.give_up = int(cfg.get("give_up", 250))
         self.goals: list[dict[str, Any]] = []     # every goal set, with its outcome
         self.current: dict[str, Any] | None = None
@@ -162,7 +169,13 @@ class GoalBook:
         return False
 
     # ---- the tick -----------------------------------------------------------------------------------
-    def update(self, tick: int, values: dict[str, Any], world=None) -> dict[str, Any] | None:
+    def update(self, tick: int, values: dict[str, Any], world=None, frames: int | None = None) -> dict[str, Any] | None:
+        seen = {}
+        for d in self.memory.dialogue[-8:]:    # each line the run memory took in (or typed out further) since last tick
+            seen[id(d)] = len(d["text"])
+            if self._gate_lines.get(id(d)) != len(d["text"]):
+                self.gate.see(d["text"], d.get("screen"))
+        self._gate_lines = seen
         g = self.current
         if g is not None:
             if self._holds(g["done"], g, values):
@@ -174,16 +187,23 @@ class GoalBook:
         scr = values.get("screen", "walk" if values.get("x") is not None else None)
         if scr not in ("walk", "choice", "button"):
             return self.quest()
-        need = self.current is None
-        news = self.memory.new_lines > 0 and tick - self.last_call >= self.min_gap
-        if (need or news) and self.chat is not None and self.calls < self.max_calls:
-            self._write(tick, values, world)
+        if self.chat is not None:
+            ok, _ = self.gate.ask(tick, int(frames if frames is not None else tick * 60), need=self.current is None,
+                                  ended=self.ended)
+            # the run's first goal: the writer reads whatever was said before it (an intro), news or not
+            ok = ok or (self.current is None and self.calls == 0 and tick - self.last_call >= self.min_gap)
+            if ok:
+                entry = self._write(tick, values, world)
+                self.gate.called(tick, int(frames if frames is not None else tick * 60),
+                                 str(entry.get("result") or "").split(" ")[0])
+                self.ended = None
         if self.current is None:
             self._set(dict(EXPLORE), tick, values)
         return self.quest()
 
     def _close(self, g: dict[str, Any], outcome: str, tick: int) -> None:
         g["outcome"], g["closed_tick"] = outcome, tick
+        self.ended = outcome
         self.memory.event(tick, "goal " + outcome, id=g["id"], instruction=g["instruction"])
         self.current = None
 
@@ -216,8 +236,7 @@ class GoalBook:
 
     # ---- the writer -----------------------------------------------------------------------------------
     def context(self, values: dict[str, Any], world=None) -> dict[str, Any]:
-        lines = self.memory.dialogue
-        start = max(0, len(lines) - 25)
+        lines = compact(self.memory.dialogue)
         places = []
         for k, p in self.memory.places.items():
             tiles = len(world.visited.get(_as_map(k), ())) if world is not None else None
@@ -228,13 +247,13 @@ class GoalBook:
             "now": {"tick": values.get("tick"), "place": values.get("map"), "screen": values.get("screen"),
                     "text_on_screen": (values.get("text") or "")[:200]},
             "numbers": {n: (f"{v['value']}/{v['of']}" if v.get("of") else v["value"]) for n, v in (values.get("numbers") or {}).items()},
-            "dialogue": [{"i": start + i, "place": d.get("map"), "tick": d["tick"], "text": d["text"][:200]} for i, d in enumerate(lines[start:])],
+            "dialogue": [{"i": d["i"], "place": d.get("map"), "tick": d["tick"], "text": d["text"][:200]} for d in lines],
             "places": places,
             "goals_so_far": [{"instruction": g["instruction"], "done": g["done"], "outcome": g["outcome"] or "current"} for g in self.goals[-8:]],
             "current_goal": ({"instruction": self.current["instruction"], "done": self.current["done"]} if self.current else None),
         }
 
-    def _write(self, tick: int, values: dict[str, Any], world=None) -> None:
+    def _write(self, tick: int, values: dict[str, Any], world=None) -> dict[str, Any]:
         self.calls += 1
         self.last_call = tick
         self.memory.new_lines = 0
@@ -252,14 +271,14 @@ class GoalBook:
                 (a.get("goal") or {}).get("target") == self.current.get("target")
             if (a.get("keep") or same) and self.current is not None:
                 entry["result"] = "kept"           # the same goal again keeps its start (what counts as new is unchanged)
-                return
+                return entry
             goal = a.get("goal") or {}
             err = None if goal.get("instruction") else "no instruction"
             err = err or check(goal.get("done"), places, numbers=set(values.get("numbers") or {})) or check_target(goal.get("target"), places, len(self.memory.dialogue))
             if err:
                 self.failures += 1
                 entry["result"] = f"rejected: {err}"
-                return
+                return entry
             t = goal.get("target")
             if isinstance(t, dict) and "line" in t:
                 d = self.memory.dialogue[t["line"]]
@@ -277,10 +296,12 @@ class GoalBook:
         finally:
             if self.log is not None:
                 self.log(entry)
+        return entry
 
     def dump(self) -> dict[str, Any]:
         return {"goals": self.goals, "current": self.current["id"] if self.current else None, "calls": self.calls,
-                "failures": self.failures, "n": self.n, "latency_ms": self.latency_ms}
+                "failures": self.failures, "n": self.n, "latency_ms": self.latency_ms,
+                "gate": {"seen": sorted(self.gate.seen), "calls": self.gate.calls, "skipped": self.gate.skipped}}
 
     def load(self, d: dict[str, Any]) -> None:
         self.goals = list(d.get("goals") or [])
@@ -290,9 +311,13 @@ class GoalBook:
         self.failures = int(d.get("failures", 0))
         self.n = int(d.get("n", len(self.goals)))
         self.latency_ms = list(d.get("latency_ms") or [])
+        gd = d.get("gate") or {}
+        self.gate.seen = set(gd.get("seen") or [])
+        self.gate.calls = int(gd.get("calls", 0))
+        self.gate.skipped = dict(gd.get("skipped") or {})
 
     def report(self) -> dict[str, Any]:
-        return {"calls": self.calls, "rejected_or_failed": self.failures,
+        return {"calls": self.calls, "rejected_or_failed": self.failures, "gate": self.gate.report(),
                 "median_ms": sorted(self.latency_ms)[len(self.latency_ms) // 2] if self.latency_ms else None,
                 "goals": [{k: g.get(k) for k in ("id", "instruction", "done", "target", "source", "set_tick", "closed_tick", "outcome")} for g in self.goals]}
 

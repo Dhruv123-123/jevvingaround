@@ -354,3 +354,51 @@ def test_a_checkpoint_keeps_the_glyphs_learned(tmp_path):
     finally:
         tiletext._BOOKS.clear()
         tiletext._BOOKS.update(saved)
+
+
+def test_a_jump_that_does_not_happen_again_is_forgotten():
+    """A within-map jump learned from a misread position is dropped the first time walking that edge does not jump."""
+    from anygame.perceive.world import WorldTracker
+    w = WorldTracker({"kind": "world", "pos": ["x", "y"]})
+    assert w.learn((0, 3, 3), "left", (0, 9, 9)) == "warp"
+    assert (0, 3, 3, "left") in w.warps
+    assert w.learn((0, 3, 3), "left", (0, 2, 3)) == "moved"
+    assert (0, 3, 3, "left") not in w.warps
+    w.learn((0, 3, 3), "up", (0, 9, 9))
+    w.learn((0, 3, 3), "up", (0, 3, 3))           # bumped: not a jump either
+    assert (0, 3, 3, "up") not in w.warps
+
+
+def test_the_writer_is_not_asked_again_without_news():
+    """A goal reached with nothing new said since: the generic goal follows, for free. A new line asks again."""
+    m = RunMemory()
+    chat = FakeChat([json.dumps({"goal": {"instruction": "leave the house", "done": {"new_place": True}}}),
+                     json.dumps({"goal": {"instruction": "find the old man", "done": {"talks": 1}}})])
+    gb = GoalBook(m, chat, {"min_gap": 1})
+    walk = {"map": 1, "x": 0, "y": 0, "screen": "walk"}
+    m.observe(1, 0, {**walk, "screen": "text"}, "Mom: go outside and play!", (0, 0))
+    assert gb.update(2, walk)["instruction"] == "leave the house"
+    m.observe(3, 0, {**walk, "map": 2}, None)
+    q = gb.update(4, {**walk, "map": 2})
+    assert q["id"].startswith("explore") and gb.calls == 1
+    m.observe(5, 0, {**walk, "map": 2, "screen": "text"}, "An old man waits by the river north of town", (0, 0))
+    assert gb.update(6, {**walk, "map": 2})["instruction"] == "find the old man" and gb.calls == 2
+
+
+def test_a_button_that_jumps_becomes_an_option(monkeypatch):
+    """Learning the buttons: an input that jumps or goes further than the plain direction is offered as a plan."""
+    from anygame import motion
+    from anygame.perceive.world import WorldTracker
+    mv = lambda keys, kind="move", rx=0.0, ry=0.0: {"keys": keys, "hold": 32, "kind": kind, "reach_x": rx, "reach_y": ry,
+                                                    "dx": rx, "dy": ry, "dx_held": rx, "air_samples": 6}
+    m = {"moves": [mv(["right"], rx=16), mv(["b"], "jump", ry=-45), mv(["right", "a"], rx=40), mv(["right", "b"], rx=16)],
+         "every": 2}
+    monkeypatch.setattr(motion, "learn", lambda device: m)
+    class Dev:
+        def snapshot(self): return None
+    w = WorldTracker({"kind": "world", "pos": ["x", "y"]})
+    assert w.learn_motion(Dev(), 0)
+    assert set(w.moves) == {"move_b", "move_right_a"}
+    assert w.learn_motion(Dev(), 0) is None                     # once per place
+    out = w.read({"map": 0, "x": 1, "y": 1})
+    assert w.plans["move_b"] == ["hold:b:32"] and "jumps" in out["landings"]["move_b"]
