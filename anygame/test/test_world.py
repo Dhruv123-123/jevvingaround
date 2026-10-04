@@ -206,6 +206,56 @@ def test_pyboy_device_reads_ram_saves_and_restores_state(tmp_path):
         d.close()
 
 
+def test_pyboy_device_takes_the_found_file_of_a_save_named_in_the_url(tmp_path):
+    # the save in the URL is loaded before the pack turns discovery on: its .found must still be read (a run started
+    # from a mid-game save rediscovered everything from nothing, and its first doors went to sprite bytes)
+    pytest.importorskip("pyboy")
+    import json
+    from anygame.device import open_device
+    rom = os.path.join(ROOT, "roms", "2048gb", "2048.gb")
+    d = open_device("pyboy://" + rom + "?boot=60&clock=game&step=2", None)
+    try:
+        d.save_state(str(tmp_path / "a.state"))
+    finally:
+        d.close()
+    (tmp_path / "a.state.found").write_text(json.dumps({"x": {"addr": 0xD362, "type": "u8", "score": 1.0},
+                                                         "y": {"addr": 0xD361, "type": "u8", "score": 1.0}, "cell": 1}))
+    d = open_device("pyboy://" + rom + f"?clock=game&step=2&state={tmp_path / 'a.state'}", None)
+    try:
+        d.use_pack({"discover": True}, str(tmp_path))
+        assert d.discoverer.found["x"]["addr"] == 0xD362 and d.discoverer.found["y"]["addr"] == 0xD361
+    finally:
+        d.close()
+
+
+def test_pyboy_device_shows_discovery_a_fade_between_drawn_frames():
+    # stairs in Red's house fade out and in between the frames a press draws: the dark frame is passed on as blank
+    pytest.importorskip("pyboy")
+    from anygame.device import open_device
+    d = open_device("pyboy://" + os.path.join(ROOT, "roms", "2048gb", "2048.gb") + "?boot=60&clock=game&step=2", None)
+    try:
+        seen = []
+
+        class Disc:
+            trace = None
+            found: dict = {}
+
+            def frame(self, mem, blank):
+                seen.append(bool(blank))
+
+            def press(self, *a, **k):
+                pass
+
+        d.discoverer = Disc()
+        calls = iter(range(1000))
+        d._dark = lambda: next(calls) in (3, 4, 5)          # dark for three frames inside the press
+        d.press("left", hold=6, after=16)
+        # the two drawn frames (end of the hold, end of the press) and before them the dark one, as blank
+        assert 2 < len(seen) < 6 and seen[0] is True        # once per run of frames, not once per dark frame
+    finally:
+        d.close()
+
+
 def test_discoverer_finds_position_and_map_from_ram_alone():
     from anygame.discover import Discoverer, LO, N
     rng = np.random.default_rng(0)
@@ -455,6 +505,102 @@ def test_discoverer_takes_the_map_id_from_warps_and_returns():
     assert all(len(v) == 1 for v in seen.values() if v) and len(set().union(*seen.values())) == len(seen)
 
 
+def test_discoverer_leaves_out_a_byte_that_records_where_the_player_came_from():
+    """A house (0) with a hall (37) and a room behind it (38), doors only: the map id and a 'last map' byte both change
+    on every door and come back together on the first trip in and out, and the 'last map' byte sits higher, so it
+    led. But through each door it takes the value the id had before (and splits the hall by the side it was entered
+    from): once the trips go on through the hall, it is left out."""
+    from anygame.discover import Discoverer, LO, N
+    rng = np.random.default_rng(3)
+    d = Discoverer()
+    d.found.update({"x": {"addr": 0xD362, "type": "u8"}, "y": {"addr": 0xD361, "type": "u8"}, "cell": 1})
+    mem = np.zeros(N, np.int32)
+    X, Y, ID, LAST, TILES = 0xD362 - LO, 0xD361 - LO, 0xD35E - LO, 0xD73C - LO, 0xC3A0 - LO
+    mem[X], mem[Y], mem[LAST] = 5, 5, 37                          # came in from the hall
+    route = [(37, (2, 27)), (0, (5, 6)), (37, (2, 27)), (38, (6, 47)), (37, (6, 26)), (0, (5, 6))]  # in, out, in, on
+    seen: dict = {}
+
+    def walk(n, lap):
+        for _ in range(n):
+            b = ["left", "right"][int(rng.integers(2))]
+            before = mem.copy()
+            mem[X] = min(9, max(1, int(mem[X]) + (1 if b == "right" else -1)))
+            mem[TILES: TILES + 40] = rng.integers(0, 256, 40)        # the screen's tiles scroll with every step
+            d.press(b, before, mem.copy(), full=True, continues=True)
+            d.frame(mem.copy(), blank=False)
+            if d.found.get("map", {}).get("addrs") and lap >= 8:
+                seen.setdefault(int(mem[ID]), set()).add(d.state(mem)["map"])
+
+    for lap in range(12):
+        for to, pos in route:
+            walk(int(rng.integers(20, 30)), lap)
+            before = mem.copy()
+            mem[LAST], mem[ID] = mem[ID], to
+            mem[X], mem[Y] = pos
+            d.press("up", before, mem.copy(), full=True, continues=True)
+            d.frame(mem.copy(), blank=False)
+    walk(30, 12)
+    assert d.found["map"]["addrs"] == [0xD35E]
+    assert all(len(v) == 1 for v in seen.values()) and len(seen) == 3
+
+def test_discoverer_forgives_the_id_written_before_a_fade_in_the_same_press():
+    """Stairs between two floors (37, 38) that share their tiles, and a door out to the town (0): the id changes on
+    the step onto the stairs and the screen goes dark before the next press, so the step and the fade are judged as
+    one press. The id changed before the dark and is forgiven; a tile-set byte that never changes on the stairs
+    would otherwise win and read both floors as one place."""
+    from anygame.discover import Discoverer, LO, N
+    rng = np.random.default_rng(7)
+    d = Discoverer()
+    d.found.update({"x": {"addr": 0xD362, "type": "u8"}, "y": {"addr": 0xD361, "type": "u8"}, "cell": 1})
+    mem = np.zeros(N, np.int32)
+    X, Y, ID, SET, TILES = 0xD362 - LO, 0xD361 - LO, 0xD35E - LO, 0xD4E4 - LO, 0xC3A0 - LO
+    mem[X], mem[Y], mem[ID], mem[SET] = 5, 5, 0, 1
+    seen: dict = {}
+
+    def press(b, change=None, fade=False):
+        before = mem.copy()
+        if change:
+            change()
+        mem[TILES: TILES + 40] = rng.integers(0, 256, 40)
+        d.press(b, before, mem.copy(), full=True, continues=True)
+        if fade:
+            d.frame(mem.copy(), blank=False)  # the player on the stairs, the id already written
+            d.frame(mem.copy(), blank=True)   # then the fade, before the next press
+        d.frame(mem.copy(), blank=False)
+        if d.found.get("map", {}).get("addrs"):
+            seen.setdefault(int(mem[ID]), set()).add(d.state(mem)["map"])
+
+    def walk(n):
+        for _ in range(n):
+            b = ["left", "right"][int(rng.integers(2))]
+            press(b, lambda: mem.__setitem__(X, min(9, max(1, int(mem[X]) + (1 if b == "right" else -1)))))
+
+    def door(to, tiles, pos):
+        def go():
+            mem[ID], mem[SET] = to, tiles
+            mem[X], mem[Y] = pos
+        press("up", go)
+
+    def stairs(to):
+        def go():
+            mem[ID] = to
+            mem[X] = min(9, int(mem[X]) + 1)  # stairs land beside where they were taken: no further than a step
+        press("right", go, fade=True)
+
+    for _ in range(10):
+        walk(15)
+        door(37, 2, (3, 30))          # into the house's ground floor
+        walk(15)
+        stairs(38)
+        walk(15)
+        stairs(37)
+        walk(15)
+        door(0, 1, (5, 5))            # back out to the town
+    walk(20)
+    assert d.found["map"]["addrs"] == [0xD35E]
+    assert len(seen[37] | seen[38]) == 2 and not seen[37] & seen[38]
+
+
 def test_discoverer_keeps_y_through_a_menu_whose_cursor_follows_the_pad():
     """A menu with a cursor on both axes (a battle's grid of choices, a job grid): the d-pad moves the cursor's bytes
     on every press while the position never moves, and the battle's flashes start new visits until the walking ones
@@ -596,6 +742,52 @@ def test_discoverer_drops_an_old_rule_signature_but_keeps_the_position():
     assert d.found["x"]["addr"] == 0xD362 and d.found["y"]["addr"] == 0xD361
 
 
+def test_discoverer_place_names_survive_a_checkpoint():
+    """A resumed run calls each place what the run before it did, under the same signature or a new one: the world
+    memory and the goals saved with the checkpoint are keyed by those names."""
+    import json
+    from anygame.discover import Discoverer, LO, N, MAP_RULE
+    A, B = 0xC750, 0xD35E
+
+    def at(place):
+        mem = np.zeros(N, np.int32)
+        mem[A - LO], mem[B - LO] = 10 + place, place
+        return mem
+    d = Discoverer()
+    d.found.update({"x": {"addr": 0xD362, "type": "u8"}, "y": {"addr": 0xD361, "type": "u8"}, "cell": 1,
+                    "map": {"addrs": [A], "rule": MAP_RULE}})
+    names = {}
+    for place in (3, 1, 2):
+        for _ in range(12):
+            names[place] = d.state(at(place))["map"]
+    saved = json.loads(json.dumps(d.dump()))
+    for sig in ([A], [B]):
+        e = Discoverer()
+        e.load(saved)
+        e.found["map"] = {"addrs": sig, "rule": MAP_RULE}
+        assert {place: e.state(at(place))["map"] for place in (2, 1, 3)} == names
+        assert e.state(at(7))["map"] not in names.values()          # a place first seen now gets a name of its own
+
+
+def test_discoverer_counts_doors_afresh_on_resume_and_lets_old_doors_fade():
+    """At the live run's tick-21500 resume, door counts carried from early in the run (stairs before fades were seen)
+    held the map id out and a byte with two values (indoors or out) read Pallet, the lab and both houses as one place.
+    A resumed run counts its doors afresh, keeping the rest; within a run, doors long past weigh half, then a quarter."""
+    import json
+    from anygame.discover import Discoverer, LO, WARP_MEMORY
+    ID = 0xD35E - LO
+    d = Discoverer()
+    d.found.update({"x": {"addr": 0xD362, "type": "u8"}, "y": {"addr": 0xD361, "type": "u8"}, "cell": 1})
+    d.warps, d.by_warp[ID], d.full_w[ID], d.n_values[ID], d.by_pad[ID] = 500, 490, 700, 7, 760
+    e = Discoverer()
+    e.load(json.loads(json.dumps(d.dump())))
+    assert e.warps == 0 and e.by_warp[ID] == 0 and e.full_w[ID] == 0
+    assert e.n_values[ID] == 7 and e.by_pad[ID] == 760                # what is not counted over the doors stays
+    d.warps = 2 * WARP_MEMORY
+    d._update()
+    assert d.warps == WARP_MEMORY and d.by_warp[ID] == 245 and d.full_w[ID] == 350
+
+
 def test_discoverer_keeps_place_names_when_the_signature_changes_hands():
     """A place named under one signature keeps its name when another signature takes over and tells the same places
     apart; a name an early signature gave two maps alike does not carry over."""
@@ -624,3 +816,76 @@ def test_discoverer_keeps_place_names_when_the_signature_changes_hands():
             joint = d.state(at(place, 7))["map"]
     d.found["map"] = {"addrs": [B]}
     assert d.state(at(1, 7))["map"] != joint and d.state(at(0, 7))["map"] != joint
+
+def test_discoverer_prefers_the_map_byte_over_a_sprite_byte_that_menus_also_change():
+    """A town (0) and a lab (39), doors only. A person's picture byte loads with each map (one of four pictures per
+    map) and comes back with it, so it changed on every door just like the id and took more values; but it also
+    flipped when the player talked to that person, which a map id never does. After a resume the door counts start
+    afresh and the two tie on them."""
+    import json
+    from anygame.discover import Discoverer, LO, N
+    rng = np.random.default_rng(5)
+    d = Discoverer()
+    d.found.update({"x": {"addr": 0xD362, "type": "u8"}, "y": {"addr": 0xD361, "type": "u8"}, "cell": 1})
+    mem = np.zeros(N, np.int32)
+    X, Y, ID, PIC, TILES = 0xD362 - LO, 0xD361 - LO, 0xD35E - LO, 0xC225 - LO, 0xC3A0 - LO
+    mem[X], mem[Y] = 5, 5
+    seen: dict = {}
+
+    def press(b, change, scroll=True):
+        before = mem.copy()
+        change()
+        if scroll:
+            mem[TILES: TILES + 40] = rng.integers(0, 256, 40)
+        d.press(b, before, mem.copy(), full=True, continues=True)
+        d.frame(mem.copy(), blank=False)
+        if d.found.get("map", {}).get("addrs"):
+            seen.setdefault(int(mem[ID]), set()).add(d.state(mem)["map"])
+
+    def pic():
+        return (0x10 if mem[ID] == 0 else 0x40) + 4 * int(rng.integers(4))
+
+    for lap in range(36):
+        if lap == 12:
+            # a checkpoint and a resume: door counts start afresh, what menus and text boxes changed is kept
+            saved = json.loads(json.dumps(d.dump()))
+            d = Discoverer()
+            d.load(saved)
+        for _ in range(int(rng.integers(20, 30))):
+            b = ["left", "right"][int(rng.integers(2))]
+            press(b, lambda: mem.__setitem__(X, min(9, max(1, int(mem[X]) + (1 if b == "right" else -1)))))
+        if lap < 12 and lap % 2 == 0:
+            press("a", lambda: mem.__setitem__(PIC, pic()), scroll=False)   # talking turns the person to face the player
+        def go():
+            mem[ID] = 39 if mem[ID] == 0 else 0
+            mem[PIC] = pic()
+            mem[X], mem[Y] = (2, 27) if mem[ID] == 39 else (5, 6)
+        press("up", go)
+    assert d.found["map"]["addrs"] == [0xD35E]
+    assert all(len(v) == 1 for v in seen.values()) and len(seen) == 2
+
+
+def test_discoverer_does_not_take_the_map_byte_for_a_came_from_byte_on_a_few_coincidences():
+    """Forty doors between a town (0), a lab (39) and a house (37), as the leading candidates see them: the id, a
+    'last map' byte that takes the id's old value through every door, and a byte that changed with the id on two
+    doors only, where the id happened to take its old value (from Pokemon Red's lab door after a resume). The 'last
+    map' byte records where the player came from; two coincidences out of forty doors do not make the id one."""
+    from anygame.discover import Discoverer, LO, N
+    d = Discoverer()
+    ID, LAST, ODD = 0xD35E - LO, 0xD73C - LO, 0xD42F - LO
+    d._top = [ID, LAST, ODD]
+    mem = np.zeros(N, np.int32)
+    mem[LAST], mem[ODD] = 39, 39
+    for k, to in enumerate([39, 0, 37, 0] * 10):
+        if k in (1, 2):
+            mem[ODD] = to                     # by chance, the value the id is about to take
+        before = mem.copy()
+        after = mem.copy()
+        after[LAST], after[ID] = mem[ID], to
+        if k in (1, 2):
+            after[ODD] = 50 + k
+        d._prev_before = before
+        d._came_from(before, after)
+        mem = after
+    assert not d._comes_from(ID)
+    assert d._comes_from(LAST)
