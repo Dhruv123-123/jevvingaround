@@ -562,3 +562,17 @@ def test_a_stall_leaves_the_repeated_options_out_of_the_next_questions():
     out = _without(qs, {"explore_down"})
     assert list(out["go__option"]["criteria"]) == ["door_1"]
     assert list(out["pick__option"]["criteria"]) == ["explore_down"]     # nothing else to take: left as it was
+
+
+def test_a_position_held_long_is_put_back_when_discovery_swaps_it():
+    import types
+    from anygame.loop import Agent as Loop
+    disc = types.SimpleNamespace(found={"x": {"addr": 1, "type": "u8"}, "y": {"addr": 2, "type": "u8"}})
+    lp = types.SimpleNamespace(base=types.SimpleNamespace(raw={"pos_lock": 3}), device=types.SimpleNamespace(discoverer=disc), tick=0)
+    for t in range(5):
+        lp.tick = t
+        Loop._hold_position(lp)
+    disc.found["y"] = {"addr": 9, "type": "u8"}        # a scroll byte wins a stretch
+    lp.tick = 6
+    Loop._hold_position(lp)
+    assert disc.found["y"]["addr"] == 2

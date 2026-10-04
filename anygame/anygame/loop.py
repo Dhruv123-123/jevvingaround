@@ -623,6 +623,7 @@ class Agent:
                 self.pack.rules = edit["rules"]
                 self.last_answers = None
         frame = self.device.frame()
+        self._hold_position()
         state = self.device.state() if hasattr(self.device, "state") else None   # a game that tells us its state
         self.last_state = state
         fp = fingerprint(frame)
@@ -1195,6 +1196,34 @@ class Agent:
                     v = values[rid]
                     out[rid] = ["".join(str(v.get(f"c{c}r{rr}", "?"))[:1] for c in range(1, cols + 1)) for rr in range(1, rows + 1)]
         return out
+
+    def _hold_position(self) -> None:
+        """`pos_lock`: ticks after which a found x and y that have not changed are kept. A byte that follows walking
+        just as well (a map view's scroll, a menu cursor) can outscore the position on a stretch of door-heavy walking
+        or menus, and the world memory, keyed by position, is lost when it does; one that held for thousands of ticks
+        is the position. Until discovery itself refuses such swaps, the run puts the held pair back."""
+        n = int(self.base.raw.get("pos_lock", 0) or 0)
+        disc = getattr(self.device, "discoverer", None)
+        if not n or disc is None or not isinstance(getattr(disc, "found", None), dict):
+            return
+        now = tuple((disc.found.get(ax) or {}).get("addr") for ax in "xy")
+        lk = getattr(self, "_pos_lock", None)
+        if lk is not None and lk["locked"]:
+            if now != lk["addrs"]:
+                for ax in "xy":
+                    disc.found[ax] = dict(lk["found"][ax])
+                lk["restored"] += 1
+                if lk["restored"] == 1:
+                    print(f"position held at tick {self.tick}: discovery moved to {now}, kept {lk['addrs']}", file=sys.stderr)
+            return
+        if None in now:
+            self._pos_lock = None
+            return
+        if lk is None or lk["addrs"] != now:
+            self._pos_lock = {"addrs": now, "since": self.tick, "locked": False, "restored": 0,
+                              "found": {ax: dict(disc.found[ax]) for ax in "xy"}}
+        elif self.tick - lk["since"] >= n:
+            lk["locked"] = True
 
     def _emit(self, rec, frame, dets, answers):
         if getattr(self, "stuck", None) is not None and rec.get("action") is not None:
