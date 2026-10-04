@@ -384,7 +384,7 @@ On an action screen, every direction moves the picture, so the explore never fin
 
 Each entry is then pressed, watched, compared against every other entry, and played out for up to 1,800 frames. Play-outs and the quadratic screen comparisons alone account for 74% of the run.
 
-The word gate lets these explores through because Renegade Rush's screen shows letters (its score and distance display). The fix belongs in the menu explore, owned by the long-horizon thread. Options:
+The word gate lets these explores through because the text read finds at least one word on Renegade Rush's screen. Which letters those are was not checked. The fix belongs in the menu explore, owned by the long-horizon thread. Options:
 - stop and drop the explore when, say, the first two presses in a direction each change the screen;
 - cap the number of entries;
 - play out only the entries whose short outcome differs.
