@@ -315,3 +315,35 @@ A general check would say whether a screen is a menu before exploring it, from t
 - a d-pad response without the world moving: the screen changes in one small region only.
 
 It would be a module with its own replay over the held-out logs. It is the next speed item after C11.
+
+### Upkeep fix: health, not move PP (2026-10-04)
+
+The live power-on run (pk9–pk14) left fights over a move's PP ("Get TY #/# back up"), which healing cannot meet.
+It also marked PP fatal at a blackout. `upkeep.py` now treats a number as health before the game has shown it fatal
+only when it fell while the game played on by itself, by different amounts, some by more than one. At a forced move
+the number that came near its floor last is the fatal one. The one-bad-turn rule needs the number at half or below.
+On the live run replayed with every fraction under its live name (`scripts/upkeep_replay.py --names`), every warning
+names HP and each of the four blackouts is preceded by one, 150–180 ticks earlier; before, 22 warnings included PP.
+
+### Menu reads from the cells, not RapidOCR (2026-10-04)
+
+`tiletext.boxes()` gives the menu reader its text boxes from the glyph book. OCR is used only while the book is cold
+(fewer than 30 characters) and most of the screen is unknown. Before, any screen with more unknown cells than known
+went to OCR: on Tobu Tobu Girl that was the play screen's scenery, every menu read. The menu.py side is
+`menu-tiletext.patch` (one function, for long-horizon). The explore gate is long-horizon's (`needs_words`).
+
+`scripts/step_profile.py`: 200 steps of the gameboy agent, top pick, the per-game book from the held-out runs,
+no labeller, the same code before and after but for this change (four games at once, so seconds are relative):
+
+| game | s per step before | after | actions identical |
+|---|---|---|---|
+| Tobu Tobu Girl | 3.60 | **2.20** (−39%) | 200 of 200 |
+| Renegade Rush | 1.16 | **0.93** (−20%) | 200 of 200 |
+| GBHack | 0.49 | **0.39** (−21%) | 200 of 200 |
+| PostBot | 0.15 | 0.15 | 200 of 200 |
+| Pokemon Red (power-on) | 0.30 | 0.30 | 200 of 200 |
+| Aevilia (power-on) | 0.35 | 0.35 | 200 of 200 |
+
+Pokemon and Aevilia already read their menus from the cells (their screens' text is known), so nothing changes there.
+Tobu still spends most of a step exploring menus. With this change those explores cost no OCR. Long-horizon's
+explore gate is the change that removes the explores themselves.
