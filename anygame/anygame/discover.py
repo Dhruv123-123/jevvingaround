@@ -268,6 +268,9 @@ class Discoverer:
                     # in the fade itself (sprites and tiles reloaded for the new map) still is
                     self.fade_w += self._prev_c & ~c
                 self._faded = False
+                if warp:
+                    self._came_from(before, after)
+                self._prev_before = before
                 self._prev_warp = bool(warp)                # its changes are a warp's already: no fade credit for them
                 self._prev_c, self._prev_back = c, back
                 self._trans_seen = self.transitions
@@ -394,6 +397,33 @@ class Discoverer:
                 seen = p["seen"].setdefault(int(now[a]), int(now[b]))
                 if seen != int(now[b]):
                     p["split"].add(int(now[a]))
+
+    def _came_from(self, before: np.ndarray, after: np.ndarray) -> None:
+        """Among the leading map candidates, which byte took, through this door, the value another one had before it:
+        a record of the map the player came from (it reads the same in a place entered from one map, and differs
+        by entrance), not of where the player is. Counted for each pair that both changed."""
+        top = getattr(self, "_top", ())
+        if len(top) < 2:
+            return
+        pb = getattr(self, "_prev_before", before)          # the id may have been written on the press before
+        came, both = self.__dict__.setdefault("_came", {}), self.__dict__.setdefault("_both", {})
+        for i in top:
+            if after[i] == pb[i]:
+                continue
+            for j in top:
+                if i != j and after[j] != pb[j]:
+                    both[(i, j)] = both.get((i, j), 0) + 1
+                    if after[i] == pb[j]:
+                        came[(i, j)] = came.get((i, j), 0) + 1
+
+    def _comes_from(self, i: int) -> bool:
+        """`i` took the value another candidate left on (nearly) every door both went through, and more often than
+        the other way round (a door walked in and straight back out reads the same both ways)."""
+        came, both = getattr(self, "_came", {}), getattr(self, "_both", {})
+        for (a, b), n in came.items():
+            if a == i and n >= 2 and n >= 0.9 * both[(a, b)] and n > came.get((b, a), 0):
+                return True
+        return False
 
     def _credit(self, ch: np.ndarray) -> None:
         new = ch & (self.credited < self.transitions)
@@ -606,6 +636,14 @@ class Discoverer:
             return {**cur} if keep else None
         idx = np.where(P)[0]
         back = idx[(self.returned[idx] >= 1) & W[idx] & (self.by_warp[idx] >= 0.8 * self.warps)]
+        if len(back):
+            fw = self.by_warp[back] + self.fade_w[back]
+            off = np.maximum(self.full_w[back] - fw, 0) + np.maximum(self.chg_w[back] - fw, 0)
+            most = self.by_warp[back] >= 0.95 * self.by_warp[back].max()
+            ranked = back[np.lexsort((-back, -self.by_pad[back], -self.n_values[back], off, ~most))]
+            # the leading candidates are watched at each door for one that records where the player came from
+            self._top = [int(i) for i in ranked[:8]] + [a - LO for a in cur.get("addrs", ()) if a - LO not in ranked[:8]]
+            back = np.array([i for i in back if not self._comes_from(int(i))], dtype=back.dtype)
         if len(back):
             # a place's bytes come back when the player does; the one that took the most values tells the most
             # places apart (a byte that only says indoors or out takes two)

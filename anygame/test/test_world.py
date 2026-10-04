@@ -505,6 +505,44 @@ def test_discoverer_takes_the_map_id_from_warps_and_returns():
     assert all(len(v) == 1 for v in seen.values() if v) and len(set().union(*seen.values())) == len(seen)
 
 
+def test_discoverer_leaves_out_a_byte_that_records_where_the_player_came_from():
+    """A house (0) with a hall (37) and a room behind it (38), doors only: the map id and a 'last map' byte both change
+    on every door and come back together on the first trip in and out, and the 'last map' byte sits higher, so it
+    led. But through each door it takes the value the id had before (and splits the hall by the side it was entered
+    from): once the trips go on through the hall, it is left out."""
+    from anygame.discover import Discoverer, LO, N
+    rng = np.random.default_rng(3)
+    d = Discoverer()
+    d.found.update({"x": {"addr": 0xD362, "type": "u8"}, "y": {"addr": 0xD361, "type": "u8"}, "cell": 1})
+    mem = np.zeros(N, np.int32)
+    X, Y, ID, LAST, TILES = 0xD362 - LO, 0xD361 - LO, 0xD35E - LO, 0xD73C - LO, 0xC3A0 - LO
+    mem[X], mem[Y], mem[LAST] = 5, 5, 37                          # came in from the hall
+    route = [(37, (2, 27)), (0, (5, 6)), (37, (2, 27)), (38, (6, 47)), (37, (6, 26)), (0, (5, 6))]  # in, out, in, on
+    seen: dict = {}
+
+    def walk(n, lap):
+        for _ in range(n):
+            b = ["left", "right"][int(rng.integers(2))]
+            before = mem.copy()
+            mem[X] = min(9, max(1, int(mem[X]) + (1 if b == "right" else -1)))
+            mem[TILES: TILES + 40] = rng.integers(0, 256, 40)        # the screen's tiles scroll with every step
+            d.press(b, before, mem.copy(), full=True, continues=True)
+            d.frame(mem.copy(), blank=False)
+            if d.found.get("map", {}).get("addrs") and lap >= 8:
+                seen.setdefault(int(mem[ID]), set()).add(d.state(mem)["map"])
+
+    for lap in range(12):
+        for to, pos in route:
+            walk(int(rng.integers(20, 30)), lap)
+            before = mem.copy()
+            mem[LAST], mem[ID] = mem[ID], to
+            mem[X], mem[Y] = pos
+            d.press("up", before, mem.copy(), full=True, continues=True)
+            d.frame(mem.copy(), blank=False)
+    walk(30, 12)
+    assert d.found["map"]["addrs"] == [0xD35E]
+    assert all(len(v) == 1 for v in seen.values()) and len(seen) == 3
+
 def test_discoverer_keeps_y_through_a_menu_whose_cursor_follows_the_pad():
     """A menu with a cursor on both axes (a battle's grid of choices, a job grid): the d-pad moves the cursor's bytes
     on every press while the position never moves, and the battle's flashes start new visits until the walking ones
