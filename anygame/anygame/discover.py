@@ -760,6 +760,19 @@ class Discoverer:
             arrays["_seen_walking"] = np.packbits(self._seen_walking, axis=1)
             np.savez_compressed(b, **arrays, counts=np.array([self.walks, self.pad_presses, self.other_presses, self.warps]))
             out["evidence"] = {"rule": EVIDENCE_RULE, "npz": base64.b64encode(b.getvalue()).decode()}
+            names = getattr(self, "_names", None)
+            if names and names["ram"]:
+                # the place names given so far and the RAM each was given from, so a resumed run calls every place
+                # what it called it before (the world memory and the goals are keyed by these names)
+                pids = [pid for pid, rams in names["ram"].items() for _ in rams]
+                b = io.BytesIO()
+                np.savez_compressed(b, pid=np.array(pids, np.int64),
+                                    ram=np.stack([r.astype(np.uint8) for rams in names["ram"].values() for r in rams]))
+                out["names"] = {"sig": list(names["sig"] or ()), "of": [[int(v), int(p)] for v, p in names["of"].items()],
+                                "given": sorted(int(p) for p in names["given"]), "npz": base64.b64encode(b.getvalue()).decode()}
+            if getattr(self, "_came", None):
+                out["came_from"] = {"came": [[int(a), int(b_), n] for (a, b_), n in self._came.items()],
+                                    "both": [[int(a), int(b_), n] for (a, b_), n in self._both.items()]}
         return out
 
     def load(self, d: dict[str, Any]) -> None:
@@ -788,6 +801,21 @@ class Discoverer:
                 self.by_warp[:] = 0
                 self.returned[:] = 0
                 self.warps = 0
+        nm = d.get("names")
+        if nm:
+            import base64
+            import io
+            z = np.load(io.BytesIO(base64.b64decode(nm["npz"])))
+            ram: dict = {}
+            for pid, r in zip(z["pid"].tolist(), z["ram"]):
+                ram.setdefault(int(pid), []).append(r.astype(np.int32))
+            # under another signature than the one saved, the names are worked out again from the kept RAM
+            self._names = {"sig": tuple(nm.get("sig") or ()) or None, "of": {int(v): int(p) for v, p in nm.get("of", [])},
+                           "ram": ram, "given": set(int(p) for p in nm.get("given", [])) | set(ram)}
+        cf = d.get("came_from")
+        if cf:
+            self._came = {(a, b): n for a, b, n in cf.get("came", [])}
+            self._both = {(a, b): n for a, b, n in cf.get("both", [])}
 
     def summary(self) -> str:
         return json.dumps({k: ({kk: (hex(vv) if kk == "addr" else vv) for kk, vv in v.items()} if isinstance(v, dict) else v) for k, v in self.found.items()})
