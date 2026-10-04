@@ -119,6 +119,13 @@ def fresh_process_state() -> None:
         pass
 
 
+def _book_size(path: Path) -> int:
+    try:
+        return len(json.loads(path.read_text()).get("labels") or {})
+    except (OSError, ValueError):
+        return 0
+
+
 def azure_spend(path: Path) -> dict[str, Any] | None:
     """Total this run's own ledger, and copy its lines into the project's shared ledger so project spend stays whole."""
     os.environ.pop("ANYGAME_USAGE_LOG", None)
@@ -155,7 +162,8 @@ def _save_png(pb, path: Path) -> None:
 
 
 def run_one(suite: dict[str, Any], gid: str, decider: str, seed: int, out: Path, standin: StandIn | None = None,
-            scale: float = 1.0, fetch: bool = True, pack_name: str | None = None, goals: bool = True) -> dict[str, Any]:
+            scale: float = 1.0, fetch: bool = True, pack_name: str | None = None, goals: bool = True,
+            books: Path | None = None) -> dict[str, Any]:
     from anygame.device.pyboy import PyBoyDevice
     from anygame.loop import Agent
     from anygame.pack import load_pack
@@ -167,6 +175,8 @@ def run_one(suite: dict[str, Any], gid: str, decider: str, seed: int, out: Path,
     default_pack = suite.get("pack", "gameboy-blind")
     pack_name = pack_name or default_pack
     label = decider if pack_name == default_pack else f"{pack_name}+{decider}"   # another agent is its own column
+    if books is not None:
+        label += "+book"
     row: dict[str, Any] = {"game": gid, "tier": game["tier"], "kind": game.get("kind"), "decider": label, "pack": pack_name, "seed": seed,
                            "milestones": len(game["milestones"]), "budget": budget}
     try:
@@ -189,6 +199,13 @@ def run_one(suite: dict[str, Any], gid: str, decider: str, seed: int, out: Path,
         pack = load_pack(work / "pack")
         sensor = open_decider(decider, seed, standin)
         fresh_process_state()
+        if books is not None:
+            # the per-game book protocol: what the agent learned about this game's font in earlier runs is kept, in
+            # one file per game; nothing else carries over (no goals, no world memory, no choices)
+            books.mkdir(parents=True, exist_ok=True)
+            book = books / f"{gid}.json"
+            row["book_glyphs_at_start"] = _book_size(book)
+            os.environ["ANYGAME_GLYPHS"] = str(book)
         azure_log = out / f"{gid}-{label}-{seed}.azure.jsonl"
         out.mkdir(parents=True, exist_ok=True)
         azure_log.unlink(missing_ok=True)
@@ -272,6 +289,8 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--no-goals", action="store_true", help="do not give a goal-writing pack its chat model (generic goal only)")
     ap.add_argument("--out", help="output folder (default: runs/<decider>)")
     ap.add_argument("--scale", type=float, default=1.0, help="multiply the frame/press/time/call budget (a quick check: 0.1)")
+    ap.add_argument("--books", help="keep a glyph book per game in this folder across runs (reported as <agent>+book); "
+                                    "default: every run starts with none")
     ap.add_argument("--no-fetch", action="store_true", help="never download a ROM; use only what is in the cache")
     a = ap.parse_args(argv)
     suite = load_suite()
@@ -288,7 +307,8 @@ def main(argv: list[str] | None = None) -> None:
     try:
         for gid in games:
             for seed in seeds:
-                row = run_one(suite, gid, a.decider, seed, out, standin, a.scale, fetch=not a.no_fetch, pack_name=a.pack, goals=not a.no_goals)
+                row = run_one(suite, gid, a.decider, seed, out, standin, a.scale, fetch=not a.no_fetch, pack_name=a.pack, goals=not a.no_goals,
+                             books=Path(a.books) if a.books else None)
                 with open(out / "runs.jsonl", "a") as f:
                     f.write(json.dumps(row) + "\n")
                 brief = {k: row.get(k) for k in ("game", "decider", "seed", "score", "reached", "stop", "presses", "wall_s", "skipped") if row.get(k) is not None}
