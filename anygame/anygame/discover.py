@@ -23,6 +23,7 @@ LO, HI = 0xC000, 0xE000
 MAP_RULE = 4        # bumped when the map rule changes: a signature or evidence saved under another is not loaded
 EVIDENCE = ("changes", "ups", "holds", "holds_walked", "walks_at", "by_pad", "by_other", "full_any", "follows_pos",
             "_from", "_to", "_old", "_hist", "n_values", "by_warp", "returned")
+SETTLED = 300       # updates the position held unchanged before lookaheads stop teaching it (early on they correct it)
 MOVED = 0.2         # a position byte moves on at least this share of its axis's presses (walls and turns take the rest)
 WALKED = 0.8        # a map value must have held through walking on this share of its holds
 HOLD_WALKS = 6      # a map value holds while the player walks at least this many moves (a step's bytes hold for one)
@@ -255,6 +256,11 @@ class Discoverer:
             self._full_n = (getattr(self, "_full_n", []) + [n])[-200:]
             if n < _split(self._full_n):
                 return
+        if not full and getattr(self, "_pos_age", 0) >= SETTLED:
+            # once the position has held for a while, lookaheads teach it nothing more: in a battle's menu the cursor byte follows
+            # up and down and stays on left and right against waiting exactly like a position, and probe after probe
+            # there handed y to it (the Rattata stall on Route 1). Real presses still judge it
+            return
         if not full:
             # against waiting, a press that did little is no evidence either way: a text box ignores the d-pad but a
             # few bytes (the pad's own state) still differ, while a step rewrites far more (position, sprites, the
@@ -464,6 +470,10 @@ class Discoverer:
             self.by_warp[:] = 0
             self.returned[:] = 0
             self.warps = 0
+        if pos == getattr(self, "_warp_pos", None) and None not in pos:
+            self._pos_age = getattr(self, "_pos_age", 0) + 1
+        else:
+            self._pos_age = 0
         self._warp_pos = pos
         if "map" not in self.fixed and "x" in self.found and "y" in self.found:
             m = self._map()
