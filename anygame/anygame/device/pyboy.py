@@ -147,6 +147,8 @@ class PyBoyDevice(Device):
     # ---- the clock ---------------------------------------------------------------------------------
     def _tick(self, n: int, render: bool = False) -> None:
         # only the last frame is drawn: the screen is always current, and the frames before it cost no rendering
+        if n > 0:
+            self._at = None                         # the game moved on from any snapshot
         if n > 1:
             self._pb.tick(n - 1, False)
         if n > 0:
@@ -235,16 +237,25 @@ class PyBoyDevice(Device):
         return self.discover_file
 
     # ---- branching: the emulator as the forward model of every game on it ------------------------------
+    # PyBoy writes and reads a state a byte at a time (16 ms to save, 7 ms to load), so the device remembers which
+    # snapshot the game is still exactly at: a second snapshot at the same moment, or a restore to where the game
+    # already is (a branch's first sequence, a caller restoring twice), costs nothing
     def snapshot(self) -> tuple[bytes, int]:
+        if getattr(self, "_at", None) is not None:
+            return self._at
         import io
         b = io.BytesIO()
         self._pb.save_state(b)
-        return b.getvalue(), self.frames
+        self._at = (b.getvalue(), self.frames)
+        return self._at
 
     def restore(self, snap: tuple[bytes, int]) -> None:
+        if getattr(self, "_at", None) is snap:
+            return
         import io
         self._pb.load_state(io.BytesIO(snap[0]))
         self.frames = snap[1]
+        self._at = snap
 
     def branch(self, seqs: dict[str, list], frames: int = 16, hold: int = 4) -> dict[str, dict[str, Any]]:
         """Play each input sequence from the current moment for `frames` frames, then put the game back exactly as it
@@ -279,6 +290,7 @@ class PyBoyDevice(Device):
             f.write(str(self.frames))
 
     def load_state(self, path: str) -> None:
+        self._at = None
         with open(path, "rb") as f:
             self._pb.load_state(f)
         try:
@@ -299,6 +311,7 @@ class PyBoyDevice(Device):
         if self.discoverer is not None:
             from ..discover import ram
             before = ram(self._pb.memory)
+        self._at = None
         self._pb.button_press(b)
         self._tick(self.hold if hold is None else int(hold))
         self._pb.button_release(b)
