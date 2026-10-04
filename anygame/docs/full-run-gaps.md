@@ -459,13 +459,16 @@ thread, the blocker: a map signature that stays one value per map from the first
 |---|---|---|
 | fresh power-on, 1,500 steps (17e108c; e80b499 the same) | 16 of 22 (73%) | 5.1% |
 | from long-horizon's tick-8600 save, ticks 8931–9324 (after the map byte settled) | 32 of 34 (94%) | — |
-| from the 8600 save, all 724 steps | 32 of 36 (89%) | 4.7% |
+| from the 8600 save, all 1,500 steps (17e108c) | 124 of 130 (95%) | 15.1% |
 
 From power-on the first 1,500 steps still read Pallet Town as 7 values and Red's house 2F as 10. The map locks
 only at the first revisit (the emulator thread's limit). e80b499 changes nothing here; it helps after a faint.
 
-On the save, once the byte has settled, the place book knows 94% of returns again. Door memory adds nothing there,
-because the name alone is enough.
+On the save, the place book knows 94–95% of returns again, and door memory adds nothing there because the name
+alone is enough. But the reading did not stay put. After about tick 9300 the signature moved from 7 to 34895 and
+33360, and Oak's lab and Pallet Town read the same two values (lab: 33360 ×261, 34895 ×93; Pallet: 34895 ×378,
+33360 ×94). Over the whole run, 15.1% of reads sit in a place that is mostly another map. That is a finding for the
+emulator thread: a settled signature that two maps share again later.
 
 Go-back checks:
 - From power-on, Pallet Town to Red's house 1F and 2F: no arrival in 2 tries before and 2 tries after, on either
