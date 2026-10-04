@@ -30,6 +30,7 @@ import json
 from collections import deque
 from typing import Any, Callable
 
+from ..heading import Heading
 from ..places import PlaceBook
 
 DIRS = {"up": (0, -1), "down": (0, 1), "left": (-1, 0), "right": (1, 0)}
@@ -110,6 +111,7 @@ class WorldTracker:
         # which place the player is in, from the map signature and how the position moved (anygame/places.py): a
         # tile is keyed by place id, not by signature
         self.book = PlaceBook(far=int(r.get("join_far", 4)))
+        self.heading = Heading(self.book)                # which way is on when no goal names one (heading.py)
         self._merged = 0                                # merge events of the book already applied
         self._moves: list[str] = []                     # directions pressed since the last position read
         self._walking = False
@@ -323,6 +325,9 @@ class WorldTracker:
                 k_door += 1
         # 3. explore, one option per direction
         toward = (goal or {}).get("_toward")
+        own = toward is None
+        if own:
+            toward = self.heading.toward(here[0])
         explore = []
         # tiles a step into is refused now: a refusal seen once or twice expires with its block (a person who moved,
         # or a step misread while the place was misnamed), so a tile once refused is explored again later
@@ -347,7 +352,7 @@ class WorldTracker:
             plans[f"explore_{d}"] = p
             explore.append((0 if d == toward else 1, best[1], d, len(p)))
         for _, dist, d, n in sorted(explore):
-            hint = " (the goal's direction)" if d == toward else ""
+            hint = ((" (the way on)" if own else " (the goal's direction)") if d == toward else "")
             opts[f"explore_{d}"] = f"explore {COMPASS[d]}{hint}: nearest unexplored tile {dist} step(s) away, up to {n} steps"
         # 4. inspect blocked tiles not inspected yet, nearest first: people, signs and objects block the way as walls do,
         # and the only general way to find the one a quest wants is to try them
@@ -574,6 +579,7 @@ class WorldTracker:
         self.walls_at = {json.loads(m): {tuple(p) for p in v} for m, v in (d.get("walls_at") or {}).items()}
         if d.get("book"):
             self.book = PlaceBook.from_dict(d["book"], far=int(self.r.get("join_far", 4)))
+            self.heading = Heading(self.book)
             self._merged = int(d.get("merged", 0))
         self.places = set(d.get("places") or []) | set(self.visited)
         self.moves = dict(d.get("moves") or {})
