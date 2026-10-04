@@ -157,13 +157,13 @@ class MenuTracker:
         self.tile_cfg = dict(r.get("tiletext") or {})       # the cell grid, if not the Game Boy's 160x144 / 8 px
         self.seen: dict[str, tuple[np.ndarray, str]] = {}   # screens the run has shown: small image, its text
         self.loops: dict[str, dict[str, int]] = {}   # screen key → label → times it came straight back to this menu
-        self._pending: tuple[str, str] | None = None  # the last pick: (screen key, label)
-        self._since = 0                              # ticks seen since that pick
+        self._recent: list[list] = []                 # recent picks: [screen key, label, ticks since]
 
     def see(self, screen: np.ndarray, text: str | None = None) -> None:
         """A screen the run passed through (any tick): an outcome that looks like one of these leads back to it."""
         k = _key(screen)
-        self._since += 1
+        for p in self._recent:
+            p[2] += 1
         if k not in self.seen:
             self.seen[k] = (_small(screen), (text or "")[:60])
             if len(self.seen) > 300:
@@ -283,11 +283,14 @@ class MenuTracker:
     # ---- the read ------------------------------------------------------------------------------------------
     def read(self, device, screen: np.ndarray, pos: Callable[[], tuple] | None = None) -> dict[str, Any]:
         k = _key(screen)
-        if self._pending and self._pending[0] == k and self._since <= int(self.r.get("loop_within", 3)):
-            # the last pick here led straight back to this same menu (a box that closes, an empty bag): a loop
+        within = int(self.r.get("loop_within", 4))
+        back = [p for p in self._recent if p[0] == k and p[2] <= within]
+        if back:
+            # a pick here led straight back to this same menu, maybe through a screen or two of its own (a box
+            # that closes, an empty bag, a card that A dismisses): a loop
             lp = self.loops.setdefault(k, {})
-            lp[self._pending[1]] = lp.get(self._pending[1], 0) + 1
-        self._pending = None
+            lp[back[-1][1]] = lp.get(back[-1][1], 0) + 1
+        self._recent = [p for p in self._recent if p[0] != k and p[2] <= within]
         self.last_key = k
         self.see(screen)
         m = self.cache.get(k)
@@ -392,7 +395,7 @@ class MenuTracker:
             device.press(k, hold=int(h) if h else self.hold, after=self.gap)
         if self.last_key:
             self.history.setdefault(self.last_key, []).append(f"{label}:{self.last_landings.get(label, '')[:60]}")
-            self._pending, self._since = (self.last_key, label), 0
+            self._recent.append([self.last_key, label, 0])
         return f"{label}: " + " ".join(k.split(":")[0].upper() for k in plan)
 
     def dump(self) -> dict[str, Any]:

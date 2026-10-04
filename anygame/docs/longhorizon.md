@@ -1,9 +1,80 @@
-# Long-horizon play: Aevilia with Jev, goals from dialogue, the Jev audit
+# Long-horizon play: Aevilia and Pokemon Red with Jev, goals from dialogue, the Jev audit
 
 2026-10-03, branch `claude/anygame-pokemon-longhorizon-cmt588`, PR #14 (stacked on #12), with discovery v2 from #12 merged.
 Pack: `packs/gameboy` (one generic Game Boy pack, nothing about either game in it). ROM: Aevilia (homebrew). Pokemon Red: not run, because there is no ROM in project files yet.
 
-## Result
+## Pokemon Red (2026-10-04): from power-on to Route 1 with a starter
+
+Same pack (`packs/gameboy`), same code as Aevilia, nothing about Pokemon in the agent. The grader reads pret's RAM map for scoring only.
+
+| run | decider | milestones (grader) | Jev spend |
+|---|---|---|---|
+| stand-in, 1,500 ticks | top pick | intro (93), left house (322) | $0 |
+| **Jev, 1,500 ticks, audit on** | **Jev** | **intro (93), left house (292), starter (768), Route 1 (1207)** | **$0.033** |
+
+The Jev run hit the target, leaving Pallet Town with a starter. In order, it:
+- named both characters and went downstairs;
+- walked north until Oak stopped it, then followed him to the lab;
+- chose BULBASAUR;
+- fought the rival's CHARMANDER and lost;
+- left the lab and walked onto Route 1;
+- won wild battles against Rattata and Pidgey, which took Bulbasaur to level 6 with $1,500;
+- walked home to Red's house.
+
+The run went from power-on to tick 700, then continued from its tick-700 checkpoint on a menu fix (logs in two parts). Pokemon Jev spend across every run today is about $0.15, including the runs that stalled.
+
+The stand-in on the same code left the house too. It never walked north into the grass, which is the step that brings Oak out, so it never got a starter.
+
+### What it took (each stall, and its fix)
+
+| stall | side | fix |
+|---|---|---|
+| A tap only turns Red; the walk read as a menu | mine | held-press `walk_<dir>` options while the position is unknown |
+| x bound to a wrong byte after going downstairs | emulator | discovery keeps a byte while it still passes (c66591a) |
+| One map signature covered both floors, so upstairs walls hid the exit | emulator | doors are steps that rewrite rarely changed bytes (774030c) |
+| Same, before that fix | mine | a refused step expires with its block |
+| The town's signature changed on one-tile steps, making false doors | mine | a one-tile walking step is an alias, not a door |
+| START-menu entries and the trainer card reopened 25–190 times | mine | a pick that returns to the same menu twice (directly or through one screen) is dropped |
+| Goals re-set every 2 ticks because a menu redraw "left the place" | mine | place goals count only on a walk screen |
+| "Don't go away yet!": Oak walked Red back 30+ times | mine | a walk that ends on its own start tile twice is dropped from that tile |
+| Jev shuffled Red left and right on a "menu" where A did nothing | mine | when A does nothing for every entry, only walks and buttons are offered |
+
+Also merged in: exact text from the screen's cells (menus read POKéMON/ITEM/RED/SAVE exactly), menu choices played on until the game asks again (FIGHT shows the move list), and numbers (goals can ask for HP or a level).
+
+### Goals the writer set (Azure, 50 calls, 0 rejected, median 2.1 s)
+
+The writer read the dialogue and set goals that match the game's story. Examples:
+- "Go to the next-door professor and talk to him."
+- "Choose one of the three Pokémon."
+- "Defeat Gary's Charmander."
+- "Choose FIGHT and use Tackle until the wild Rattata is defeated."
+- "Go north into a new area."
+
+The one miss was "Select NEWGAME" checked as `new_place`, which was given up. The starter goals checked `said: received` and were given up. The starter text reads "…received a BULBASAUR!", but that line was cut by the box, so the check never saw the word.
+
+### The Jev audit (446 decisions)
+
+| verdict | share |
+|---|---|
+| Jev and the top pick agreed | 49% |
+| differed, same outcome 8 decisions later | 4.3% |
+| differed, Jev's pick better | 2.9% |
+| differed, top pick better | 1.6% |
+| differed, not played out (cap of 30) | 42% |
+
+Most decisive cases were on menus (12 Jev better, 6 top better). As on Aevilia, Jev's own judgment changed the outcome in about 5% of decisions and helped about 2:1 when it did. The run-level gap is larger: Jev got a starter and reached Route 1, and the stand-in did not.
+
+### Next
+
+- The rival battle was lost. Battle choices are now played out, so Jev sees "used TACKLE!" outcomes, but the goal check for "defeated" never fired. The writer should read the play-out text.
+- Items and field moves (PR #19 chains) are not wired yet. Nothing before Viridian needs them.
+- Next milestones: Viridian City, then Oak's Parcel.
+
+Logs: `longhorizon/pk-jev-route1/` (part1-power-on with checkpoint-700, part2-resumed with out.json and the milestone saves, standin/). The earlier stalls are in `pk-standin5`, `pk-standin6`, `pk-standin7-lab` and `pk-jev-lostpos`.
+
+## Aevilia (2026-10-03)
+
+### Result
 
 | run | decider | milestones (grader, never seen by the agent) | last milestone | Jev spend |
 |---|---|---|---|---|

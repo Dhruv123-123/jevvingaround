@@ -470,6 +470,11 @@ class Agent:
                 txt = values.get(self.base.raw.get("dialogue_read", "text"))
                 self.numbers.observe(txt if isinstance(txt, str) else "", ram)
                 placed["numbers"] = self.numbers.values(ram)
+                if w is not None:
+                    if getattr(self, "gains", None) is None:
+                        from .chains import Gains
+                        self.gains = Gains(w)        # a line telling of a gain makes given-up walls worth a bump
+                    self.gains.see(txt if isinstance(txt, str) else "")
             self.memory.observe(self.tick, getattr(self.device, "frames", None), placed,
                                 values.get(self.base.raw.get("dialogue_read", "text")), (t[1], t[2]) if t else None)
             if self.goalbook is not None:
