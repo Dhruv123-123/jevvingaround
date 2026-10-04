@@ -437,3 +437,42 @@ A second profile, of cold seed 1 scaled to 320 s, shows the same split as before
 The fix belongs to long-horizon's `menu.explore`. "Position lost" should mean a position the run once had and lost, not a game that never had one; or the walk options it keeps the explore for should be offered without the grid and play-outs.
 
 Elsewhere the fix helps throughput: the top pick rose from 148 to 187 presses per wall-minute, and Tobu Tobu Girl from 128 to 236. Scores stay within the run-to-run spread.
+
+
+## After the lost-position fix: long-horizon 3e696e6 (2026-10-04)
+
+In 3e696e6, "lost" means the game had a position and lost it, so an endless screen in a game that never shows a position now returns "not a menu". Same games, seeds, budget and four-way parallelism as before.
+
+| game | random | cold, top | cold, Jev | per-game book, top | per-game book, Jev |
+|---|---|---|---|---|---|
+| GBHack | 0.33 | 0.40, +0.10 | 0.60, +0.40 | 0.40, +0.10 | 0.40, +0.10 |
+| PostBot | 0.40 | 0.40, +0.00 | 0.40, +0.00 | 0.40, +0.00 | 0.40, +0.00 |
+| Renegade Rush | 0.20 | 0.27, +0.08 | 0.20, +0.00 | 0.27, +0.08 | 0.20, +0.00 |
+| Tobu Tobu Girl | 0.53 | 0.40, −0.29 | 0.40, −0.29 | 0.40, −0.29 | 0.40, −0.29 |
+| **suite median (games above 0.1)** | 0 | +0.04 (0 of 4) | +0.00 (1 of 4) | +0.04 (0 of 4) | +0.00 (0 of 4) |
+
+| agent | presses per wall-minute (median) | Tobu / PostBot / Renegade / GBHack | game frames per wall-minute | runs ended by the wall limit | Jev $ | Azure $ (calls) |
+|---|---|---|---|---|---|---|
+| e5378fc, cold, top | 187 | 236 / 319 / 64 / 150 | 7,319 | 3 of 12 | 0 | 0.536 (280) |
+| e5378fc, cold, Jev | 91 | 125 / 103 / 74 / 79 | 4,974 | 1 of 4 | 0.176 | 0.152 (99) |
+| **3e696e6, cold, top** | **202** | 248 / 304 / **119** / 154 | 7,432 | **0 of 12** | 0 | 0.492 (243) |
+| **3e696e6, cold, Jev** | **83** | 90 / 99 / 60 / 77 | 3,674 | 1 of 4 (Tobu, at 1,345 of 1,500 presses) | 0.209 | 0.161 (98) |
+| 3e696e6, per-game book, top | 191 | 247 / 370 / 182 / 174 | 7,856 | 0 of 12 | 0 | 0.408 (220) |
+| 3e696e6, per-game book, Jev | 89 | 105 / 90 / 85 / 89 | 4,240 | 1 of 4 (Renegade, at 1,271 of 1,500 presses) | 0.208 | 0.122 (95) |
+
+**Renegade Rush explores**
+
+| | steps explored per 100 (seeds 1 / 2 / 3, or Jev) | wall seconds in explores | presses per wall-minute |
+|---|---|---|---|
+| e5378fc, cold, top | 22 / 31 / 19 | 862 / 716 / 709 | 21 / 64 / 92 |
+| **3e696e6, cold, top** | 40 / 25 / 33 | 548 / 507 / 482 | **109 / 119 / 120** |
+| 3e696e6, cold, Jev | 14 | 330 | 60 |
+| 3e696e6, per-game book, top | 35 / 40 / 37 | 456 / 243 / 212 | 119 / 182 / 193 |
+
+**No top-pick run hits the clock any more, cold or warm.** Every Renegade Rush cold run now ends on the 1,500-press budget.
+
+Its explores happen as often as before (25–40 per 100 steps), but they are cheap now: about 1 s each, down from 3–12 s. That is because they return "not a menu" before the grid pass and the play-outs.
+
+The two Jev runs that still hit the clock were at 1,345 and 1,271 of their 1,500 presses, close to the press budget. At 80–90 presses per wall-minute, Jev runs are now limited by Jev's own pace (one call per press) more than by the agent.
+
+Scores stay within the run-to-run spread. GBHack cold Jev reached 3 of 5 milestones (+0.40), on one seed.
