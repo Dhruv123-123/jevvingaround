@@ -11,6 +11,7 @@ emulator: { clock: game, step: 4, hold: 8, after: 8 }
 discover: true
 goals_from: dialogue
 pos_lock: 500       # a found position held this many ticks is kept (anygame/loop.py _hold_position)
+upkeep_stale: 300   # upkeep advice on a number not read for this many ticks waits for a new reading
 goals_cfg: { per_hour: 20, burst: 16, min_gap: 12, give_up: 250 }   # writer calls only on news, 16 + 20 per game hour (goalgate.py)
 read:
   x: { kind: json, path: found.x }

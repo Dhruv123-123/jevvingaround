@@ -515,6 +515,20 @@ class Agent:
                     if g is not None:
                         self.goalbook.impose(g, self.tick, placed, source="errand", ask=False)
                         self.quest = self.goalbook.quest()
+                # a number not read for a while (health off the battle screen) is not known to be low any more: its
+                # advice waits for the next reading instead of sending the player after it for ever
+                stale = int(self.base.raw.get("upkeep_stale", 0) or 0)
+                if adv and stale:
+                    tr_ = self.keep.tracks.get(adv["number"])
+                    seen = self._read_at.get(adv["number"]) if hasattr(self, "_read_at") else None
+                    if tr_ is not None:
+                        if seen is None or seen[0] != tr_.reads:
+                            self._read_at = {**getattr(self, "_read_at", {}), adv["number"]: (tr_.reads, self.tick)}
+                        elif self.tick - seen[1] > stale:
+                            adv = None
+                            if (self.goalbook.current or {}).get("source") == "upkeep":
+                                self.goalbook._close(self.goalbook.current, "stale", self.tick)
+                                self.quest = self.goalbook.quest()
                 if held and adv and adv["number"] == held[0]:
                     tr_ = self.keep.tracks.get(held[0])
                     if tr_ is not None and tr_.reads == held[1]:
