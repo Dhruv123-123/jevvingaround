@@ -10,7 +10,7 @@ screen: { orientation: landscape, size: [480, 432] }       # 160x144 at 3x
 emulator: { clock: game, step: 4, hold: 8, after: 8 }
 discover: true
 goals_from: dialogue
-goals_cfg: { max_calls: 60, min_gap: 12, give_up: 250 }
+goals_cfg: { max_calls: 600, min_gap: 12, give_up: 250 }   # ~2k tokens a call; a full game needs hundreds
 read:
   x: { kind: json, path: found.x }
   y: { kind: json, path: found.y }
