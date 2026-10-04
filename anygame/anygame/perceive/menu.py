@@ -94,33 +94,9 @@ def _ocr_boxes(img: np.ndarray) -> list[tuple[float, float, float, float, str]]:
 
 def _tile_boxes(img: np.ndarray, r: dict[str, Any]) -> list[tuple[float, float, float, float, str]] | None:
     """The same boxes read exactly from the screen's cells (perceive/tiletext.py, the glyph book the text read uses).
-    None while most of the text on screen is glyphs not learned yet: the caller reads it by OCR meanwhile."""
+    None only while the book is cold and most of the screen is unknown: the caller reads it by OCR meanwhile."""
     from . import tiletext
-    t = tiletext.reader(r, None)
-    _, st = t.read(img)
-    if st["unknown"] > max(2, st["known"]):
-        return None
-    _, keys, kinds = tiletext.cells(img, t.size, t.cell, t.offset)
-    s = max(1, img.shape[0] // t.size[1])
-    c, (ox, oy) = t.cell * s, t.offset
-    out = []
-    for rr, row in enumerate(keys):
-        run: list[tuple[int, str]] = []
-        for q, k in enumerate(row + [None]):
-            kind = kinds[rr, q] if q < len(row) else 2
-            lab = t.book.labels.get(k) if kind == 1 else None
-            if kind == 1 and lab not in (None, tiletext.NOT_TEXT):
-                run.append((q, lab))
-                continue
-            if kind == 0 and run and q + 1 < len(row) and kinds[rr, q + 1] == 1:
-                run.append((q, " "))          # one blank cell between words
-                continue
-            text = "".join(ch for _, ch in run).strip()
-            if len(text) >= 2:
-                x0, x1 = ox * s + run[0][0] * c, ox * s + (run[-1][0] + 1) * c
-                out.append((float(x0), float(oy * s + rr * c), float(x1), float(oy * s + (rr + 1) * c), text))
-            run = []
-    return out
+    return tiletext.boxes(img, r)
 
 
 def _label(boxes, cur: tuple[int, int, int, int] | None) -> str:
