@@ -103,3 +103,48 @@ def _canon(canonical: Callable[[Any], Any], p: Any) -> Any:
         return canonical(p)
     except (TypeError, IndexError, KeyError):
         return p
+
+
+class Errand:
+    """Out and back: the game named someone or somewhere the run has been, the run goes there, hears what is said
+    there, and comes back to where it was sent from (a road that was closed, a counter that asked for something).
+
+    Made when the way on stalls (anygame/stuck.py raised on a walking screen) and a line said where the player is
+    now names a place the run knows that is not here:
+
+        e = errand_from(marks, memory.dialogue, here=place, since=tick)
+        if e: goalbook.impose(e.goal(), tick, values, source="errand")
+        ... when that goal is reached:  g = e.next();  if g: goalbook.impose(g, ...)
+    """
+
+    def __init__(self, origin: Any, place: Any, name: str, line: str):
+        self.origin, self.place, self.name, self.line = origin, place, name, line
+        self.step = 0
+
+    def goal(self) -> dict[str, Any] | None:
+        said = self.line[:80]
+        steps = [
+            {"id": "errand_go", "instruction": f"go back to {self.name.upper()} (place {self.place}): the game said \"{said}\"",
+             "done": {"place": self.place}, "target": {"place": self.place}},
+            {"id": "errand_talk", "instruction": f"find {self.name.upper()} here and talk (press A facing them)",
+             "done": {"talks": 2}},
+            {"id": "errand_return", "instruction": f"return to place {self.origin}, where the way on was closed",
+             "done": {"place": self.origin}, "target": {"place": self.origin}},
+        ]
+        return steps[self.step] if self.step < len(steps) else None
+
+    def next(self) -> dict[str, Any] | None:
+        self.step += 1
+        return self.goal()
+
+
+def errand_from(marks: Landmarks, dialogue: list[dict[str, Any]], here: Any, since: int = 0,
+                lines: int = 6) -> Errand | None:
+    """An errand from the last lines said here since `since` (a tick): the first name in them, latest line first,
+    whose place is known and is not here."""
+    recent = [d for d in dialogue[-40:] if d.get("map") == here and int(d.get("tick") or 0) >= since][-lines:]
+    for d in reversed(recent):
+        for name, place in marks.find(d.get("text") or ""):
+            if place != here:
+                return Errand(here, place, name, d.get("text") or "")
+    return None
