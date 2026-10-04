@@ -188,3 +188,28 @@ its spend is given in calls. One goal answer in 101 was rejected by its check.
     python -m heldout.run --pack gameboy --decider top --out runs/lh-top
     python -m heldout.run --pack gameboy --decider jev --seeds 1 --out runs/lh-jev
     python -m heldout.report runs/random runs/standin runs/jev runs/lh-top runs/lh-jev
+
+
+## Throughput before gap 6 (2026-10-04)
+
+The measurement the speed work starts from: presses per wall-minute and how often the 900-second wall limit, not the
+36,000-frame game budget, ended a run. Same runs as the tables above.
+
+| agent | runs | presses per wall-minute (median of runs) | per game: Tobu / PostBot / Renegade / GBHack | runs ended by the wall-clock limit |
+|---|---|---|---|---|
+| random | 12 | 29,774 | 23,657 / 39,429 / 34,500 / 24,353 | 0 of 12 (0%) |
+| standin | 12 | 19,947 | 15,912 / 20,180 / 22,362 / 19,714 | 0 of 12 (0%) |
+| jev | 4 | 176 | 176 / 174 / 175 / 179 | 0 of 4 (0%) |
+| PR #12 agent pre-fix, top | 12 | 109 | 80 / 148 / 237 / 49 | 5 of 12 (42%) |
+| PR #12 agent, top | 12 | 128 | 87 / 129 / 241 / 31 | 4 of 12 (33%) |
+| long-horizon agent, top | 12 | 18 | 6 / 57 / 11 / 38 | 12 of 12 (100%) |
+| long-horizon agent, Jev | 4 | 41 | 18 / 72 / 16 / 65 | 3 of 4 (75%) |
+
+To spend the whole game budget inside the wall budget a run needs 2,400 game frames per wall-minute; the
+button-only agents reach about 92 presses per wall-minute at that pace (1,380 presses in 10 game-minutes). The
+long-horizon agent is at 18 with its top pick and 41 with Jev, so it uses a small part of its game time before the
+clock stops it.
+
+Caveat: the discovered-state and long-horizon runs ran four at a time on a 4-core container, the baseline runs one
+at a time. A re-score after a throughput change runs the same way (four games in parallel, seeds 1–3 for top pick,
+seed 1 for Jev) so the before and after compare.
