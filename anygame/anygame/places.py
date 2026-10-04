@@ -71,6 +71,7 @@ class PlaceBook:
         # out is the other way). A door taken again leads where it led before, whatever the signature reads now
         self.doors: dict[tuple[int, int, int], tuple] = {}
         self._pressed: str | None = None
+        self.door_any = False                   # on: a door known from another place counts too, on the very same tiles
         self.door_slack = 0                     # tiles a door taken again may differ by, from and to together
         self._from: tuple[int, int] | None = None
 
@@ -237,13 +238,16 @@ class PlaceBook:
             here = self.canonical(self.here.id)
             hits = []
             for (p, ax, ay), (q, bx, by, *_) in self.doors.items():
-                if self.canonical(p) != here or self.canonical(q) == here:
+                other = self.canonical(p) != here
+                if (other and not self.door_any) or self.canonical(q) == here:
                     continue
                 d = abs(ax - fx) + abs(ay - fy) + abs(bx - x) + abs(by - y)
-                if d <= self.door_slack:
-                    hits.append((d, -self.places[self.canonical(q)].left_at, self.canonical(q)))
+                # taken from another place: only the very same tiles both sides (this place may be that one under a
+                # name the map reading has since dropped)
+                if d <= (0 if other else self.door_slack):
+                    hits.append((other, d, -self.places[self.canonical(q)].left_at, self.canonical(q)))
             if hits:
-                to = self.places[min(hits)[2]]
+                to = self.places[min(hits)[3]]
                 to.sigs.add(sig)
                 return to
         named = [p for p in self.places if sig in p.sigs and p is not self.here and p.merged_into is None]
