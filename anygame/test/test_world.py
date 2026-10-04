@@ -396,3 +396,23 @@ def test_discoverer_credits_a_tap_with_the_step_it_started():
         d.press(b, before, mem.copy(), full=False, continues=True)
         d.frame(mem.copy(), blank=False)
     assert d.found["x"]["addr"] == 0xD362 and d.found["y"]["addr"] == 0xD361
+
+
+def test_pyboy_snapshot_is_reused_until_the_game_moves():
+    pytest.importorskip("pyboy")
+    from anygame.device import open_device
+    d = open_device("pyboy://" + os.path.join(ROOT, "roms", "2048gb", "2048.gb") + "?boot=60&clock=game&step=2", None)
+    try:
+        a = d.snapshot()
+        assert d.snapshot() is a                        # nothing ran: the same state, not saved again
+        r1 = d.branch({k: [k] for k in ("left", "up", "right")}, frames=20)
+        assert d.snapshot() is a                        # a branch puts the game back where it was
+        r2 = d.branch({k: [k] for k in ("left", "up", "right")}, frames=20)
+        assert all((r1[k]["ram"] == r2[k]["ram"]).all() for k in r1)
+        d.press("left")
+        b = d.snapshot()
+        assert b is not a and b[0] != a[0]
+        d.restore(a)
+        assert d.snapshot() is a and d.frames == a[1]
+    finally:
+        d.close()
