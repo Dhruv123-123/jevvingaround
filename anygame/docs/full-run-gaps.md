@@ -347,3 +347,45 @@ no labeller, the same code before and after but for this change (four games at o
 Pokemon and Aevilia already read their menus from the cells (their screens' text is known), so nothing changes there.
 Tobu still spends most of a step exploring menus. With this change those explores cost no OCR. Long-horizon's
 explore gate is the change that removes the explores themselves.
+
+### Stall detector (2026-10-04)
+
+`anygame/stuck.py` notices the agent going round in circles. It sees what the agent sees, never the grader: each
+step's screen kind, text read, found position and map, and the frame reduced to a coarse print (18x20 blocks, four
+grey levels). A step is new when that observation or print has not been seen before in the run. It raises when 40
+steps bring at most 2 new ones and the agent took at most 4 different actions, then waits 20 steps before raising
+again. `suggest(options)` lists what to try instead: the options on this screen the loop did not take, then B, then
+the repeated ones (a caller with play-outs keeps the first that changes the screen). The loop's own `noops` list
+catches one screen where nothing changes; this catches cycles through several screens that each change.
+
+Today's Pokemon logs, replayed from the reads (`scripts/stuck_replay.py`, no frames), 7,464 steps of pk9–pk15:
+
+| stall | started | raised | steps to detect |
+|---|---|---|---|
+| Oak's "Don't go away yet!" sending the player back | 388 | 489 | 101 (the first walks up still find new tiles) |
+| the Pokemon menu opened and closed over and over | 5365 | 5404 | 39 |
+| Rattata's move menu walked "down" (cursor read as position) | ~5764 | 5835 | ~71 |
+
+That is 0.7 raises per 1000 steps on the replayed logs, every one a real loop. On Route 1 (pk-jev-route1) it raised
+once, on a pick-and-wait loop at 474–753.
+
+Live with frames (`scripts/step_profile.py --stuck`, top pick, the stand-in never acting on a raise):
+
+| game | steps | raises | what they were |
+|---|---|---|---|
+| GBHack | 1000 | 0 | |
+| Tobu Tobu Girl | 400 | 0 | |
+| Renegade Rush | 600 | 0 | |
+| Pokemon Red (power-on, through the rival fight) | 1000 | 0 | |
+| Aevilia (power-on) | 1000 | 3 stalls | waiting 40+ steps on a frozen screen; pacing left/right between two map edges (twice) |
+| PostBot | 1000 | 1 stall | A, SELECT, SELECT, A, B on the same five screens from step 22 to the end |
+
+No false alarms on the three held-out games or on Pokemon; every raise was a loop the stand-in never left. A stall
+the agent does not break re-raises every 20 steps, so counts here are in stalls, not raises.
+
+Runner call site (long-horizon's, in `Loop.step` after the action is chosen):
+
+    s = self.stuck.see(self.tick, rec["action"], kind=values.get("screen"), text=values.get("text"),
+                       pos=(x, y, map) if found else None, frame=frame)
+    if s: rec["stuck"] = s    # next step: steer by self.stuck.suggest(options) (exclude s["repeated"]),
+                              # then B, then play out each option and take the first that changes the screen
