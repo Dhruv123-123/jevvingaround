@@ -10,7 +10,7 @@ screen: { orientation: landscape, size: [480, 432] }       # 160x144 at 3x
 emulator: { clock: game, step: 4, hold: 8, after: 8 }
 discover: true
 goals_from: dialogue
-goals_cfg: { max_calls: 60, min_gap: 12, give_up: 250 }
+goals_cfg: { per_hour: 20, burst: 16, min_gap: 12, give_up: 250 }   # writer calls only on news, 16 + 20 per game hour (goalgate.py)
 read:
   x: { kind: json, path: found.x }
   y: { kind: json, path: found.y }
@@ -20,8 +20,8 @@ read:
   # text from the screen's 8x8 cells, each glyph labelled once by the chat model; OCR while most of a screen is unknown
   text: { kind: tiletext, size: [160, 144], cell: 8, fallback: ocr, when: { read: screen, in: [text, choice] }, otherwise: "" }
   # a choice on screen: its entries and what choosing each does, found by trying them from a save state
-  menu: { kind: menu, when: { read: screen, in: [choice, button] }, pos: [found.x, found.y], depth: 5, settle: 90, text: tiletext, outcome: playout }
-  world: { kind: world, map: map, x: x, y: y, cell: cell, step_hold: 16, after: 6, max_steps: 8, radius: 40,
+  menu: { kind: menu, needs_words: 1, when: { read: screen, in: [choice, button] }, pos: [found.x, found.y], depth: 5, settle: 90, text: tiletext, outcome: playout }
+  world: { kind: world, motion: true, map: map, x: x, y: y, cell: cell, step_hold: 16, after: 6, max_steps: 8, radius: 40,
            learn_when: { read: x, not: null } }
 remember: [text]
 auto:

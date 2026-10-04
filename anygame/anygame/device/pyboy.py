@@ -147,6 +147,8 @@ class PyBoyDevice(Device):
     # ---- the clock ---------------------------------------------------------------------------------
     def _tick(self, n: int, render: bool = False) -> None:
         # only the last frame is drawn: the screen is always current, and the frames before it cost no rendering
+        if n > 0:
+            self._at = None                         # the game moved on from any snapshot
         if n > 1:
             self._pb.tick(n - 1, False)
         if n > 0:
@@ -231,20 +233,29 @@ class PyBoyDevice(Device):
         import yaml
         with open(self.discover_file, "w") as f:
             f.write("# found by anygame/discover.py while playing: the agent's own map of this game's RAM\n")
-            yaml.safe_dump(self.discoverer.dump(), f, sort_keys=False)
+            yaml.safe_dump(self.discoverer.dump(evidence=False), f, sort_keys=False)
         return self.discover_file
 
     # ---- branching: the emulator as the forward model of every game on it ------------------------------
+    # PyBoy writes and reads a state a byte at a time (16 ms to save, 7 ms to load), so the device remembers which
+    # snapshot the game is still exactly at: a second snapshot at the same moment, or a restore to where the game
+    # already is (a branch's first sequence, a caller restoring twice), costs nothing
     def snapshot(self) -> tuple[bytes, int]:
+        if getattr(self, "_at", None) is not None:
+            return self._at
         import io
         b = io.BytesIO()
         self._pb.save_state(b)
-        return b.getvalue(), self.frames
+        self._at = (b.getvalue(), self.frames)
+        return self._at
 
     def restore(self, snap: tuple[bytes, int]) -> None:
+        if getattr(self, "_at", None) is snap:
+            return
         import io
         self._pb.load_state(io.BytesIO(snap[0]))
         self.frames = snap[1]
+        self._at = snap
 
     def branch(self, seqs: dict[str, list], frames: int = 16, hold: int = 4) -> dict[str, dict[str, Any]]:
         """Play each input sequence from the current moment for `frames` frames, then put the game back exactly as it
@@ -277,14 +288,28 @@ class PyBoyDevice(Device):
             self._pb.save_state(f)
         with open(path + ".frames", "w") as f:
             f.write(str(self.frames))
+        if self.discoverer is not None and "x" in self.discoverer.found and "y" in self.discoverer.found:
+            import json
+            with open(path + ".found", "w") as f:       # what discovery knew here: a run resumed from it starts there
+                json.dump(self.discoverer.dump(evidence=True), f)
 
     def load_state(self, path: str) -> None:
+        self._at = None
         with open(path, "rb") as f:
             self._pb.load_state(f)
         try:
             self.frames = int(open(path + ".frames").read())
         except (OSError, ValueError):
             pass
+        if self.discoverer is not None and not ("x" in self.discoverer.found and "y" in self.discoverer.found) and \
+                os.path.exists(path + ".found") and not os.environ.get("ANYGAME_REDISCOVER"):
+            # a save that opens on a battle has no walking to discover the position from: take what was known
+            # when it was saved (a discoverer that already knows its position keeps what it knows)
+            import json
+            try:
+                self.discoverer.load(json.load(open(path + ".found")))
+            except (OSError, ValueError):
+                pass
         self._tick(1, render=True)
 
     # ---- input -------------------------------------------------------------------------------------
@@ -299,13 +324,27 @@ class PyBoyDevice(Device):
         if self.discoverer is not None:
             from ..discover import ram
             before = ram(self._pb.memory)
+        self._at = None
         self._pb.button_press(b)
         self._tick(self.hold if hold is None else int(hold))
         self._pb.button_release(b)
         self._tick(self.after if after is None else int(after))
         if self.discoverer is not None:
             after_ = ram(self._pb.memory)
-            self.discoverer.press(b, before, after_, full=hold is None or hold >= 8)
+            self.discoverer.press(b, before, after_, full=hold is None or hold >= 8, continues=True)
+
+    def hold_keys(self, keys: list[str], frames: int) -> None:
+        """Hold several buttons together for `frames` frames; they stay down (across calls) until release_keys.
+        For learning what combinations do (run + jump); the discoverer is not taught from these."""
+        self._at = None
+        for k in keys:
+            self._pb.button_press(self._button(k))
+        self._tick(int(frames))
+
+    def release_keys(self, keys: list[str]) -> None:
+        self._at = None
+        for k in keys:
+            self._pb.button_release(self._button(k))
 
     def key(self, name, hold_ms=0, **_):
         if hold_ms:

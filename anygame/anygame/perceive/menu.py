@@ -30,11 +30,12 @@ DIRS = ("down", "up", "right", "left")
 
 
 def _small(img: np.ndarray) -> np.ndarray:
-    """The emulator screen at 1x in grey: what is compared."""
-    g = img.mean(axis=2) if img.ndim == 3 else img
-    h, w = g.shape
-    s = max(1, h // 144)
-    return g[::s, ::s].astype(np.int16)
+    """The emulator screen at 1x in grey: what is compared. Sampled, then averaged (the same values, 7x faster)."""
+    s = max(1, img.shape[0] // 144)
+    g = img[::s, ::s]
+    if g.ndim == 3:
+        g = g.astype(np.int16).sum(axis=2) // 3
+    return g.astype(np.int16)
 
 
 def _key(img: np.ndarray) -> str:
@@ -156,6 +157,10 @@ class MenuTracker:
         self.reads = 0
         self.tile_cfg = dict(r.get("tiletext") or {})       # the cell grid, if not the Game Boy's 160x144 / 8 px
         self.seen: dict[str, tuple[np.ndarray, str]] = {}   # screens the run has shown: small image, its text
+        self.leave = False                       # a number is low (anygame/upkeep.py): entries that get out come first
+        self.screen_kind = None                  # () → the screen kind now (the loop's probe), to tell what an entry ends on
+        from ..battle import Fight
+        self.fight = Fight()                     # which entry lowers the other side's bar most (anygame/battle.py)
         self.loops: dict[str, dict[str, int]] = {}   # screen key → label → times it came straight back to this menu
         self._recent: list[list] = []                 # recent picks: [screen key, label, ticks since]
 
@@ -208,6 +213,18 @@ class MenuTracker:
                         break       # the cursor stopped (an end of the list) or came round again (a wrapping list)
                     entries.append(([d] * n, img))
                     prev = img
+            # a grid (a battle's FIGHT / PKMN / ITEM / RUN): from each place one axis reached, the other axis too
+            for keys0, _ in [e for e in entries if e[0] and e[0][0] in ("down", "up")]:
+                for d in ("right", "left"):
+                    device.restore(snap)
+                    prev = self._play(device, keys0, total)
+                    for n in range(1, self.depth + 1):
+                        device.restore(snap)
+                        img = self._play(device, keys0 + [d] * n, total)
+                        if _same(img, prev) or any(_same(img, e[1]) for e in entries):
+                            break
+                        entries.append((keys0 + [d] * n, img))
+                        prev = img
             # what choosing each entry does, and what B does
             pos0 = pos() if pos else None
             outcomes = []
@@ -218,13 +235,22 @@ class MenuTracker:
                 # an entry that does something is also played on until the game asks again (anygame/playout.py): a
                 # battle move's result is seconds of text later, past the short watch above
                 from ..playout import play_out, describe
-                for (keys, _), oc in zip(entries, outcomes):
+                effects = {}
+                for i, ((keys, _), oc) in enumerate(zip(entries, outcomes)):
                     if oc["same_screen"]:
                         continue
                     device.restore(snap)
                     r = play_out(device, [k for k in keys] + ["a"], self._read_text, hold=self.hold, gap=self.gap,
                                  max_frames=int(self.r.get("playout_frames", 1800)))
                     oc["playout"] = describe(r, 200)
+                    effects[i] = self.fight.effect(str(i), r)
+                    if self.leave and self.screen_kind is not None:
+                        oc["ends_on"], oc["frames"] = self.screen_kind(), r["frames"]
+                order = self.fight.rank(effects)
+                if order:
+                    # a fight: the entry that left the other side's bar lowest, against what the others did
+                    outcomes[order[0]]["playout"] += f"; {self.fight.say(effects[order[0]])}"
+                    outcomes[order[0]]["hurts_most"] = True
             device.restore(snap)
             back = self._outcome(device, ["b"], total, base, pos)
             buttons = {}
@@ -294,8 +320,9 @@ class MenuTracker:
         self.last_key = k
         self.see(screen)
         m = self.cache.get(k)
-        if m is None:
+        if m is None or (self.leave and self.screen_kind is not None and not m.get("ends_known")):
             m = self.explore(device, pos)
+            m["ends_known"] = self.leave and self.screen_kind is not None
             self.cache[k] = m
             self.reads += 1
         landings, plans = {}, {}
@@ -303,7 +330,8 @@ class MenuTracker:
         for i, e in enumerate(m["entries"]):
             lab = f"pick_{i + 1}"
             name = f"'{e['label']}'" if e["label"] else f"entry {i + 1} of {n}"
-            where = "where the cursor is now" if not e["keys"] else f"{len(e['keys'])} x {e['keys'][0]}"
+            where = "where the cursor is now" if not e["keys"] else \
+                ", ".join(f"{e['keys'].count(k)} x {k}" for k in dict.fromkeys(e["keys"]))
             landings[lab] = f"{name} ({where}) → {self._said(e)}"
             plans[lab] = e["keys"] + ["a"]
         b = m["back"]
@@ -348,7 +376,22 @@ class MenuTracker:
             for lab in looped:
                 landings.pop(lab)
                 plans.pop(lab, None)
+        exits = set()
+        if self.leave:
+            from ..upkeep import rank_exits
+            exits = set(rank_exits({f"pick_{i + 1}": e for i, e in enumerate(m["entries"]) if f"pick_{i + 1}" in landings}))
+            for lab in exits:
+                landings[lab] += " [gets out of here: a number is low]"
+
+        hurts = {f"pick_{i + 1}" for i, e in enumerate(m["entries"]) if e.get("hurts_most") and f"pick_{i + 1}" in landings}
+        for lab in hurts:
+            landings[lab] += " [lowers the other side's bar most]"
+
         def group(lab):
+            if lab in exits:
+                return -1
+            if lab in hurts:
+                return -0.5
             if lab in idle:
                 return 4
             if lab == "back_out" or lab.startswith("press_"):

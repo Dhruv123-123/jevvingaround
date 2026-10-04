@@ -30,6 +30,9 @@ import json
 from collections import deque
 from typing import Any, Callable
 
+from ..heading import Heading
+from ..places import PlaceBook
+
 DIRS = {"up": (0, -1), "down": (0, 1), "left": (-1, 0), "right": (1, 0)}
 OPP = {"up": "down", "down": "up", "left": "right", "right": "left"}
 COMPASS = {"up": "north", "down": "south", "left": "west", "right": "east"}
@@ -89,6 +92,11 @@ class WorldTracker:
         self.warps: dict[tuple, Tile] = {}              # (map, x, y, dir) → where it put us
         self.inspected: set[tuple] = set()
         self.walls_at: dict[Any, set[tuple[int, int]]] = {}   # tiles a step into was refused: not a place to explore
+        self.moves: dict[str, dict] = {}         # label → {keys, hold, line}: inputs that do more than a step (motion.py)
+        self.motion_at: set = set()               # places where what each button does was learned
+        self.wants: tuple | None = None           # (goal id, words) when the goal waits for the game to tell of them
+        self.chain_fn = None                      # (device, words) → what a menu-chain search did (set by the loop)
+        self.chained: set = set()                 # goal ids a chain search was tried for
         self.stuck: dict[tuple, int] = {}       # (tile, plan) → times walking that plan from that tile ended back on it
         self._pending: tuple | None = None
         self.steps = 0                                  # steps tried over the run: the clock blocked edges age by
@@ -100,12 +108,23 @@ class WorldTracker:
         self.stale = 0                                  # reads since a new tile was stood on or a new thing inspected
         self.known = 0
         self.buttons_tried: set[str] = set()            # buttons tried during this stale stretch
-        self.alias: dict[Any, Any] = {}                 # map signature → the place it names (see _place)
+        # which place the player is in, from the map signature and how the position moved (anygame/places.py): a
+        # tile is keyed by place id, not by signature
+        self.book = PlaceBook(far=int(r.get("join_far", 4)))
+        self.heading = Heading(self.book)                # which way is on when no goal names one (heading.py)
+        self._merged = 0                                # merge events of the book already applied
+        self._moves: list[str] = []                     # directions pressed since the last position read
+        self._walking = False
+        self._idle = True
         self.places: set[Any] = set()
-        self._last: Tile | None = None
 
     # ---- memory ---------------------------------------------------------------------------------------
-    def tile_of(self, values: dict[str, Any], stepping: bool = False) -> Tile | None:
+    def tile_of(self, values: dict[str, Any], stepping: bool = False, moves: tuple[str, ...] = ()) -> Tile | None:
+        """The tile (place id, x, y) for a read. `moves`: directions pressed since the last read, besides those the
+        tracker's own walks noted."""
+        if moves:
+            self._moves += [m for m in moves if m in DIRS]
+            self._walking, self._idle = True, False
         if isinstance(self.r.get("cell"), str):
             c = _get(values, self.r["cell"])
             if isinstance(c, (int, float)) and c > 0:
@@ -120,25 +139,33 @@ class WorldTracker:
         return self._place(t, stepping)
 
     def _place(self, t: Tile, stepping: bool = False) -> Tile:
-        """A discovered map signature can change without a transition (a byte in it is also a dialogue or animation
-        state). A place changes only when the position jumps with it: a new signature that appears while the player
-        stands where they stood, or one step away, is the same place under another name (an alias, for the run)."""
-        m = t[0]
-        if m in self.alias:
-            m = self.alias[m]
-        elif m not in self.places and self._last is not None and self._last[0] != m:
-            # `stepping`: the change came with a step the agent took while walking (no text, no menu between), which
-            # is a door or stairs even when the position does not jump (Pokemon's stairs land on the same tile). A
-            # walking step that moved exactly one tile is still the same place: a door or stairs never lands on the
-            # very next tile, and a signature byte that changes as the player walks (scenery redrawn) does
-            moved = abs(t[1] - self._last[1]) + abs(t[2] - self._last[2])
-            if moved == 1 or (moved == 0 and not stepping):
-                self.alias[m] = self._last[0]
-                m = self._last[0]
-        self.places.add(m)
-        out = (m, t[1], t[2])
-        self._last = out
-        return out
+        """The place for a read (signature, x, y): the place book's id, given what was pressed since the last read."""
+        sig = tuple(t[0]) if isinstance(t[0], list) else t[0]
+        pid = self.book.see(sig, t[1], t[2], moves=self._moves, walking=self._walking or stepping, idle=self._idle)
+        self._moves, self._walking, self._idle = [], False, True
+        ev = [e for e in self.book.events if e["kind"] == "merge"]
+        for e in ev[self._merged:]:
+            self._rekey(e["from"], e["to"])
+        self._merged = len(ev)
+        pid = self.book.canonical(pid)
+        self.places.add(pid)
+        return (pid, t[1], t[2])
+
+    def _rekey(self, old: Any, new: Any) -> None:
+        """Two places were one under two names: everything learned under the old id moves to the new one."""
+        if old in self.visited:
+            self.visited.setdefault(new, set()).update(self.visited.pop(old))
+        if old in self.walls_at:
+            self.walls_at.setdefault(new, set()).update(self.walls_at.pop(old))
+        sw = lambda k: (new, *k[1:]) if k[0] == old else k
+        self.blocked = {sw(k): v for k, v in self.blocked.items()}
+        self.warps = {sw(k): sw(w) for k, w in self.warps.items()}
+        self.inspected = {sw(k) for k in self.inspected}
+        self.stuck = {(sw(k[0]), k[1]): v for k, v in self.stuck.items()}
+        self.places.discard(old)
+        self.places.add(new)
+        if self.here is not None and self.here[0] == old:
+            self.here = sw(self.here)
 
     def visit(self, t: Tile) -> None:
         self.visited.setdefault(t[0], set()).add((t[1], t[2]))
@@ -159,8 +186,13 @@ class WorldTracker:
         if after is None:
             return "off"
         dx, dy = DIRS[d]
+        k = (before[0], before[1], before[2], d)
+        w = self.warps.get(k)
+        if w is not None and after != w:
+            # a jump known from here did not happen this time: it was a misread position or a one-off push, not a
+            # door or a spinner. Forgotten, so no plan routes through it again (a real one is learned again below)
+            self.warps.pop(k)
         if after == before:
-            k = (before[0], before[1], before[2], d)
             seen = self.blocked.get(k, [0, 0])[0] + 1
             self.blocked[k] = [seen, self.steps]
             self.walls_at.setdefault(before[0], set()).add((before[1] + dx, before[2] + dy))
@@ -293,6 +325,9 @@ class WorldTracker:
                 k_door += 1
         # 3. explore, one option per direction
         toward = (goal or {}).get("_toward")
+        own = toward is None
+        if own:
+            toward = self.heading.toward(here[0])
         explore = []
         # tiles a step into is refused now: a refusal seen once or twice expires with its block (a person who moved,
         # or a step misread while the place was misnamed), so a tile once refused is explored again later
@@ -317,7 +352,7 @@ class WorldTracker:
             plans[f"explore_{d}"] = p
             explore.append((0 if d == toward else 1, best[1], d, len(p)))
         for _, dist, d, n in sorted(explore):
-            hint = " (the goal's direction)" if d == toward else ""
+            hint = ((" (the way on)" if own else " (the goal's direction)") if d == toward else "")
             opts[f"explore_{d}"] = f"explore {COMPASS[d]}{hint}: nearest unexplored tile {dist} step(s) away, up to {n} steps"
         # 4. inspect blocked tiles not inspected yet, nearest first: people, signs and objects block the way as walls do,
         # and the only general way to find the one a quest wants is to try them
@@ -366,16 +401,28 @@ class WorldTracker:
         if known > self.known:
             self.buttons_tried = set()
         self.known = known
-        if self._pending is not None and self._pending[0] == here:
-            # the last plan from this very tile ended where it started (pushed back by a script, a talk, a ledge)
-            self.stuck[self._pending] = self.stuck.get(self._pending, 0) + 1
-        self._pending = None
+        if values.get("screen") in (None, "walk"):
+            # judged when the player can walk again: a plan cut short by a talk ("don't go away yet!") is pushed back
+            # only after the text, so the reads in between say nothing about where it ended
+            if self._pending is not None and self._pending[0] == here:
+                # the last plan from this very tile ended where it started (pushed back by a script, a talk, a ledge)
+                self.stuck[self._pending] = self.stuck.get(self._pending, 0) + 1
+            self._pending = None
         opts, plans = self.options(here, goal)
         dead = [k for k, p in plans.items() if self.stuck.get((here, tuple(p)), 0) >= 2]
         if dead and len(dead) < len(plans):
             for k in dead:      # walked twice from here and came back here: not offered again from this tile
                 plans.pop(k)
                 opts.pop(k, None)
+        if self.wants and self.chain_fn is not None and self.wants[0] not in self.chained and \
+                self.stale >= int(self.r.get("chain_after", 12)):
+            plans["search_menus"] = ["chain"]
+            opts["search_menus"] = (f"nothing new for {self.stale} decisions: try chains of menu picks until the game "
+                                    f"tells of {', '.join(self.wants[1][:3])}")
+        for k, mv in self.moves.items():
+            # a jump, a dash, a run: offered next to the walks, as what learning the buttons found it does
+            plans[k] = [f"hold:{'+'.join(mv['keys'])}:{mv['hold']}"]
+            opts[k] = mv["line"]
         if self.stale >= int(self.r.get("stale_after", 12)):
             # nothing new for a while: a button not tried in this stretch (a menu, a map, a mode) may be what the game
             # is waiting for. Offered first, each button once until something new turns up
@@ -416,6 +463,8 @@ class WorldTracker:
             here = self.tile_of(v)
             if here is None and step in DIRS:
                 device.press(self.keys[step], hold=hold, after=after)      # blind: no position to learn from yet
+                self._moves.append(step)
+                self._walking, self._idle = True, False
                 self.steps += 1
                 done.append(step)
                 continue
@@ -426,19 +475,47 @@ class WorldTracker:
                 d = step[5:]
                 self.inspected.add((here[0], here[1], here[2], d))
                 device.press(self.keys[d], hold=2, after=after)   # a tap turns the player without walking
+                self._idle = False
                 done.append(f"face {d}")
                 continue
             if step == "interact":
                 device.press(interact, hold=4, after=after)
+                self._idle = False
                 done.append("A")
+                continue
+            if step == "chain":
+                self.chained.add(self.wants[0] if self.wants else None)
+                self._idle = False
+                done.append(self.chain_fn(device, list(self.wants[1]) if self.wants else []))
+                break
+            if step.startswith("hold:"):
+                _, ks, h = step.split(":")
+                keys = ks.split("+")
+                if hasattr(device, "hold_keys"):
+                    device.hold_keys(keys, int(h))
+                    device.release_keys(keys)
+                else:
+                    for k in keys:
+                        device.press(k, hold=int(h), after=0)
+                device.wait(int(self.r.get("settle_after_hold", 16)))
+                self._moves += [k for k in keys if k in DIRS]
+                self._walking, self._idle = True, False
+                t2 = self.tile_of(look())
+                self.steps += 1
+                if t2 is not None and t2 != here:
+                    self.visit(t2)
+                done.append(f"{ks} held {h} → " + (f"({t2[1]},{t2[2]})" if t2 is not None else "?"))
                 continue
             if step.startswith("button:"):
                 b = step[7:]
                 self.buttons_tried.add(b)
                 device.press(b, hold=4, after=after)
+                self._idle = False
                 done.append(b.upper())
                 continue
             device.press(self.keys[step], hold=hold, after=after)
+            self._moves.append(step)
+            self._walking, self._idle = True, False
             v2 = look()
             if not _cond(self.r.get("learn_when"), v2):
                 # the step opened a dialogue or a battle (a trainer saw us, a sign): the step itself happened
@@ -461,6 +538,39 @@ class WorldTracker:
         self.last_option = label
         return f"{label}: " + " ".join(done)
 
+    def learn_motion(self, device, place: Any = None) -> list[str] | None:
+        """What each button does here (anygame/motion.py), once per place: inputs that move the player more than a
+        step of the plain direction does (a dash, a run) or that jump become options. Returns the description."""
+        if place in self.motion_at or not hasattr(device, "snapshot"):
+            return None
+        self.motion_at.add(place)
+        from .. import motion
+        try:
+            m = motion.learn(device)
+        except Exception:  # noqa: BLE001
+            return None
+        lines = motion.describe(m)
+        longest = max((x["hold"] for x in m["moves"]), default=0)
+        plain = {tuple(x["keys"]): x for x in m["moves"] if x["hold"] == longest and len(x["keys"]) == 1}
+        for x, line in zip([x for x in m["moves"] if x["hold"] == longest], lines):
+            keys = tuple(x["keys"])
+            if all(k in DIRS for k in keys):
+                continue
+            d = next((plain[(k,)] for k in keys if k in DIRS and (k,) in plain), None)
+            reach = abs(x["reach_x"]) + abs(x["reach_y"])
+            base = abs(d["reach_x"]) + abs(d["reach_y"]) if d is not None else 0.0
+            # a button alone counts only as a jump (up and back down); a button with a direction counts when it goes
+            # further along that direction than the direction alone (a dash, a run). A drift on another axis (a talk
+            # that turns the player, a misread axis) is not a move
+            along = 0.0
+            if d is not None:
+                dk = next(k for k in keys if k in DIRS)
+                along = abs(x["reach_x"]) if DIRS[dk][0] else abs(x["reach_y"])
+                base = abs(d["reach_x"]) if DIRS[dk][0] else abs(d["reach_y"])
+            if x["kind"] == "jump" or (d is not None and along >= 4 and along > 1.5 * max(base, 1.0)):
+                self.moves["move_" + "_".join(keys)] = {"keys": list(keys), "hold": x["hold"], "line": f"hold {line}"}
+        return lines
+
     # ---- persistence ----------------------------------------------------------------------------------
     def dump(self) -> dict[str, Any]:
         return {"visited": {json.dumps(m): sorted(v) for m, v in self.visited.items()},
@@ -468,7 +578,8 @@ class WorldTracker:
                 "warps": [[list(k), list(w)] for k, w in self.warps.items()],
                 "inspected": [list(k) for k in self.inspected], "steps": self.steps,
                 "walls_at": {json.dumps(m): sorted(v) for m, v in self.walls_at.items()},
-                "alias": [[k, v] for k, v in self.alias.items()], "places": sorted(self.places, key=str)}
+                "book": self.book.to_dict(), "merged": self._merged, "places": sorted(self.places, key=str),
+                "moves": self.moves, "motion_at": sorted(self.motion_at, key=str)}
 
     def load(self, d: dict[str, Any]) -> None:
         self.visited = {json.loads(m): {tuple(p) for p in v} for m, v in (d.get("visited") or {}).items()}
@@ -477,5 +588,10 @@ class WorldTracker:
         self.inspected = {tuple(k) for k in d.get("inspected") or []}
         self.steps = int(d.get("steps", 0))
         self.walls_at = {json.loads(m): {tuple(p) for p in v} for m, v in (d.get("walls_at") or {}).items()}
-        self.alias = {k: v for k, v in d.get("alias") or []}
+        if d.get("book"):
+            self.book = PlaceBook.from_dict(d["book"], far=int(self.r.get("join_far", 4)))
+            self.heading = Heading(self.book)
+            self._merged = int(d.get("merged", 0))
         self.places = set(d.get("places") or []) | set(self.visited)
+        self.moves = dict(d.get("moves") or {})
+        self.motion_at = set(d.get("motion_at") or [])

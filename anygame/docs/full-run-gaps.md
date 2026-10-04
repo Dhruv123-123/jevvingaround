@@ -210,3 +210,108 @@ walls the world tracker had given up on.
 See `docs/speed.md`. Profiling the long-horizon agent on Tobu Tobu Girl showed menu trials taking 90% of the wall time.
 Faster screen comparison and an OCR cache took 91 ticks from 184 s to 69 s with identical decisions. The rest is in
 the menu reader's choice of when to explore.
+
+## Gap 5: what each button does
+
+`anygame/motion.py`, see `docs/motion.md`. Each input is tried from a save state for a tap and a hold. The player's x
+and y are found in memory (the sprite table is preferred), and each input is described: a step of one tile, a walk
+while held, a jump with its height, a dash. On Pokemon a tap is a whole tile; on Aevilia movement is continuous; on
+Tobu Tobu Girl B is a jump and A with a direction a dash; on Renegade Rush left and right steer.
+
+## Gap 7: when to ask the goal writer
+
+`anygame/goalgate.py`, see `docs/goal-budget.md`. Of 412 logged writer calls, three quarters bought a goal the program
+would have had anyway: the same goal kept, rewritten as itself, or the generic one. The gate asks only on text the
+run has not seen before, when a goal ends after news was kept over, or once after a give-up, from a budget that grows
+with game time. Replayed on two Pokemon runs, it makes 13-14 calls where 34 were made.
+
+## Second pass (2026-10-04): what stands between the agent and the first badge
+
+All seven gaps above are built. This pass re-reads the Pokemon Jev run from power-on to Route 1
+(`longhorizon/pk-jev-route1/`, three parts, 2,476 ticks). It also re-scores every logged run's places against the grader's map,
+using `scripts/place_check.py`. The held-out re-score after the speed work has not landed yet. The held-out lines below use the last table in
+`heldout-score.md`.
+
+What the Route 1 run shows:
+
+- **The world memory has two places for the whole game so far.** Red's house (two floors), Pallet Town, Oak's lab
+  and Route 1 are 5 maps. The run's world memory names 2 places, and in part 3, 27% of ticks are spent in a place that is
+  mostly another map. Two things cause it:
+  - Pallet Town and Route 1 join without a door or a fade. The map signature does not change at the join, and the
+    position jumps from row 0 to row 35. The world records it as a warp inside one place, so Route 1's tiles land on
+    top of Pallet Town's.
+  - When the signature does change (to Route 1's map byte, five steps in), the change came on a one-tile step. It is
+    made a permanent alias of Pallet Town.
+
+  So a "new place" goal cannot fire on Route 1 and will not fire at Viridian City. The walls and visited tiles of two
+  maps are mixed together, and "go back to the lab" has no place to point at.
+- **The run blacked out once, and was heading for a second.** The report's "walked home to Red's house" at the end of
+  part 2 was a blackout: "RED is out of useable POKéMON", "RED blacked out". Bulbasaur fought every wild battle in
+  the grass with FIGHT and never ran or healed. In part 3 it was at 1 HP of 24 when the run stopped. The game puts the
+  player back home, so each blackout undoes the walk.
+- **Route 1 is mostly battles.** 88% of Route 1 ticks were battle screens. In 870 Route 1 ticks the best the run did
+  was 13 rows of Route 1's 36.
+- **The goal writer ran out.** The 60-call cap was hit at tick 1744, before Route 1. Every goal after that was the
+  generic explore with no direction, so the walk drifted sideways. Gap 7's gate is the fix, once it is wired.
+- **The rival was lost** with FIGHT/TACKLE on every turn. Brock needs the better move picked by its played-out effect.
+
+Re-ranked, by what each blocks between here and Brock:
+
+| rank | gap | blocks | mechanism (general) |
+|---|---|---|---|
+| **8** | **Place identity: joins without a door, and aliases that are guesses** | Viridian City (next milestone), the parcel's return to the lab, any "go back to" | a place book: a step that lands on the far side of the map is a join to a neighbour place, and an alias stays a guess until the tiles agree |
+| 9 | Upkeep: notice a number falling (HP), leave the fight (a choice whose played-out text ends it), and go back to where it last refilled | every route with grass; Viridian Forest; Brock | numbers (gap 3) + places (8) + played-out choices (gap 2) |
+| 7 | Goal budget: wire the gate (built) | everything after tick ~1,700 | `goalgate.py` call sites |
+| 10 | A heading: keep walking the way new places were found instead of the nearest unexplored tile | Route 1, Viridian Forest | world frontier, scored by direction |
+| 11 | A battle choice judged by what it does to the other side's number (the enemy's HP bar) | the rival, Brock | numbers + played-out choices |
+
+For the held-out set the ranking is unchanged until the re-score lands. Wall time ended 100% of the top-pick runs at 18
+presses a minute. The speed work since then (PR #21, 2.6x on Tobu) is what that re-score measures. Then come movement
+options from `motion.py` (Tobu's jump, Renegade's steering), which no decider offers yet.
+
+### The font's cold start (from the held-out re-score after the speed work)
+
+Each held-out run starts with an empty glyph book. On Tobu Tobu Girl and Renegade Rush the labeller hit its cap of
+40 calls, and the calls add up to 470–540 s. `scripts/glyph_coldstart.py` replays a cold start with a finished book
+answering in place of the model, so labelling policies compare without spending anything:
+
+| game | calls before (6 waiting lines start a call) | scenery settled in one reading | + 24 waiting lines start a call |
+|---|---|---|---|
+| Pokemon Red | 25 | 24 | 21 |
+| Renegade Rush | 27 (95% of text cells read) | 26 (97%) | 25 (97%) |
+| GBHack | 13 | 13 | 12 |
+
+What this shows:
+- **Fewer, larger batches do not cut much.** The number of calls follows how new text keeps appearing over play,
+  not how lines are grouped into calls.
+- **Picking lines with the most new glyphs first makes it worse** (Pokemon 25 to 38 calls). A glyph is trusted when
+  a line agrees with glyphs already known, and that pick leaves each line with fewer known glyphs.
+- **What does help is small.** A line the model reads as entirely not-text now settles its glyphs in one reading
+  (`scenery_once`). That is most of Tobu Tobu Girl, whose two-colour scenery tiles were 162 of the 164 glyphs it
+  learned.
+
+The labeller also runs in a background thread, so its seconds overlap play rather than add to it. Whether it costs
+wall time at all is what the held-out run with a kept book (`book-top`) measures. The lever that would matter is a
+book kept per game (Dhruv's decision card), or a deliberate first pass over the first text screen only. No measured
+policy turns a cold start into seconds.
+
+### C11 built: battle choice by the other side's bar
+
+`anygame/battle.py`, `docs/battle.md`. A menu's play-outs are compared by the bars on the screens they end on. The
+entry that leaves the other side's bar shortest ranks first, and the player's own bar is told apart by matching its
+shown number.
+- Rival, 20 fights each: 18 won by the bar, 15 always-TACKLE, 13 random.
+- Route 1 wild, 20 fights each: 19, 19, 14.
+- Silent on Aevilia, Renegade Rush, Tobu and GBHack.
+- Call site: `menu-battle.patch` for long-horizon.
+
+### Next speed item, noted, not built: "is this screen a menu"
+
+The held-out profile (coordinator, 2026-10-04) puts 91% of Tobu's wall time in menu explores. A platformer's play
+screen was explored as a menu on 75 of 112 steps, at 3.7 s each. Long-horizon is gating explores on screen kind.
+A general check would say whether a screen is a menu before exploring it, from three signals:
+- a cursor: a small shape that moves between text lines on the d-pad;
+- choice text: two or more short lines in a box;
+- a d-pad response without the world moving: the screen changes in one small region only.
+
+It would be a module with its own replay over the held-out logs. It is the next speed item after C11.

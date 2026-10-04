@@ -64,7 +64,8 @@ class RunMemory:
                     e["text"] = text           # the same line, typed out further or read better
                 return None
         last_pos = next((d for d in reversed(self.dialogue) if d.get("x") is not None), None)
-        e = {"tick": tick, "frames": frames, "map": m, "x": x, "y": y, "tile": list(tile) if tile else None, "text": text}
+        e = {"tick": tick, "frames": frames, "map": m, "x": x, "y": y, "tile": list(tile) if tile else None, "text": text,
+             "screen": values.get("screen")}
         if x is None and last_pos is not None:
             e.update({"map": last_pos["map"], "x": last_pos["x"], "y": last_pos["y"], "tile": last_pos.get("tile"), "pos": "last known"})
         self.dialogue.append(e)
@@ -96,6 +97,8 @@ def save_checkpoint(agent, path: str) -> str:
     dev = agent.device
     if hasattr(dev, "save_state"):
         dev.save_state(os.path.join(path, "emulator.state"))
+    if hasattr(dev, "save_trace"):
+        dev.save_trace()            # ANYGAME_DISCOVER_TRACE: kept up to date, so a stopped run still has its trace
     disc = getattr(dev, "discoverer", None)
     d: dict[str, Any] = {
         "tick": agent.tick, "total_cost": agent.total_cost, "auto_ticks": agent.auto_ticks,
@@ -105,6 +108,9 @@ def save_checkpoint(agent, path: str) -> str:
         "remembered": agent.remembered,
         "discovered": disc.dump() if disc is not None and getattr(disc, "found", None) else None,
         "audit": agent.auditor.dump() if getattr(agent, "auditor", None) is not None else None,
+        "glyphs": _glyph_books(),
+        "upkeep": ({n: dict(t.__dict__) for n, t in agent.keep.tracks.items()}
+                   if getattr(agent, "keep", None) is not None else None),
     }
     tmp = os.path.join(path, "run.json.tmp")
     with open(tmp, "w") as f:
@@ -121,6 +127,9 @@ def load_checkpoint(agent, path: str) -> dict[str, Any]:
     if os.path.exists(st) and hasattr(dev, "load_state"):
         dev.load_state(st)
     disc = getattr(dev, "discoverer", None)
+    if os.environ.get("ANYGAME_REDISCOVER"):
+        # what the game's memory means is found again from here: the world memory keyed by the old reading goes too
+        d = {**d, "discovered": None, "worlds": {}}
     if disc is not None and d.get("discovered"):
         disc.load(d["discovered"])
     agent.tick = int(d.get("tick", 0))
@@ -143,4 +152,20 @@ def load_checkpoint(agent, path: str) -> dict[str, Any]:
         agent.quest = agent.goalbook.quest()
     if d.get("audit") and getattr(agent, "auditor", None) is not None:
         agent.auditor.load(d["audit"])
+    if d.get("upkeep") and getattr(agent, "keep", None) is not None:
+        from .upkeep import Track
+        for n, td in d["upkeep"].items():
+            t = Track(n)
+            t.__dict__.update(td)
+            t.since_low = [tuple(x) for x in t.since_low]
+            agent.keep.tracks[n] = t
+    if d.get("glyphs"):
+        from .perceive import tiletext
+        tiletext.restore_books(d["glyphs"])
     return d
+
+
+def _glyph_books() -> dict[str, Any]:
+    import sys
+    tt = sys.modules.get("anygame.perceive.tiletext")      # only when this run reads tile text
+    return tt.books() if tt is not None else {}

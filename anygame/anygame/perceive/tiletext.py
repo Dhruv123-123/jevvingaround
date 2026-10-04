@@ -64,6 +64,7 @@ class GlyphBook:
         self.calls = 0
         self.rejected = 0
         self.ms: list[int] = []
+        self.scenery_once = True                    # a line read as all not-text settles its glyphs at once (vote)
         self.lock = threading.RLock()
         if path and os.path.exists(path):
             self.load(path)
@@ -100,6 +101,12 @@ class GlyphBook:
             self.rejected += 1
             return False
         with self.lock:
+            if self.scenery_once and source == "chat" and set(glyph.values()) == {NOT_TEXT}:
+                # the whole line is not text (a game drawing its scenery from two-colour tiles): one reading settles
+                # it, since nothing on it reads as a character
+                for k in glyph:
+                    self.labels.setdefault(k, NOT_TEXT)
+                return True
             for k, c in glyph.items():          # once per line: a letter twice in a word is one reading
                 if k in self.labels:
                     continue
@@ -120,8 +127,10 @@ class GlyphBook:
     def pending(self) -> int:
         return len(self.queue)
 
-    def label(self, chat=None, max_lines: int = 12, scale: int = 6, log=None) -> int:
-        """Ask for the waiting lines: the chat model when there is one, else OCR. Returns lines accepted."""
+    def pick(self, max_lines: int = 12) -> list[tuple[tuple, np.ndarray]]:
+        """The waiting lines to ask about next, in the order they arrived, taken off the queue. (Picking the lines with
+        the most new glyphs first was tried and costs more calls: a glyph is trusted when a line agrees with glyphs
+        already known, and such a pick leaves each line with fewer of them; scripts/glyph_coldstart.py.)"""
         with self.lock:
             lines = [(k, img) for k, img in self.queue.items() if any(x and x not in self.labels for x in k)][:max_lines]
             for k, _ in lines:
@@ -130,6 +139,11 @@ class GlyphBook:
             if len(self.queue) > 200:          # lines whose glyphs were all learned meanwhile, or a flood: keep the newest
                 for k in list(self.queue)[:-200]:
                     self.queue.pop(k)
+        return lines
+
+    def label(self, chat=None, max_lines: int = 12, scale: int = 6, log=None) -> int:
+        """Ask for the waiting lines: the chat model when there is one, else OCR. Returns lines accepted."""
+        lines = self.pick(max_lines)
         if not lines:
             return 0
         ok = 0
@@ -173,15 +187,18 @@ class GlyphBook:
         return self.vote(keys, " ".join(t[1] for t in (res or [])), "ocr")
 
     # ---- the data file ----------------------------------------------------------------------------------------
+    def dump(self) -> dict[str, Any]:
+        with self.lock:
+            return {"labels": dict(self.labels), "votes": {k: dict(v) for k, v in self.votes.items()}}
+
     def save(self, path: str) -> None:
         tmp = path + ".tmp"
         with open(tmp, "w") as f:
-            with self.lock:
-                json.dump({"labels": dict(self.labels), "votes": {k: dict(v) for k, v in self.votes.items()}}, f)
+            json.dump(self.dump(), f)
         os.replace(tmp, path)
 
-    def load(self, path: str) -> None:
-        d = json.load(open(path))
+    def load(self, path: str | dict) -> None:
+        d = json.load(open(path)) if isinstance(path, str) else path
         self.labels.update(d.get("labels") or {})
         for k, v in (d.get("votes") or {}).items():
             self.votes.setdefault(k, Counter()).update(v)
@@ -335,6 +352,20 @@ def _pool():
     return _POOL
 
 _READERS: dict[int, TileText] = {}
+
+
+def books() -> dict[str, dict[str, Any]]:
+    """Every glyph book of this process, by path ('' for the in-memory one): what a run's checkpoint keeps."""
+    return {p: b.dump() for p, b in _BOOKS.items() if b.labels}
+
+
+def restore_books(d: dict[str, dict[str, Any]]) -> None:
+    """The glyph books of a checkpoint, so a resumed run reads every glyph it had learned without asking again."""
+    for p, data in (d or {}).items():
+        bk = _BOOKS.get(p)
+        if bk is None:
+            bk = _BOOKS[p] = GlyphBook(p or None)
+        bk.load(data)
 
 
 def reader(r: dict[str, Any], pack_dir: str | None = None) -> TileText:
