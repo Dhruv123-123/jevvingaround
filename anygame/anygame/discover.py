@@ -628,9 +628,47 @@ class Discoverer:
                                "map": None, "cell": self.found.get("cell")}
         m = self.found.get("map")
         if m:
-            sig = [int(mem[a - LO]) for a in m["addrs"]]
-            out["map"] = int.from_bytes(bytes(sig), "big") % (1 << 31)
+            out["map"] = self._name(mem, m["addrs"])
         return out
+
+    @staticmethod
+    def _value(mem: np.ndarray, addrs: list[int]) -> int:
+        return int.from_bytes(bytes(int(mem[a - LO]) for a in addrs), "big") % (1 << 31)
+
+    def _name(self, mem: np.ndarray, addrs: list[int]) -> int:
+        """A place's name, kept when the signature changes hands. The first time each name is given, the RAM is kept;
+        when another signature takes over, every kept RAM is read under it, and a value one of them gives keeps that
+        place's name (the oldest, when several give the same value: a map split into several names by an early
+        signature is one name again from then on). A place first seen under the new signature is named by its value."""
+        v = self._value(mem, addrs)
+        if not addrs:
+            return v
+        names = getattr(self, "_names", None)
+        if names is None:
+            names = self._names = {"sig": None, "of": {}, "ram": {}, "given": set()}
+        if names["sig"] != tuple(addrs):
+            names["sig"], names["of"] = tuple(addrs), {}
+            for pid, rams in names["ram"].items():          # oldest first
+                vals = {self._value(ram, addrs) for ram in rams}
+                if len(vals) == 1:
+                    # a name carries over only if every stay it was given to reads as one place under the new
+                    # signature too: a name an early signature gave two maps alike is dropped
+                    names["of"].setdefault(vals.pop(), pid)
+        pid = names["of"].get(v)
+        if pid is None:
+            pid = v
+            while pid in names["given"]:                    # a name already given elsewhere
+                pid = (pid * 1000003 + 1) % (1 << 31)
+            names["of"][v] = pid
+            names["given"].add(pid)
+        # the RAM kept for a name is from well inside a stay there, not the frames of the door into or out of it
+        # (the map's id is written a press before the position: those frames read as the next place)
+        run = names.get("run", (None, 0))
+        run = (pid, run[1] + 1) if run[0] == pid else (pid, 1)
+        names["run"] = run
+        if run[1] == 10 and len(names["ram"].setdefault(pid, [])) < 8:
+            names["ram"][pid].append(mem.copy())           # one RAM from each of its first stays
+        return pid
 
     # ---- the data file ---------------------------------------------------------------------------------
     def dump(self, evidence: bool = True) -> dict[str, Any]:

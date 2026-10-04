@@ -594,3 +594,33 @@ def test_discoverer_drops_an_old_rule_signature_but_keeps_the_position():
             "map": {"addrs": [0xC750, 0xC751], "doors": 23, "transitions": 4, "rule": MAP_RULE - 1}, "cell": 1})
     assert "map" not in d.found
     assert d.found["x"]["addr"] == 0xD362 and d.found["y"]["addr"] == 0xD361
+
+
+def test_discoverer_keeps_place_names_when_the_signature_changes_hands():
+    """A place named under one signature keeps its name when another signature takes over and tells the same places
+    apart; a name an early signature gave two maps alike does not carry over."""
+    from anygame.discover import Discoverer, LO, N
+    d = Discoverer()
+    d.found.update({"x": {"addr": 0xD362, "type": "u8"}, "y": {"addr": 0xD361, "type": "u8"}})
+    A, B, J = 0xC750, 0xD35E, 0xC110               # A: a sprite table loaded with each map; B: the map's id; J: junk
+
+    def at(place, junk):
+        mem = np.zeros(N, np.int32)
+        mem[A - LO], mem[B - LO], mem[J - LO] = 10 + place, place, junk
+        return mem
+    d.found["map"] = {"addrs": [A]}
+    names = {}
+    for place in (0, 1, 2, 0, 1):
+        for _ in range(12):
+            names.setdefault(place, set()).add(d.state(at(place, 0))["map"])
+    assert all(len(v) == 1 for v in names.values()) and len(set().union(*names.values())) == 3
+    d.found["map"] = {"addrs": [B]}
+    for place in (2, 1, 0):
+        assert d.state(at(place, 0))["map"] in names[place]
+    # junk named maps 0 and 1 alike: under the id they part, so that name goes to neither
+    d.found["map"] = {"addrs": [J]}
+    for place in (0, 1):
+        for _ in range(12):
+            joint = d.state(at(place, 7))["map"]
+    d.found["map"] = {"addrs": [B]}
+    assert d.state(at(1, 7))["map"] != joint and d.state(at(0, 7))["map"] != joint
