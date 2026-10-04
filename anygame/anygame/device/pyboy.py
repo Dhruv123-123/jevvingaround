@@ -138,6 +138,7 @@ class PyBoyDevice(Device):
         self._pb = PyBoy(path, window="null", sound_emulated=False)
         self._pb.set_emulation_speed(0)
         self._last = time.perf_counter()
+        self._url_state = q.get("state")           # its .found is read once the pack has turned discovery on
         if q.get("state"):
             self.load_state(q["state"])
         else:
@@ -193,7 +194,18 @@ class PyBoyDevice(Device):
             if os.environ.get("ANYGAME_DISCOVER_TRACE"):
                 self.discoverer.trace = []
             self.discover_file = raw.get("discover_file") or (os.path.join(pack_dir, f"discovered-{os.path.splitext(os.path.basename(self.rom))[0]}.yaml") if pack_dir else None)
-            if self.discover_file and os.path.exists(self.discover_file) and not os.environ.get("ANYGAME_REDISCOVER"):
+            found = f"{self._url_state}.found" if getattr(self, "_url_state", None) else None
+            if os.environ.get("ANYGAME_REDISCOVER"):
+                pass
+            elif found and os.path.exists(found):
+                # the save in the URL was loaded before there was a discoverer: what discovery knew when it was saved
+                # (position, map and the evidence behind them) is taken now, as load_state() takes it
+                import json
+                try:
+                    self.discoverer.load(json.load(open(found)))
+                except (OSError, ValueError):
+                    pass
+            elif self.discover_file and os.path.exists(self.discover_file):
                 self.discoverer.load(yaml.safe_load(open(self.discover_file)) or {})
         emu = raw.get("emulator") or {}
         for k in ("clock", "step_frames", "hold", "after"):
