@@ -100,6 +100,52 @@ def check_jev() -> None:
         raise SystemExit(f"Jev is not available, nothing was run: {str(e)[:200]}")
 
 
+def fresh_process_state() -> None:
+    """Every run starts knowing nothing about the game: what the agent learned in memory during an earlier run in the
+    same process (a glyph book read off one game's font, an OCR cache) is dropped, and no glyph book is loaded from
+    disk (ANYGAME_GLYPHS is ignored). Runs are separate processes per game in practice, but seeds run one after the
+    other in one process."""
+    os.environ.pop("ANYGAME_GLYPHS", None)
+    try:
+        from anygame.perceive import tiletext
+        tiletext._BOOKS.clear()
+        tiletext._READERS.clear()
+    except ImportError:
+        pass
+    try:
+        from anygame.perceive import ocr
+        ocr._seen.clear()
+    except (ImportError, AttributeError):
+        pass
+
+
+def azure_spend(path: Path) -> dict[str, Any] | None:
+    """Total this run's own ledger, and copy its lines into the project's shared ledger so project spend stays whole."""
+    os.environ.pop("ANYGAME_USAGE_LOG", None)
+    if not path.exists():
+        return None
+    try:
+        from anygame.chat import ledger_path
+        shared = ledger_path()
+        if shared is not None and shared != path and "PYTEST_CURRENT_TEST" not in os.environ:
+            with open(shared, "a") as f:
+                f.write(path.read_text())
+    except (ImportError, OSError):
+        pass
+    calls, dollars, by = 0, 0.0, {}
+    for line in path.read_text().splitlines():
+        try:
+            e = json.loads(line)
+        except ValueError:
+            continue
+        calls += 1
+        usd = float(e.get("usd") or e.get("cost_usd") or e.get("dollars") or 0)
+        dollars += usd
+        k = e.get("purpose", "other")
+        by[k] = by.get(k, 0) + 1
+    return {"calls": calls, "usd": round(dollars, 5), "by_purpose": by}
+
+
 def _screen_hash(pb) -> str:
     return hashlib.blake2b(pb.screen.ndarray[::4, ::4, :3].tobytes(), digest_size=8).hexdigest()
 
@@ -142,6 +188,11 @@ def run_one(suite: dict[str, Any], gid: str, decider: str, seed: int, out: Path,
         shutil.copytree(ROOT / "packs" / pack_name, work / "pack")
         pack = load_pack(work / "pack")
         sensor = open_decider(decider, seed, standin)
+        fresh_process_state()
+        azure_log = out / f"{gid}-{label}-{seed}.azure.jsonl"
+        out.mkdir(parents=True, exist_ok=True)
+        azure_log.unlink(missing_ok=True)
+        os.environ["ANYGAME_USAGE_LOG"] = str(azure_log)     # this run's chat-model calls, priced, in a ledger of its own
         agent = Agent(pack, device, sensor, None, background=False)
         gb = getattr(agent, "goalbook", None)
         if gb is not None and goals and os.environ.get("ANYGAME_LLM_BASE"):
@@ -201,6 +252,7 @@ def run_one(suite: dict[str, Any], gid: str, decider: str, seed: int, out: Path,
                    steps=steps, presses=presses, frames=device.frames, wall_s=round(time.perf_counter() - t0, 1),
                    decider_calls=calls, cost_usd=round(agent.total_cost, 6), sensor_errors=agent.errors,
                    goal_writer=(gb.report() if gb is not None and gb.chat is not None else None),
+                   azure=azure_spend(azure_log),
                    distinct_screens=len(screens), unchanged_screen_rate=round(noop / max(1, steps), 3),
                    stalled_before=(nxt or {}).get("desc"),
                    frames_since_progress=device.frames - (last["frame"] if last else 0))
