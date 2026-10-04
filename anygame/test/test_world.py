@@ -228,6 +228,34 @@ def test_pyboy_device_takes_the_found_file_of_a_save_named_in_the_url(tmp_path):
         d.close()
 
 
+def test_pyboy_device_shows_discovery_a_fade_between_drawn_frames():
+    # stairs in Red's house fade out and in between the frames a press draws: the dark frame is passed on as blank
+    pytest.importorskip("pyboy")
+    from anygame.device import open_device
+    d = open_device("pyboy://" + os.path.join(ROOT, "roms", "2048gb", "2048.gb") + "?boot=60&clock=game&step=2", None)
+    try:
+        seen = []
+
+        class Disc:
+            trace = None
+            found: dict = {}
+
+            def frame(self, mem, blank):
+                seen.append(bool(blank))
+
+            def press(self, *a, **k):
+                pass
+
+        d.discoverer = Disc()
+        calls = iter(range(1000))
+        d._dark = lambda: next(calls) in (3, 4, 5)          # dark for three frames inside the press
+        d.press("left", hold=6, after=16)
+        # the two drawn frames (end of the hold, end of the press) and before them the dark one, as blank
+        assert 2 < len(seen) < 6 and seen[0] is True        # once per run of frames, not once per dark frame
+    finally:
+        d.close()
+
+
 def test_discoverer_finds_position_and_map_from_ram_alone():
     from anygame.discover import Discoverer, LO, N
     rng = np.random.default_rng(0)
