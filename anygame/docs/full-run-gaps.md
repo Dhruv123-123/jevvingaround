@@ -452,3 +452,29 @@ house by a scripted walk (run 3, ticks 455–459).
 known; goals.py: `heard_here` and its line in the writer's prompt). Errand call site: on a stuck raise on a walking
 screen, `errand_from(goalbook.marks, memory.dialogue, here, since)`, then impose its goals in turn. For the emulator
 thread, the blocker: a map signature that stays one value per map from the first visit.
+
+**Re-measured on the emulator fixes (17e108c and e80b499).**
+
+| run | returns known again | wrong place (mixed) |
+|---|---|---|
+| fresh power-on, 1,500 steps (17e108c; e80b499 the same) | 16 of 22 (73%) | 5.1% |
+| from long-horizon's tick-8600 save, ticks 8931–9324 (after the map byte settled) | 32 of 34 (94%) | — |
+| from the 8600 save, all 724 steps | 32 of 36 (89%) | 4.7% |
+
+From power-on the first 1,500 steps still read Pallet Town as 7 values and Red's house 2F as 10. The map locks
+only at the first revisit (the emulator thread's limit). e80b499 changes nothing here; it helps after a faint.
+
+On the save, once the byte has settled, the place book knows 94% of returns again. Door memory adds nothing there,
+because the name alone is enough.
+
+Go-back checks:
+- From power-on, Pallet Town to Red's house 1F and 2F: no arrival in 2 tries before and 2 tries after, on either
+  fix.
+- From the 8600 save, Pallet Town back to Oak's lab: arrived after 166 steps before, and not within 300 after. Both
+  runs lost Pallet Town to a new place one step after leaving the lab (the byte was still settling), so this is one
+  try each and luck decides.
+
+A door known from another place on the very same tiles (`door_any`) raised returns known on the logs from 73% to
+76%, and on fresh runs from 80% to 84%. It also raised mixing by 0.3 to 0.7 points, so it is off.
+
+First-visit place naming is being built on the emulator side (05:45Z). These checks are re-run on its commit.

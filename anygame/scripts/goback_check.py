@@ -28,11 +28,13 @@ def main():
     ap.add_argument("--when", default=None, help="give the goal at the first walking step from --warm on this map")
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--out", default=None)
+    ap.add_argument("--state", default=None, help="start from this save state (its .found file restores the position)")
     a = ap.parse_args()
     work = Path(tempfile.mkdtemp(prefix="goback-"))
     rom = work / Path(a.rom).name
     shutil.copyfile(a.rom, rom)
-    device = PyBoyDevice(f"pyboy://{rom}?clock=game&step=4&hold=6&after=16&boot={120 + 17 * a.seed}")
+    device = PyBoyDevice(f"pyboy://{rom}?clock=game&step=4&hold=6&after=16&boot={120 + 17 * a.seed}"
+                         + (f"&state={a.state}" if a.state else ""))
     shutil.copytree(ROOT / "packs" / "gameboy", work / "pack")
     p = work / "pack" / "pack.yaml"
     y = yaml.safe_load(p.read_text())
