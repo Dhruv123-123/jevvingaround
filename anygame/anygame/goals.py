@@ -183,6 +183,7 @@ class GoalBook:
             seen[id(d)] = len(d["text"])
             if self._gate_lines.get(id(d)) != len(d["text"]):
                 self.gate.see(d["text"], d.get("screen"))
+                self._refill_sign(d["text"])
         self._gate_lines = seen
         g = self.current
         if g is not None:
@@ -210,6 +211,18 @@ class GoalBook:
         return self.quest()
 
     need_met: dict[str, Any] | None = None
+
+    def _refill_sign(self, text: str) -> None:
+        """A line with the words a need's goal took as its sign (a rest given) meets that need whenever it is said,
+        under that goal or not: the number itself may not be shown again until the next fight."""
+        low = text.lower()
+        for g in reversed(self.goals):
+            if g.get("source") != "upkeep":
+                continue
+            for c in (g.get("done") or {}).get("any") or []:
+                if any(str(w).lower() in low for w in c.get("said") or []):
+                    self.need_met = g
+                    return
 
     def impose(self, goal: dict[str, Any], tick: int, values: dict[str, Any], source: str = "upkeep", world=None,
                ask: bool = True) -> bool:

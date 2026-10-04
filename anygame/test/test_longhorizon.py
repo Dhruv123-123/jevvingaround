@@ -576,3 +576,12 @@ def test_a_position_held_long_is_put_back_when_discovery_swaps_it():
     lp.tick = 6
     Loop._hold_position(lp)
     assert disc.found["y"]["addr"] == 2
+
+
+def test_a_refill_sign_said_meets_the_need_even_under_another_goal():
+    m = RunMemory()
+    gb = GoalBook(m, None)
+    gb.goals = [{"id": "g1", "source": "upkeep", "outcome": "given up",
+                 "done": {"any": [{"number": {"name": "HP", "share_at_least": 0.9}}, {"said": ["looking great"]}]}}]
+    gb._refill_sign("MOM: Your POKEMON are looking great!")
+    assert gb.need_met is gb.goals[0]
