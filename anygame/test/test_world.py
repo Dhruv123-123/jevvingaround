@@ -475,6 +475,27 @@ def test_pyboy_snapshot_is_reused_until_the_game_moves():
         d.close()
 
 
+def test_pyboy_save_state_carries_what_discovery_found(tmp_path):
+    """A save that opens on a battle has no walking to discover from: loading it brings back the position bytes
+    known when it was saved, unless this run already knows its own."""
+    pytest.importorskip("pyboy")
+    from anygame.device import open_device
+    rom = os.path.join(ROOT, "roms", "2048gb", "2048.gb") + "?boot=60&clock=game&step=2"
+    found = {"x": {"addr": 0xD362, "type": "u8", "score": 1.0}, "y": {"addr": 0xD361, "type": "u8", "score": 1.0}, "cell": 1}
+    a = open_device("pyboy://" + rom, None)
+    b = open_device("pyboy://" + rom, None)
+    try:
+        a.use_pack({"discover": True}, None)
+        a.discoverer.found.update(found)
+        a.save_state(str(tmp_path / "s.state"))
+        b.use_pack({"discover": True}, None)
+        b.load_state(str(tmp_path / "s.state"))
+        assert b.discoverer.found["x"]["addr"] == 0xD362 and b.discoverer.found["y"]["addr"] == 0xD361
+    finally:
+        a.close()
+        b.close()
+
+
 def test_pyboy_holds_several_buttons_together():
     pytest.importorskip("pyboy")
     from anygame.device import open_device

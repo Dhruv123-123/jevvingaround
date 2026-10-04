@@ -288,6 +288,10 @@ class PyBoyDevice(Device):
             self._pb.save_state(f)
         with open(path + ".frames", "w") as f:
             f.write(str(self.frames))
+        if self.discoverer is not None and "x" in self.discoverer.found and "y" in self.discoverer.found:
+            import json
+            with open(path + ".found", "w") as f:       # what discovery knew here: a run resumed from it starts there
+                json.dump(self.discoverer.dump(evidence=True), f)
 
     def load_state(self, path: str) -> None:
         self._at = None
@@ -297,6 +301,15 @@ class PyBoyDevice(Device):
             self.frames = int(open(path + ".frames").read())
         except (OSError, ValueError):
             pass
+        if self.discoverer is not None and not ("x" in self.discoverer.found and "y" in self.discoverer.found) and \
+                os.path.exists(path + ".found") and not os.environ.get("ANYGAME_REDISCOVER"):
+            # a save that opens on a battle has no walking to discover the position from: take what was known
+            # when it was saved (a discoverer that already knows its position keeps what it knows)
+            import json
+            try:
+                self.discoverer.load(json.load(open(path + ".found")))
+            except (OSError, ValueError):
+                pass
         self._tick(1, render=True)
 
     # ---- input -------------------------------------------------------------------------------------
