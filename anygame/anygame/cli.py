@@ -797,6 +797,14 @@ def cmd_render(a):
     print(f"wrote {a.out} ({len(frames)} frames at {a.fps} fps)")
 
 
+def cmd_usage(a):
+    """Chat-model calls, tokens and estimated dollars from the usage ledger (see anygame/chat.py)."""
+    from .chat import ledger_path, summarize
+    from pathlib import Path
+    path = Path(a.log) if a.log else ledger_path()
+    print(json.dumps({"ledger": str(path), **summarize(path, a.since)}, indent=1))
+
+
 def cmd_record(a):
     import cv2
     from .device import open_device
@@ -875,6 +883,7 @@ def main(argv=None):
     bn.add_argument("--seeds", default="1,2,3"); bn.add_argument("--max-ticks", type=int, default=200); bn.add_argument("--score-read", default=None)
     bn.add_argument("--out", default="bench"); bn.add_argument("--append", default=None, help="append the summary row to this jsonl")
     bn.set_defaults(fn=cmd_bench)
+    us = sub.add_parser("usage", help="chat-model (Azure) calls, tokens and estimated dollars from the usage ledger"); us.add_argument("--since", default=None, help="ISO time, e.g. 2026-10-04"); us.add_argument("--log", default=None); us.set_defaults(fn=cmd_usage)
     rc = sub.add_parser("record"); rc.add_argument("--device", required=True); rc.add_argument("--out", required=True); rc.add_argument("--seconds", type=int, default=20); rc.add_argument("--hz", type=float, default=2); rc.add_argument("--pack"); rc.set_defaults(fn=cmd_record)
     a = p.parse_args(argv)
     a.fn(a)
