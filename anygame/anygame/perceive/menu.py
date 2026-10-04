@@ -331,8 +331,12 @@ class MenuTracker:
         # cursor order; then ones tried before (fewest first); entries that change nothing last
         idle = {lab for lab in landings if lab.startswith("pick_") and m["entries"][int(lab[5:]) - 1]["same_screen"]}
         back = {lab for lab in landings if lab.startswith("pick_") and m["entries"][int(lab[5:]) - 1].get("back_to") is not None}
-        if len(idle) < sum(1 for lab in landings if lab.startswith("pick_")):
-            for lab in idle:                 # an entry that does nothing is not a choice while others do something
+        others = [lab for lab in landings if not lab.startswith("pick_")]
+        if len(idle) < sum(1 for lab in landings if lab.startswith("pick_")) or (idle and others):
+            # an entry that does nothing is not a choice while others do something; and when choosing does nothing
+            # for every entry, this is not a menu at all (the world, with the position not found yet): its walks
+            # and buttons are the choice
+            for lab in idle:
                 landings.pop(lab)
                 plans.pop(lab, None)
         # an entry that came straight back here twice is not offered again while something else is
