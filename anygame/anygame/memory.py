@@ -97,6 +97,8 @@ def save_checkpoint(agent, path: str) -> str:
     dev = agent.device
     if hasattr(dev, "save_state"):
         dev.save_state(os.path.join(path, "emulator.state"))
+    if hasattr(dev, "save_trace"):
+        dev.save_trace()            # ANYGAME_DISCOVER_TRACE: kept up to date, so a stopped run still has its trace
     disc = getattr(dev, "discoverer", None)
     d: dict[str, Any] = {
         "tick": agent.tick, "total_cost": agent.total_cost, "auto_ticks": agent.auto_ticks,
