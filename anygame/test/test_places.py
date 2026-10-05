@@ -113,3 +113,33 @@ def test_joins_route_both_ways():
     route = b.see("A", 10, 35, moves=["up"], walking=True)
     assert b.route(route, town) == {"kind": "join", "dir": "down", "hops": 1}
     assert b.route(town, route)["dir"] == "up" and b.route(town, town)["kind"] == "here"
+
+
+def test_a_door_whose_two_ends_merge_into_one_place_is_dropped():
+    """A new name on an ordinary step is a door on trial; when the old name comes back away from it, the two places
+    were one, and the door between them goes with the merge (routes would otherwise go round in one room)."""
+    b = PlaceBook()
+    town = b.see("T", 5, 5)
+    b.see("T", 5, 4, moves=["up"], walking=True)
+    other = b.see("N", 5, 3, moves=["up"], walking=True)              # a new name on a one-tile step: on trial
+    assert other != town and len(b.doors) == 2
+    walk(b, "N", ["up", "up"], 5, 3)
+    assert b.see("T", 6, 1, moves=["right"], walking=True) == town   # the old name, somewhere else: one place
+    assert b.canonical(other) == town
+    assert b.doors == {}
+
+
+def test_a_place_on_trial_with_no_way_known_routes_by_the_place_it_was_entered_from():
+    b = PlaceBook()
+    town = b.see("T", 5, 5)
+    b.see("T", 5, 4, moves=["up"], walking=True)
+    house = b.see("H", 3, 7, moves=["up"], walking=True)              # a real door
+    b.see("H", 3, 6, moves=["up"], walking=True)
+    b.see("H", 3, 7, moves=["down"], walking=True)
+    assert b.see("T", 5, 4, moves=["down"], walking=True) == town
+    b.see("T", 5, 5, moves=["down"], walking=True)
+    late = b.see("L", 5, 5, idle=True)                                # a name written the read after a walk, standing
+    assert late not in (town, house) and b.places[late].trial is not None
+    hop = b.route(late, house)                                        # no door recorded from it: the town's way
+    assert hop["kind"] == "door" and (hop["x"], hop["y"]) == (5, 4) and hop["dir"] == "up"
+    assert b.route(late, town) is None                                # walking on here is the way
