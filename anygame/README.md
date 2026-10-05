@@ -536,6 +536,9 @@ anygame learn <pack> --device <url> --episodes 5 [--fallback] [--max-ticks N]   
 anygame stamp [pack …]                                                    # fixture fingerprints into pack.yaml, for the pool
 anygame battle <pack-a> <pack-b> --device <url> [--sensor-a …] [--sensor-b …]
 anygame bench <pack> --device "<url with {seed}>" --sensor jev|random|llm:<model> --seeds 1,2,3 [--score-read score]
+anygame play <pack> --device pyboy://<rom> --checkpoint <dir> --checkpoint-every N [--resume <dir>] [--saves <dir>] [--audit 8] [--live <dir>] [--no-writer]   # long runs: checkpoints, milestone saves, Jev audit, live view
+anygame ramscan "pyboy://<rom>?state=<save in the overworld>" [--presses 60]   # find the position bytes by walking the player
+anygame usage [--since 2026-10-04]                                        # chat-model (Azure) calls, tokens and dollars from the usage ledger
 ```
 
 `--sensor none` runs perception and the HUD with no model, for authoring a pack against a live screen.

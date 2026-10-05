@@ -3,7 +3,8 @@
 anygame is an application that lives on a computer, looks at whatever game is on the screen, and plays it
 with a 200 ms judgment model. It learns every game the same way: a **pack** is the typed contract between
 one game and the model, and everything the system learns is a change to that pack, never to a model's
-weights. This document is the parse pipeline, the structure it feeds, and the loop that grows it.
+weights. This document is the parse pipeline, the structure it feeds, and the loop that grows it. The layer built on top
+of it for long games (discovery, places, world memory, goals, the audit) is in [docs/architecture.md](docs/architecture.md).
 
 ## 1. The pipeline: pixels to a typed action
 

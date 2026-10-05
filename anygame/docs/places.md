@@ -69,20 +69,53 @@ Mixing goes down on every run. What is left:
 Pallet Town and Route 1 are now two places joined north–south in every run that crosses. "Go north into a new
 area" can be met, and Viridian City will be another join.
 
-## Call sites (long-horizon thread: `perceive/world.py`, the runner's walk)
+## Door memory and routes (second pass, for going back)
 
-The exact change is in `pokemon-red/world-places.patch`, applied from the repo root with `git apply`. It changes
-`world.py` and replaces one test in `test_longhorizon.py`, whose old test checked the permanent alias. The full suite
-passes with it applied (152 passed, 4 skipped). Only a walk step's own read passes `moves`. Other reads (the
-loop's read, held walks offered by the menu) pass none, so a name change with movement on those reads counts as a
-door, not a rename.
+A map signature that reads differently on a return used to give the same map a new place id, so a goal naming the
+place could never be met. Two additions make a place reachable again:
 
-1. `World.__init__`: `self.book = PlaceBook()`.
-2. `World.tile_of`: replace `return self._place(t, stepping)` with
-   `pid = self.book.see(t[0], t[1], t[2], moves=<directions pressed since the last read>, walking=stepping)`, then
-   `return (pid, t[1], t[2])`. The walk macro already knows its directions. Pass the frames' `cut_between` as `cut=`
-   when the runner has both frames.
-3. After each `see`, for each new `merge` event in `book.events`, move `visited`, `blocked`, `walls_at` and `warps`
-   from the old place id to the new one. Their keys start with the place.
-4. Checkpoints: save `book.to_dict()` and load it with `PlaceBook.from_dict`.
-5. `alias` and `_place` can go.
+- **Door memory.** Every door taken is kept as `(place, x, y) → (place, x, y, direction pressed)`, in both
+  directions (out is the reverse of in). A door taken again from the very tile it was taken from, arriving on the
+  very tile it arrived on before, leads where it led before, whatever the signature reads now. The match is exact:
+  one tile of slack mixed more maps together (6.6% against 5.9%). Matching a door known from another place on the
+  same tiles (`door_any`) raised returns known by 3 to 4 points but mixing by 0.3 to 0.7, so it is off.
+- **`route(src, dst)`.** The first move on the shortest known way between two places, over joins walked and doors
+  taken: `{"kind": "join", "dir"}` (walk off that side), `{"kind": "door", "x", "y", "dir"}` (stand on that tile
+  and press `dir`), `{"kind": "here"}`, or `None`. A place entered on trial borrows the way of the place it was
+  entered from, since it may be that place under a second name.
+
+On the Pokemon logs, door memory raised the returns the book named as before from 65% to 69% (112 to 119 of 172),
+with mixing flat (5.8% to 5.9%). The bigger gains came from the emulator side's map byte, which the book now gets
+most of the time (see `docs/full-run-gaps.md`, "Going back where the text says", for every re-measure).
+
+## A name switch on the same tile is not a door
+
+The long-horizon run stalled at tick 45,700 inside Blue's house. The signature read switched while the player stood
+on (3, 7), and the book recorded a door from place 2 at (3, 7) to place 82 at (3, 7). Routes and the frontier then
+kept sending the player "through" it, back into the room it was standing in. In that checkpoint, 19 of the 56 doors
+were like this.
+
+The rule now:
+
+- A door whose two ends are the same `x, y` is not recorded. The place change still happens (the event is logged);
+  only the way through is not kept, because there is none.
+- When a merge makes both ends of a door one place, the door is dropped.
+- A saved book loaded with such doors drops them (`from_dict`), so old checkpoints are clean on resume.
+
+On four stand-in logs, the returns known again went from 92% to 90% and mixing stayed at 7.0%: the dropped doors
+were not carrying real returns. One suspicious one-step door, `(79, 2, 6) → (2, 2, 7)`, is still kept, since a real
+staircase looks the same.
+
+## Where it is used
+
+`perceive/world.py` owns a `PlaceBook` (`World.book`). Every read goes through `World._place`, which passes the
+directions pressed since the last read, whether the last action was a walk, and whether nothing was pressed (for a
+late name). After each read, new `merge` events move `visited`, `blocked`, `walls_at`, `warps` and what was inspected from the old place
+id to the merged one. The book is saved in checkpoints (`to_dict`) and loaded on resume.
+
+`route()` feeds two options: the goal option when no door chain in the world memory reaches the goal's place
+(`_route_option`), and, after 300 steps with nothing new, the nearest other place with unexplored edges.
+
+Tests: `test/test_places.py` (joins, stairs on trial, late names, door memory, the same-tile rule, merged doors,
+routing from a place on trial). Replays: `scripts/place_check.py`, `scripts/reentry_check.py`,
+`scripts/goback_check.py`. None of them reads the grader's map except to score.
