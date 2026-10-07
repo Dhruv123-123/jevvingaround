@@ -114,6 +114,39 @@ def strip_keys(img: np.ndarray, y: int, dx: int) -> list[str]:
     return [_hash(b.tobytes()) for b in blocks]
 
 
+# ---- sprites: a moving thing over a known background ---------------------------------------------------
+# A sprite drawn over a known tile makes a new cell key every time it lands on a new tile or at a new offset. The
+# tile still shows wherever the sprite is transparent, so a new cell whose pixels equal a known background cell on
+# at least BG_MIN of its 64 pixels is read as that cell plus foreground (the pixels that differ). A new cell with
+# almost no background showing that touches foreground is all foreground (a sprite's solid middle). Foreground
+# pixels are grouped into objects (connected, 1-pixel gaps bridged); an object is keyed by its own pixels and shape,
+# wherever it stands and whatever is behind it. An object larger than OBJ_MAX on a side is not a sprite but new
+# scenery that happens to share colours with a known tile, and one under OBJ_MIN pixels is a detail of a new tile:
+# their cells are new cells. A new object that matches a known one (same size within OBJ_SLACK pixels, LIKE of the
+# pixels in either shape equal at some offset within OBJ_SLACK), or that holds HOLDS of a known object's pixels (the
+# sprite plus a piece of background the book could not see behind it), is that object and is answered by it. So is a
+# new object that continues one of the last frame's (centre within TRACK pixels, size within a factor of two).
+BG_MIN = 16
+OBJ_MAX = 32
+OBJ_MIN = 8
+OBJ_SLACK = 2
+LIKE = 0.7
+HOLDS = 0.85
+TRACK = 16
+
+
+def packed(block: np.ndarray) -> np.ndarray:
+    """An 8x8 RGB block as 64 int32 colours."""
+    b = block.reshape(-1, block.shape[-1]).astype(np.int32)
+    return (b[:, 0] << 16) | (b[:, 1] << 8) | b[:, 2]
+
+
+def object_key(img: np.ndarray, mask: np.ndarray) -> str:
+    """A key for the foreground pixels `mask` selects in `img` (both cropped to the object's box)."""
+    pix = np.where(mask[:, :, None], img, 0).astype(np.uint8)
+    return _hash(bytes(mask.shape) + np.packbits(mask).tobytes() + pix.tobytes())
+
+
 @dataclass
 class Reading:
     """One frame as the book reads it: every keyed cell (pixel corner and key), the bands it was cut in, which cells
@@ -125,15 +158,17 @@ class Reading:
     objects: list[dict[str, Any]] = field(default_factory=list)  # {"x","y","w","h","key","known"}
     new_cells: list[int] = field(default_factory=list)          # cell indexes the book cannot answer
     screen_known: bool = False
+    image: np.ndarray | None = None
 
     @property
     def new_objects(self) -> list[int]:
-        return [i for i, o in enumerate(self.objects) if not o["known"]]
+        """Objects the book has not seen that hold a new cell (the ones a model would be asked about)."""
+        return [i for i, o in enumerate(self.objects) if not o["known"] and o["new_cells"]]
 
     @property
     def answered(self) -> bool:
         """Every cell answered: a known cell, or a known background under a known object."""
-        return not self.new_cells and not self.new_objects
+        return not self.new_cells
 
 
 class CellBook:
@@ -146,6 +181,14 @@ class CellBook:
         self.phase = (0, 0)
         self.pending: set[str] = set()             # sent or queued for the model, no answer yet
         self.layout: list[tuple[int, int]] = []    # the last frame's strips (top row, dx)
+        self.objects: dict[str, dict[str, Any]] = {}     # object key → entry (like a cell's)
+        self.composites: dict[str, tuple[str, np.ndarray] | None] = {}   # cell key → (background key, foreground
+        #                                                    mask), or None for a cell that is not a sprite over one
+        self._bank_keys: list[str] = []            # cells usable as background, and their pixels
+        self._bank = np.zeros((0, CELL * CELL), np.int32)
+        self._banked: set[str] = set()
+        self._obj_bank: list[tuple[str, np.ndarray]] = []    # objects to match new ones against: colours, -1 off shape
+        self._last: list[tuple[tuple[float, float], int, str]] = []   # the last frame's objects: centre, pixels, key
 
     # ---- looking up ---------------------------------------------------------------------------
     def keys(self, img: np.ndarray, search: bool = True) -> np.ndarray:
@@ -205,22 +248,188 @@ class CellBook:
             if kn:
                 self.cells[k]["seen"] += 1
         sk = self.screen_key(img)
-        r = Reading(cells, band_list, known, screen_known=sk in self.screens)
+        r = Reading(cells, band_list, known, screen_known=sk in self.screens, image=img)
         self.screens[sk] = self.screens.get(sk, 0) + 1
-        r.new_cells = [i for i, kn in enumerate(known) if not kn]
+        self._bank_add(img, [(x, y, k) for (x, y, k), kn in zip(cells, known) if kn])
+        new = [i for i, kn in enumerate(known) if not kn]
+        if self.sprites:
+            new = self._cut_sprites(img, r, new)
+        r.new_cells = new
         return r
 
+    sprites = True        # cut sprites out of new cells; False reads cells only, as the first experiment did
+
+    def _bank_add(self, img: np.ndarray, cells: list[tuple[int, int, str]]) -> None:
+        add = [(x, y, k) for x, y, k in cells if k not in self._banked and self.composites.get(k) is None]
+        if not add:
+            return
+        self._banked.update(k for _, _, k in add)
+        self._bank_keys += [k for _, _, k in add]
+        self._bank = np.vstack([self._bank] + [packed(img[y:y + CELL, x:x + CELL])[None] for x, y, _ in add])
+
+    def _cut_sprites(self, img: np.ndarray, r: Reading, new: list[int]) -> list[int]:
+        """Read cells as known background plus foreground and group the foreground into objects. Every cell once read
+        as a sprite over a background adds its foreground, known or not, so an object is whole even when some of its
+        cells were seen before. Returns the new cells no known object explains."""
+        h, w = img.shape[:2]
+        fg = np.zeros((h, w), bool)
+        owner = np.full((h, w), -1, np.int32)               # cell index whose foreground a pixel is
+        new_set = set(new)
+        todo = [i for i in new if r.cells[i][2] not in self.composites]
+        if todo and len(self._bank_keys):
+            pix = np.stack([packed(img[y:y + CELL, x:x + CELL]) for x, y, _ in (r.cells[i] for i in todo)])
+            eq = (pix[:, None, :] == self._bank[None, :, :]).sum(axis=2)          # todo x bank
+            for n, i in enumerate(todo):
+                j = int(eq[n].argmax())
+                k = r.cells[i][2]
+                ok = eq[n, j] >= BG_MIN
+                self.composites[k] = (self._bank_keys[j], (pix[n] != self._bank[j]).reshape(CELL, CELL)) if ok else None
+        loose = []
+        for i, (x, y, k) in enumerate(r.cells):
+            c = self.composites.get(k)
+            if c is None:
+                if i in new_set:
+                    loose.append(i)
+                continue
+            r.composite[i] = c[0]
+            fg[y:y + CELL, x:x + CELL] |= c[1]
+            owner[y:y + CELL, x:x + CELL][c[1]] = i
+        # a new cell with no background showing that touches foreground is a sprite's solid middle
+        grown = True
+        while grown and loose:
+            grown = False
+            for i in list(loose):
+                x, y, _ = r.cells[i]
+                if fg[max(0, y - 1):y + CELL + 1, max(0, x - 1):x + CELL + 1].any():
+                    fg[y:y + CELL, x:x + CELL] = True
+                    owner[y:y + CELL, x:x + CELL] = i
+                    r.composite[i] = ""
+                    self.composites[r.cells[i][2]] = ("", np.ones((CELL, CELL), bool))
+                    loose.remove(i)
+                    grown = True
+        if not fg.any():
+            self._last = []
+            return new
+        explained: dict[int, bool] = {}
+        n, lab, stats, _ = cv2.connectedComponentsWithStats(cv2.dilate(fg.astype(np.uint8), np.ones((3, 3), np.uint8)), 8)
+        for c in range(1, n):
+            x, y, bw, bh = (int(v) for v in stats[c, :4])
+            m = (lab[y:y + bh, x:x + bw] == c) & fg[y:y + bh, x:x + bw]
+            if not m.any():
+                continue
+            cells = set(owner[y:y + bh, x:x + bw][m].tolist())
+            if bw > OBJ_MAX + 2 or bh > OBJ_MAX + 2 or m.sum() < OBJ_MIN:
+                for i in cells:                 # new scenery or a detail of a new tile, not a sprite: plain cells
+                    r.composite.pop(i, None)
+                    self.composites[r.cells[i][2]] = None
+                    explained[i] = False
+                continue
+            ys, xs = np.nonzero(m)
+            x0, y0, x1, y1 = x + xs.min(), y + ys.min(), x + xs.max() + 1, y + ys.max() + 1
+            m = m[y0 - y:y1 - y, x0 - x:x1 - x]
+            key = object_key(img[y0:y1, x0:x1], m)
+            e = self.objects.get(key)
+            like = None
+            if e is None:
+                like, how = self.similar(img[y0:y1, x0:x1], m), "like"
+                if like is None:
+                    like, how = self.tracked(x0, y0, x1, y1, int(m.sum())), "track"
+                if like is not None:            # the book answers it: the same thing, drawn a little differently
+                    e = self.objects[key] = {"votes": {}, "label": self.objects[like]["label"], "state": "alias",
+                                             "seen": 0, "contradictions": 0, "source": how, "like": like,
+                                             "size": [int(x1 - x0), int(y1 - y0)]}
+            if e is not None:
+                e["seen"] += 1
+            for i in cells:
+                explained[i] = explained.get(i, True) and e is not None
+            r.objects.append({"x": int(x0), "y": int(y0), "w": int(x1 - x0), "h": int(y1 - y0), "key": key,
+                              "known": e is not None, "like": like, "how": how if like else None,
+                              "cells": sorted(cells), "mask": m, "new_cells": sorted(cells & new_set)})
+        self._last = [((o["x"] + o["w"] / 2, o["y"] + o["h"] / 2), int(o["mask"].sum()), self.root(o["key"]))
+                      for o in r.objects]
+        return sorted(i for i in new if not explained.get(i, False))
+
+    def root(self, key: str) -> str:
+        """The object an alias stands for (itself when it is not an alias)."""
+        seen = set()
+        while key in self.objects and self.objects[key].get("like") and key not in seen:
+            seen.add(key)
+            key = self.objects[key]["like"]
+        return key
+
+    def tracked(self, x0: int, y0: int, x1: int, y1: int, n: int) -> str | None:
+        """The last frame's object this new one continues: centre within TRACK pixels, size within a factor of two.
+        The game drew the same thing again, a step further on and in a new pose or over a new background."""
+        cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+        best = None
+        for (px, py), pn, key in self._last:
+            d = max(abs(px - cx), abs(py - cy))
+            if d <= TRACK and 0.5 <= n / max(1, pn) <= 2 and (best is None or d < best[0]):
+                best = (d, key)
+        return best[1] if best else None
+
+    def similar(self, img: np.ndarray, mask: np.ndarray) -> str | None:
+        """The known object this one matches, or None. Three tests at every offset: LIKE of the pixels in either shape
+        agree (another animation step); HOLDS of a known object's pixels are found in this one (the same sprite
+        carrying a piece of a background the book did not know); or HOLDS of this one's pixels are found in a known
+        object at least four times its size (part of a sprite, cut by the screen's edge or hidden behind something)."""
+        h, w = mask.shape
+        P = OBJ_MAX + 2
+        a = np.full((h + 2 * P, w + 2 * P), -1, np.int32)
+        a[P:P + h, P:P + w] = np.where(mask, packed(img).reshape(h, w), -1)
+        na = int(mask.sum())
+        on_a = (a >= 0).astype(np.float32)
+        planes: dict[int, np.ndarray] = {}
+        best, best_key = 0.0, None
+        for key, bk in self._obj_bank:
+            bh, bw = bk.shape
+            nb = int((bk >= 0).sum())
+            like = abs(bh - h) <= OBJ_SLACK and abs(bw - w) <= OBJ_SLACK and min(na, nb) >= LIKE * max(na, nb)
+            holds = bh <= h + 2 * OBJ_SLACK and bw <= w + 2 * OBJ_SLACK and HOLDS * nb <= na <= 2.5 * nb
+            part = h <= bh + 2 * OBJ_SLACK and w <= bw + 2 * OBJ_SLACK and max(24, nb / 4) <= na <= nb
+            if not (like or holds or part):
+                continue
+            agree = np.zeros((a.shape[0] - bh + 1, a.shape[1] - bw + 1), np.float32)
+            for c in np.unique(bk[bk >= 0]):
+                if c not in planes:
+                    planes[c] = (a == c).astype(np.float32)
+                agree += cv2.matchTemplate(planes[c], (bk == c).astype(np.float32), cv2.TM_CCORR)
+            score = np.zeros_like(agree)
+            if like:
+                both = cv2.matchTemplate(on_a, (bk >= 0).astype(np.float32), cv2.TM_CCORR)
+                score = np.maximum(score, agree / (na + nb - both) / LIKE)
+            if holds:
+                score = np.maximum(score, agree / nb / HOLDS)
+            if part:
+                score = np.maximum(score, agree / na / HOLDS)
+            top = float(score.max())
+            if top >= 1.0 and top > best:
+                best, best_key = top, key
+        return best_key
+
     def learn(self, r: Reading) -> int:
-        """Enter a reading's new cells unlabelled (the model has not named them yet), so the next frame hits them.
-        Returns how many keys were new."""
+        """Enter a reading's new cells and objects unlabelled (the model has not named them yet), so the next frame
+        hits them. Returns how many would go to the model: new cells no known object explains, and new objects that
+        hold a new cell (a cell under a known object takes its label from the object and its background)."""
         n = 0
-        for i in r.new_cells:
+        for i, kn in enumerate(r.known):
             k = r.cells[i][2]
-            if k not in self.cells:
+            if not kn and k not in self.cells:
                 self.cells[k] = {"votes": {}, "label": "U", "state": "unlabelled", "seen": 1, "contradictions": 0,
                                  "source": "none"}
-                n += 1
+                n += i in r.new_cells
+        for o in r.objects:
+            if o["key"] not in self.objects:
+                self.objects[o["key"]] = {"votes": {}, "label": "U", "state": "unlabelled", "seen": 1,
+                                          "contradictions": 0, "source": "none", "size": [o["w"], o["h"]]}
+                self.bank_object(o["key"], r.image[o["y"]:o["y"] + o["h"], o["x"]:o["x"] + o["w"]], o["mask"])
+                n += bool(o["new_cells"])
         return n
+
+    def bank_object(self, key: str, img: np.ndarray, mask: np.ndarray) -> None:
+        """Keep an object's picture so later objects can be matched against it."""
+        h, w = mask.shape
+        self._obj_bank.append((key, np.where(mask, packed(img).reshape(h, w), -1)))
 
     def screen_key(self, img: np.ndarray) -> str:
         return _hash(np.ascontiguousarray(img).tobytes())
@@ -291,11 +500,11 @@ class CellBook:
     def stats(self) -> dict[str, Any]:
         st = Counter(e["state"] for e in self.cells.values())
         lab = Counter(e["label"] for e in self.cells.values())
-        return {"cells": len(self.cells), "screens": len(self.screens), "states": dict(st), "labels": dict(lab),
+        return {"cells": len(self.cells), "objects": len(self.objects), "screens": len(self.screens), "states": dict(st), "labels": dict(lab),
                 "contradictions": sum(e["contradictions"] for e in self.cells.values())}
 
     def dump(self) -> dict[str, Any]:
-        return {"cells": self.cells, "phase": list(self.phase)}
+        return {"cells": self.cells, "objects": self.objects, "phase": list(self.phase)}
 
     def save(self, path: str) -> None:
         with open(path, "w") as f:
@@ -304,6 +513,7 @@ class CellBook:
     def load(self, path: str | dict) -> None:
         d = path if isinstance(path, dict) else json.load(open(path))
         self.cells.update(d.get("cells") or {})
+        self.objects.update(d.get("objects") or {})
         self.phase = tuple(d.get("phase") or (0, 0))
 
 
