@@ -8,6 +8,7 @@ is spent, new cells are still entered (unlabelled) so the hit-rate curve stays t
 the screens that would have needed a call are counted.
 
     python scripts/screenonly_run.py --cap runs/screenonly/cap --out runs/screenonly/pass [--budget 0.4] [--offline]
+    python scripts/screenonly_run.py --cap runs/screenonly/cap --out runs/screenonly/phase0 --offline --cache objects
 """
 from __future__ import annotations
 import argparse
@@ -122,6 +123,76 @@ def run_game(game: str, cap: str, out: str, chat, budget: float | None, offline:
             "lookup_ms_per_frame": round(1000 * t_lookup / len(frames), 3)}
 
 
+def run_objects(game: str, cap: str, out: str) -> dict:
+    """The phase-0 cache, offline ($0): frames cut in bands, sprites cut out of new cells as objects. Every new cell
+    and object is entered unlabelled, as a labelled run would after its answer comes back. Grader-side truth (the
+    console's sprite boxes) only scores the cut afterwards."""
+    frames = np.load(os.path.join(cap, f"{game}.npz"))["frames"]
+    rows = [json.loads(l) for l in open(os.path.join(cap, f"{game}.jsonl"))]
+    book = CellBook()
+    per_min: dict[int, Counter] = defaultdict(Counter)
+    cut = Counter()
+    t_lookup = 0.0
+    misaligned = 0
+    for i, img in enumerate(frames):
+        t = rows[i]["truth"]
+        misaligned += bool(t["scx"] % 8 or t["scy"] % 8)
+        t0 = time.perf_counter()
+        r = book.read(img)
+        t_lookup += time.perf_counter() - t0
+        m = per_min[min(i // PER_MIN, (len(frames) - 2) // PER_MIN)]
+        m["frames"] += 1
+        m["cells"] += len(r.cells)
+        m["known"] += len(r.cells) - len(r.new_cells)
+        m["known_plain"] += sum(r.known)
+        m["full"] += r.answered
+        m["full_plain"] += all(r.known)
+        m["screen_known"] += r.screen_known
+        m["bands"] += len(r.bands) > 1
+        in_new_obj = {j for o in (r.objects[k] for k in r.new_objects) for j in o["new_cells"]}
+        new_keys = {r.cells[j][2] for j in r.new_cells if j not in in_new_obj}
+        m["new_keys"] += len(new_keys)
+        m["new_objects"] += len(r.new_objects)
+        m["need_call"] += bool(new_keys or r.new_objects)
+        for o in r.objects:
+            if o["new_cells"]:
+                m["obj_" + ("exact" if o["known"] and not o["how"] else o["how"] or "new")] += 1
+        # grader side: how much of the objects' foreground is under a sprite box, how many new cells under sprites
+        # the cut explained
+        cover = np.zeros((144, 160), bool)
+        for x, y, w, h in t["sprites"]:
+            cover[max(0, y):max(0, min(144, y + h)), max(0, x):max(0, min(160, x + w))] = True
+        for o in r.objects:
+            fg = o["mask"]
+            under = cover[o["y"]:o["y"] + o["h"], o["x"]:o["x"] + o["w"]][fg]
+            cut["obj_px"] += int(fg.sum())
+            cut["obj_px_under_sprite"] += int(under.sum())
+            if o["how"] == "track":
+                cut["track_px"] += int(fg.sum())
+                cut["track_px_under_sprite"] += int(under.sum())
+        explained = {j for o in r.objects for j in o["cells"]}
+        for j, kn in enumerate(r.known):
+            if kn:
+                continue
+            x, y, _ = r.cells[j]
+            if cover[y:y + 8, x:x + 8].sum() >= 16:
+                cut["new_under_sprite"] += 1
+                cut["new_under_sprite_cut"] += j in explained
+        book.learn(r)
+    curve = [{"minute": k + 1, "cell_hit": round(per_min[k]["known"] / per_min[k]["cells"], 4),
+              "cell_hit_plain": round(per_min[k]["known_plain"] / per_min[k]["cells"], 4),
+              "frames_full": round(per_min[k]["full"] / per_min[k]["frames"], 4),
+              "frames_full_plain": round(per_min[k]["full_plain"] / per_min[k]["frames"], 4),
+              "screen_hit": round(per_min[k]["screen_known"] / per_min[k]["frames"], 4),
+              "screens_needing_call": per_min[k]["need_call"], "new_keys": per_min[k]["new_keys"],
+              "new_objects": per_min[k]["new_objects"], "banded_frames": per_min[k]["bands"],
+              "objects_answered": {h: per_min[k]["obj_" + h] for h in ("exact", "like", "track", "new")},
+              "calls": 0} for k in sorted(per_min)]
+    return {"game": game, "cache": "objects", "frames": len(frames), "misaligned_frames": misaligned, "curve": curve,
+            "book": book.stats(), "labelled_cells": 0, "calls": 0, "failed_calls": 0, "usd": 0.0,
+            "cut": dict(cut), "lookup_ms_per_frame": round(1000 * t_lookup / len(frames), 3)}
+
+
 def score(game: str, frames, rows, keys_at, book: CellBook) -> dict:
     """Labels (the book's final ones) against grader-side truth, over every cell sighting with a label."""
     ent = Counter()
@@ -190,7 +261,12 @@ def main() -> None:
     ap.add_argument("--budget", type=float, default=0.4, help="Azure dollars per game")
     ap.add_argument("--per-call", type=int, default=40)
     ap.add_argument("--offline", action="store_true", help="no model: hit rates only, $0")
+    ap.add_argument("--cache", choices=("cells", "objects"), default="cells",
+                    help="cells: one phase per frame, cells only (the first experiment); objects: bands and sprite "
+                         "cut-out (phase 0, offline only)")
     a = ap.parse_args()
+    if a.cache == "objects" and not a.offline:
+        raise SystemExit("the object cache has no labeller yet: run it with --offline")
     os.makedirs(a.out, exist_ok=True)
     chat = None
     if not a.offline:
@@ -200,7 +276,7 @@ def main() -> None:
             raise SystemExit("the labeller runs on Azure only (ANYGAME_LLM_API=azure)")
     res = []
     for g in a.games.split(","):
-        r = run_game(g, a.cap, a.out, chat, a.budget, a.offline, a.per_call)
+        r = run_objects(g, a.cap, a.out) if a.cache == "objects" else run_game(g, a.cap, a.out, chat, a.budget, a.offline, a.per_call)
         res.append(r)
         print(json.dumps({k: v for k, v in r.items() if k != "curve"}), flush=True)
         with open(os.path.join(a.out, "summary.json"), "w") as f:
