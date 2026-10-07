@@ -36,7 +36,7 @@ PRICES = {"gpt-5.6-luna": (0.22, 1.32)}
 # which part of anygame made the call, from the calling module
 PURPOSES = {"author": "authoring", "explore": "authoring", "learn": "learn loop", "diagnose": "learn loop", "goals": "goals",
             "tiletext": "tiletext", "fallback": "vision", "sensors": "llm sensor", "rater": "rater", "tasks": "tasks",
-            "demo": "demo"}
+            "demo": "demo", "cellbook": "screen-only perception", "screenonly_run": "screen-only perception"}
 _LEDGER_LOCK = threading.Lock()
 
 
