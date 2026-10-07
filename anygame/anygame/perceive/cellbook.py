@@ -23,6 +23,7 @@ import base64
 import hashlib
 import json
 from collections import Counter
+from dataclasses import dataclass, field
 from typing import Any, Callable
 
 import numpy as np
@@ -59,6 +60,82 @@ def grid(img: np.ndarray, phase: tuple[int, int] = (0, 0)) -> np.ndarray:
     return keys.reshape(rows, cols)
 
 
+# ---- bands: one scroll phase per horizontal band ------------------------------------------------------
+# A screen can scroll in parts: a playfield moving under a fixed status bar has two grid phases on one frame. The
+# cut picks, for every 8-pixel strip of rows, the horizontal phase where most of its cells are known, and chains
+# strips top to bottom with gaps under 8 rows between them (the part-cells where one band meets the next, like the
+# part-cells at the screen's edges, are not keyed). A change of phase between strips costs a little, so a screen
+# with nothing known stays one band.
+BAND_CHANGE = 0.5
+
+
+def bands(known: Callable[[int, int], tuple[int, list[str]]], height: int = 144, prefer: dict[int, int] | None = None
+          ) -> list[tuple[int, int]]:
+    """Strips (top row y, horizontal phase dx) covering `height` rows. `known(y, dx)` gives the strip's number of known
+    cells; `prefer` (y mod 8 → dx) breaks ties toward the last frame's phases."""
+    prefer = prefer or {}
+    best: dict[int, tuple[float, int]] = {}            # strip top → (known cells, dx)
+    for y in range(height - CELL + 1):
+        order = [prefer.get(y % CELL, 0)] + [d for d in range(CELL) if d != prefer.get(y % CELL, 0)]
+        best[y] = max(((known(y, d)[0], -i, d) for i, d in enumerate(order)))[::2]
+    # f[e]: best score with the last strip ending at row e; back[e]: that strip's top
+    f: dict[int, float] = {0: 0.0}
+    back: dict[int, int | None] = {0: None}
+    for e in range(CELL, height + 1):
+        y = e - CELL
+        if y not in best:
+            continue
+        score, dx = best[y]
+        cand = []
+        for p in range(max(0, y - CELL + 1), y + 1):
+            if p not in f or (p == 0 and y >= CELL):
+                continue
+            pen = 0.01 * (y - p)
+            if p > 0 and (y != p or best[p - CELL][1] != dx):
+                pen += BAND_CHANGE
+            cand.append((f[p] + score - pen, p))
+        if cand:
+            f[e], back[e] = max(cand)
+    end = max((f[e], e) for e in f if e > 0 and height - e < CELL)[1]
+    out = []
+    while end:
+        y = end - CELL
+        out.append((y, best[y][1]))
+        end = back[end] if back[end] else 0
+    return out[::-1]
+
+
+def strip_keys(img: np.ndarray, y: int, dx: int) -> list[str]:
+    """The cell keys of one 8-row strip at top row `y`, cut at horizontal phase `dx`."""
+    w = img.shape[1]
+    cols = (w - dx) // CELL
+    row = img[y:y + CELL, dx:dx + cols * CELL]
+    blocks = row.reshape(CELL, cols, CELL, -1).transpose(1, 0, 2, 3).reshape(cols, -1)
+    return [_hash(b.tobytes()) for b in blocks]
+
+
+@dataclass
+class Reading:
+    """One frame as the book reads it: every keyed cell (pixel corner and key), the bands it was cut in, which cells
+    the book answered, and (see CellBook.read) the sprites cut out of it."""
+    cells: list[tuple[int, int, str]]
+    bands: list[tuple[int, int, int, int]]                  # (top, bottom, dx, dy), rows top..bottom-1
+    known: list[bool]
+    composite: dict[int, str] = field(default_factory=dict)     # cell index → background key under a sprite
+    objects: list[dict[str, Any]] = field(default_factory=list)  # {"x","y","w","h","key","known"}
+    new_cells: list[int] = field(default_factory=list)          # cell indexes the book cannot answer
+    screen_known: bool = False
+
+    @property
+    def new_objects(self) -> list[int]:
+        return [i for i, o in enumerate(self.objects) if not o["known"]]
+
+    @property
+    def answered(self) -> bool:
+        """Every cell answered: a known cell, or a known background under a known object."""
+        return not self.new_cells and not self.new_objects
+
+
 class CellBook:
     """Cell key → label entry. An entry: votes (letter → count), label (the leading letter), state ('labelled' or
     'verified'), seen (frames it appeared in), contradictions."""
@@ -68,6 +145,7 @@ class CellBook:
         self.screens: dict[str, int] = {}          # whole-screen key → times seen
         self.phase = (0, 0)
         self.pending: set[str] = set()             # sent or queued for the model, no answer yet
+        self.layout: list[tuple[int, int]] = []    # the last frame's strips (top row, dx)
 
     # ---- looking up ---------------------------------------------------------------------------
     def keys(self, img: np.ndarray, search: bool = True) -> np.ndarray:
@@ -89,6 +167,60 @@ class CellBook:
                         best = (s, p)
         self.phase = best[1]
         return tried[best[1]]
+
+    def cut(self, img: np.ndarray) -> list[tuple[int, int, list[str]]]:
+        """The frame cut into strips, each at its own phase: [(top row, dx, keys)]. The last frame's layout is tried
+        first; when it leaves a cell unknown, every strip top and phase is scored and the best chain kept."""
+        known_set = lambda k: k in self.cells
+        memo: dict[tuple[int, int], tuple[int, list[str]]] = {}
+
+        def known(y, dx):
+            if (y, dx) not in memo:
+                ks = strip_keys(img, y, dx)
+                memo[(y, dx)] = (sum(1 for k in ks if known_set(k)), ks)
+            return memo[(y, dx)]
+
+        h = img.shape[0]
+        layout = self.layout or [(y, 0) for y in range(0, h - CELL + 1, CELL)]
+        if not all(known(y, dx)[0] == len(known(y, dx)[1]) for y, dx in layout):
+            if len(self.cells) >= 50:
+                layout = bands(known, h, prefer={y % CELL: dx for y, dx in self.layout})
+            else:
+                layout = [(y, 0) for y in range(0, h - CELL + 1, CELL)]
+        self.layout = layout
+        return [(y, dx, known(y, dx)[1]) for y, dx in layout]
+
+    def read(self, img: np.ndarray) -> Reading:
+        """Look one frame up: cut it in bands, answer each cell from the book. Counts the sightings."""
+        cells, band_list = [], []
+        for y, dx, ks in self.cut(img):
+            cells += [(dx + c * CELL, y, k) for c, k in enumerate(ks)]
+            dy = y % CELL
+            if band_list and band_list[-1][1] == y and band_list[-1][2:] == (dx, dy):
+                band_list[-1] = (band_list[-1][0], y + CELL, dx, dy)
+            else:
+                band_list.append((y, y + CELL, dx, dy))
+        known = [k in self.cells for _, _, k in cells]
+        for (_, _, k), kn in zip(cells, known):
+            if kn:
+                self.cells[k]["seen"] += 1
+        sk = self.screen_key(img)
+        r = Reading(cells, band_list, known, screen_known=sk in self.screens)
+        self.screens[sk] = self.screens.get(sk, 0) + 1
+        r.new_cells = [i for i, kn in enumerate(known) if not kn]
+        return r
+
+    def learn(self, r: Reading) -> int:
+        """Enter a reading's new cells unlabelled (the model has not named them yet), so the next frame hits them.
+        Returns how many keys were new."""
+        n = 0
+        for i in r.new_cells:
+            k = r.cells[i][2]
+            if k not in self.cells:
+                self.cells[k] = {"votes": {}, "label": "U", "state": "unlabelled", "seen": 1, "contradictions": 0,
+                                 "source": "none"}
+                n += 1
+        return n
 
     def screen_key(self, img: np.ndarray) -> str:
         return _hash(np.ascontiguousarray(img).tobytes())
