@@ -190,7 +190,7 @@ def _save_png(pb, path: Path) -> None:
 
 def run_one(suite: dict[str, Any], gid: str, decider: str, seed: int, out: Path, standin: StandIn | None = None,
             scale: float = 1.0, fetch: bool = True, pack_name: str | None = None, goals: bool = True,
-            books: Path | None = None) -> dict[str, Any]:
+            books: Path | None = None, agent_kind: str = "pack") -> dict[str, Any]:
     from anygame.device.pyboy import PyBoyDevice
     from anygame.loop import Agent
     from anygame.pack import load_pack
@@ -202,6 +202,8 @@ def run_one(suite: dict[str, Any], gid: str, decider: str, seed: int, out: Path,
     default_pack = suite.get("pack", "gameboy-blind")
     pack_name = pack_name or default_pack
     label = decider if pack_name == default_pack else f"{pack_name}+{decider}"   # another agent is its own column
+    if agent_kind == "screen":
+        label = "screen"
     if books is not None:
         label += "+book"
     row: dict[str, Any] = {"game": gid, "tier": game["tier"], "kind": game.get("kind"), "decider": label, "pack": pack_name, "seed": seed,
@@ -237,7 +239,12 @@ def run_one(suite: dict[str, Any], gid: str, decider: str, seed: int, out: Path,
         out.mkdir(parents=True, exist_ok=True)
         azure_log.unlink(missing_ok=True)
         os.environ["ANYGAME_USAGE_LOG"] = str(azure_log)     # this run's chat-model calls, priced, in a ledger of its own
-        agent = Agent(pack, device, sensor, None, background=False)
+        if agent_kind == "screen":
+            # the screen-only agent: frames in, presses out, its own screen graph; no pack reads, no decider
+            from anygame.screen_agent import ScreenAgent
+            agent = ScreenAgent(device, seed=seed)
+        else:
+            agent = Agent(pack, device, sensor, None, background=False)
         meter = _ExploreMeter()
         gb = getattr(agent, "goalbook", None)
         if gb is not None and goals and os.environ.get("ANYGAME_LLM_BASE"):
@@ -319,6 +326,8 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--scale", type=float, default=1.0, help="multiply the frame/press/time/call budget (a quick check: 0.1)")
     ap.add_argument("--books", help="keep a glyph book per game in this folder across runs (reported as <agent>+book); "
                                     "default: every run starts with none")
+    ap.add_argument("--agent", choices=("pack", "screen"), default="pack",
+                    help="pack: the pack agent with --decider; screen: the screen-only agent (anygame/screen_agent.py)")
     ap.add_argument("--no-fetch", action="store_true", help="never download a ROM; use only what is in the cache")
     a = ap.parse_args(argv)
     suite = load_suite()
@@ -336,7 +345,7 @@ def main(argv: list[str] | None = None) -> None:
         for gid in games:
             for seed in seeds:
                 row = run_one(suite, gid, a.decider, seed, out, standin, a.scale, fetch=not a.no_fetch, pack_name=a.pack, goals=not a.no_goals,
-                             books=Path(a.books) if a.books else None)
+                             books=Path(a.books) if a.books else None, agent_kind=a.agent)
                 with open(out / "runs.jsonl", "a") as f:
                     f.write(json.dumps(row) + "\n")
                 brief = {k: row.get(k) for k in ("game", "decider", "seed", "score", "reached", "stop", "presses", "wall_s", "skipped") if row.get(k) is not None}
