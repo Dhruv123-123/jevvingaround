@@ -56,7 +56,7 @@ class Nodes:
     of them is that node (a sprite walking across a still room, a title screen's animation). Known nodes are kept in
     a matrix and compared all at once; the exact hash is tried first."""
 
-    def __init__(self, tol: float = 0.06, cap: int = 5000):
+    def __init__(self, tol: float = 0.03, cap: int = 5000):
         self.tol, self.cap = tol, cap
         self.exact: dict[bytes, str] = {}
         self.ids: list[str] = []
@@ -111,7 +111,7 @@ def parse_presses(text: str, buttons) -> tuple[list[str], str]:
 class ScreenAgent:
     def __init__(self, device, seed: int = 0, buttons=BUTTONS, epsilon: float = 0.1, bonus: float = 0.5,
                  place_weight: float = 1.0, place_cell: int = 0, settle: int = 3,
-                 frontier: bool = True, advisor=None, stuck: int = 40, max_advice: int = 40,
+                 frontier: bool = True, advisor=None, stuck: int = 30, max_advice: int = 150,
                  advice_per_screen: int = 2):
         self.place_cell = place_cell
         self.settle = settle
@@ -125,6 +125,7 @@ class ScreenAgent:
         self.queue: list[str] = []
         self.since_new = 0
         self.recent: list[np.ndarray] = []
+        self.effect: dict[str, dict[str, list[int]]] = defaultdict(lambda: defaultdict(lambda: [0, 0]))   # kind → button → [tries, changed]
         self.dev = device
         self.rng = random.Random(seed)
         self.buttons = list(buttons)
@@ -165,14 +166,22 @@ class ScreenAgent:
         """Buttons still worth a first try here: never pressed, or pressed once and nothing happened (a first press
         can only turn the player to face that way). Start and Select are left to chance."""
         e = self.edges.get(state, {})
+        kind = self._kind(state)
         out = []
         for b in self.buttons:
             if PRIOR[b] < 0.5:
                 continue
+            tries, changed = self.effect[kind][b]
+            if tries >= 15 and changed < 0.1 * tries:
+                continue          # in this kind of state (walking, or a screen) this button has almost never done anything
             outs = e.get(b)
             if not outs or (sum(outs.values()) < 2 and set(outs) == {state}):
                 out.append(b)
         return out
+
+    @staticmethod
+    def _kind(state: str) -> str:
+        return "place" if "@" in state else "screen"
 
     def _plan(self, state: str, limit: int = 4000) -> str | None:
         """The first button on the shortest known way to a state with a button still to try (each press assumed to
@@ -226,6 +235,9 @@ class ScreenAgent:
             prev, b = self.last
             gain = 0.0 if state == prev else self.novelty(state)
             self.edges[prev][b][state] += 1
+            eff = self.effect[self._kind(prev)][b]
+            eff[0] += 1
+            eff[1] += state != prev
             y = self.yield_[b]
             y[0] += gain
             y[1] += 1
@@ -237,6 +249,8 @@ class ScreenAgent:
         if not self.queue and self.advisor is not None and self.since_new >= self.stuck and \
                 len(self.advice) < self.max_advice and self.asked[node] < self.advice_per_screen:
             self._ask(img, node)
+        if self.advice and "states_at" in self.advice[-1] and "new" not in self.advice[-1] and not self.queue:
+            self.advice[-1]["new"] = len(self.visits) > self.advice[-1]["states_at"]
         if self.queue:
             b, how = self.queue.pop(0), "advice"
         else:
@@ -249,12 +263,22 @@ class ScreenAgent:
     def _ask(self, img: np.ndarray, node: str) -> None:
         self.asked[node] += 1
         self.since_new = 0
-        parts: list[dict[str, Any]] = [{"type": "text", "text": "Earlier screens, oldest first, then the current one."}]
+        # what earlier advice did: so it does not send the player back where it already went for nothing
+        notes = []
+        for e in self.advice[-5:]:
+            if e.get("why"):
+                notes.append(f"- {e['why']} ({' '.join(e.get('presses') or [])}): "
+                             + ("found something new" if e.get("new") else "found nothing new"))
+        seen_here = self.visits.get(node, 0)
+        head = (f"Screens seen so far: {len(self.nodes.ids)}. This screen has been seen {seen_here} times.\n"
+                + ("Your earlier advice, oldest first:\n" + "\n".join(notes) + "\n" if notes else "")
+                + "Earlier screens, oldest first, then the current one.")
+        parts: list[dict[str, Any]] = [{"type": "text", "text": head}]
         for im in self.recent[:-1] if len(self.recent) > 1 else []:
             parts.append({"type": "image_url", "image_url": {"url": _png(im, 2), "detail": "low"}})
         parts.append({"type": "image_url", "image_url": {"url": _png(img), "detail": "high"}})
         msgs = [{"role": "system", "content": ADVICE}, {"role": "user", "content": parts}]
-        entry: dict[str, Any] = {"node": node}
+        entry: dict[str, Any] = {"node": node, "states_at": len(self.visits)}
         try:
             before = self.advisor.cost
             text, usage, ms = self.advisor.complete(msgs, max_tokens=3000, extra={"reasoning_effort": "low"})
