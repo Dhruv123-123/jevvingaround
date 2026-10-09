@@ -60,6 +60,11 @@ def play(game: str, agent: str, seed: int, presses: int, **kw) -> dict:
             a = RandomAgent(dev, seed)
         else:
             from anygame.screen_agent import ScreenAgent
+            kw = dict(kw)
+            if kw.pop("advice", False):
+                from anygame.chat import Chat
+                kw["advisor"] = Chat(timeout=90)
+                assert kw["advisor"].api in ("azure", "azure-models"), "the advisor runs on Azure only"
             a = ScreenAgent(dev, seed=seed, **kw)
         mem = dev._pb.memory
         places, maps = set(), set()
@@ -74,7 +79,8 @@ def play(game: str, agent: str, seed: int, presses: int, **kw) -> dict:
                 curve.append(len(places))
         dev.close()
         return {"game": game, "agent": agent, "seed": seed, "places": len(places), "maps": len(maps), "curve": curve,
-                "wall_s": round(time.time() - t0, 1)}
+                "wall_s": round(time.time() - t0, 1), "usd": round(getattr(a, "total_cost", 0.0), 4),
+                "advice": getattr(a, "advice", None)}
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
@@ -94,7 +100,8 @@ def main() -> None:
         rs = [play(game, a.agent, int(s), a.presses, **kw) for s in a.seeds.split(",")]
         rows += rs
         print(json.dumps({"game": game, "agent": a.agent, "kw": kw, "places_mean": round(st.mean(r["places"] for r in rs), 1),
-                          "places": [r["places"] for r in rs], "maps": [r["maps"] for r in rs]}), flush=True)
+                          "places": [r["places"] for r in rs], "maps": [r["maps"] for r in rs],
+                          "usd": round(sum(r["usd"] for r in rs), 4), "advice": sum(len(r["advice"] or []) for r in rs)}), flush=True)
     if a.out:
         with open(a.out, "a") as f:
             for r in rows:

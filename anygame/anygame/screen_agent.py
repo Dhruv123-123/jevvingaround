@@ -82,13 +82,49 @@ class Nodes:
         return nid
 
 
+ADVICE = """You are helping an agent play a video game it has never seen. It sees only the screen and can press the
+console's buttons: up, down, left, right, a, b, start, select. It has been exploring by trying buttons and has stopped
+finding anything new. Look at the screen (and the earlier screens, oldest first, if given) and say what a person
+would do next to make progress in the game: get past a title or menu, finish a dialogue, walk to an exit, door,
+stairs, person or item that has not been visited, or start the actual game. Answer with JSON only:
+{"why": "<one short sentence>", "presses": ["right", "right", "a", ...]}
+with 1 to 12 presses, in order. Prefer a few deliberate presses toward one goal over many random ones."""
+
+
+def _png(img_rgb: np.ndarray, scale: int = 3) -> str:
+    import base64
+    big = cv2.resize(img_rgb[:, :, ::-1], None, fx=scale, fy=scale, interpolation=cv2.INTER_NEAREST)
+    ok, buf = cv2.imencode(".png", big)
+    return "data:image/png;base64," + base64.b64encode(buf.tobytes()).decode()
+
+
+def parse_presses(text: str, buttons) -> tuple[list[str], str]:
+    import json
+    try:
+        d = json.loads(text[text.index("{"): text.rindex("}") + 1])
+    except (ValueError, AttributeError):
+        return [], ""
+    ps = [str(p).lower().strip() for p in (d.get("presses") or []) if str(p).lower().strip() in buttons]
+    return ps[:12], str(d.get("why") or "")[:200]
+
+
 class ScreenAgent:
     def __init__(self, device, seed: int = 0, buttons=BUTTONS, epsilon: float = 0.1, bonus: float = 0.5,
                  place_weight: float = 1.0, place_cell: int = 0, settle: int = 3,
-                 frontier: bool = True):
+                 frontier: bool = True, advisor=None, stuck: int = 40, max_advice: int = 40,
+                 advice_per_screen: int = 2):
         self.place_cell = place_cell
         self.settle = settle
         self.frontier = frontier
+        # the advisor (a chat model, Azure): asked only when exploring has stopped finding new states for `stuck`
+        # presses, at most `advice_per_screen` times per screen and `max_advice` times in all; its presses are played
+        # in order, then exploring resumes
+        self.advisor, self.stuck, self.max_advice, self.advice_per_screen = advisor, stuck, max_advice, advice_per_screen
+        self.advice: list[dict[str, Any]] = []
+        self.asked: Counter = Counter()
+        self.queue: list[str] = []
+        self.since_new = 0
+        self.recent: list[np.ndarray] = []
         self.dev = device
         self.rng = random.Random(seed)
         self.buttons = list(buttons)
@@ -193,11 +229,43 @@ class ScreenAgent:
             y = self.yield_[b]
             y[0] += gain
             y[1] += 1
+        self.since_new = 0 if self.visits[state] == 0 else self.since_new + 1
         self.visits[state] += 1
-        b = self.choose(state)
+        if not self.recent or self.nodes(self.recent[-1]) != node:
+            self.recent = (self.recent + [img])[-3:]
+        how = "explore"
+        if not self.queue and self.advisor is not None and self.since_new >= self.stuck and \
+                len(self.advice) < self.max_advice and self.asked[node] < self.advice_per_screen:
+            self._ask(img, node)
+        if self.queue:
+            b, how = self.queue.pop(0), "advice"
+        else:
+            b = self.choose(state)
         self.dev.press(b)
         self.last = (state, b)
-        return {"action": b, "choice": {"node": node, "place": place, "states": len(self.visits)}}
+        return {"action": b, "choice": {"node": node, "place": place, "states": len(self.visits), "how": how},
+                "cost_usd": self.total_cost}
+
+    def _ask(self, img: np.ndarray, node: str) -> None:
+        self.asked[node] += 1
+        self.since_new = 0
+        parts: list[dict[str, Any]] = [{"type": "text", "text": "Earlier screens, oldest first, then the current one."}]
+        for im in self.recent[:-1] if len(self.recent) > 1 else []:
+            parts.append({"type": "image_url", "image_url": {"url": _png(im, 2), "detail": "low"}})
+        parts.append({"type": "image_url", "image_url": {"url": _png(img), "detail": "high"}})
+        msgs = [{"role": "system", "content": ADVICE}, {"role": "user", "content": parts}]
+        entry: dict[str, Any] = {"node": node}
+        try:
+            before = self.advisor.cost
+            text, usage, ms = self.advisor.complete(msgs, max_tokens=3000, extra={"reasoning_effort": "low"})
+            self.total_cost += self.advisor.cost - before
+            presses, why = parse_presses(text, self.buttons)
+            entry.update(presses=presses, why=why, ms=ms)
+            self.queue = list(presses)
+        except Exception as e:  # noqa: BLE001 - a failed call costs one chance, not the run
+            self.errors += 1
+            entry["error"] = str(e)[:200]
+        self.advice.append(entry)
 
     def _where(self, img: np.ndarray, node: str) -> str | None:
         """Move the odometer by what the last press did; return the player's place (room, cell) as a key, or None
