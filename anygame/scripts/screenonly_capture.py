@@ -36,14 +36,16 @@ def truth(pb, game: str) -> dict:
     m = pb.memory
     lcdc = m[0xFF40]
     tall = bool(lcdc & 0x04)
-    sprites = []
+    sprites, slots = [], []
     if lcdc & 0x02:
         for i in range(40):
             s = pb.get_sprite(i)
             if s.on_screen:
                 sprites.append([s.x, s.y, 8, 16 if tall else 8])
+                slots.append([i, s.tile_identifier])
+    # slots: OAM slot and tile of each sprite box (grader side: which sprites are the player is found from these)
     t = {"scx": m[0xFF43], "scy": m[0xFF42], "win": bool(lcdc & 0x20), "wx": m[0xFF4B], "wy": m[0xFF4A],
-         "sprites": sprites}
+         "sprites": sprites, "slots": slots}
     if game.startswith("pokemon"):
         t.update({"x": m[0xD362], "y": m[0xD361], "map": m[0xD35E], "facing": m[0xC109],
                   "tilemap": [m[0xC3A0 + i] for i in range(360)]})
