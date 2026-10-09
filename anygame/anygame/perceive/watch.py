@@ -26,12 +26,11 @@ Nothing here knows a game: no RAM, no tile ids, no button meanings beyond "a d-p
 from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass, field
-from typing import Any
 
 import cv2
 import numpy as np
 
-from .cellbook import CELL, _hash
+from .cellbook import _hash
 
 DIRS = {"right": (1, 0), "left": (-1, 0), "down": (0, 1), "up": (0, -1)}
 R = 24                 # the furthest a mover is searched for between two frames (pixels, each axis)
@@ -49,13 +48,15 @@ def pack(img: np.ndarray) -> np.ndarray:
     return (a[..., 0] << 16) | (a[..., 1] << 8) | a[..., 2]
 
 
-def bg_shift(prev: np.ndarray, cur: np.ndarray, last: tuple[int, int] = (0, 0)) -> tuple[int, int, float]:
+def bg_shift(prev: np.ndarray, cur: np.ndarray, last: tuple[int, int] = (0, 0), steps=(8, 16)
+             ) -> tuple[int, int, float]:
     """How the picture moved as a whole: (dx, dy, share of the overlap that agrees), cur[y, x] == prev[y-dy, x-dx].
-    Candidates are no shift, the last shift and the phase-correlation peak (and its neighbours); the best by
-    pixel agreement wins, no shift on a near tie."""
+    Candidates are no shift, the last shift, the phase-correlation peak (and its neighbours) and a step of each size
+    in `steps` along each axis (a tiled floor fools phase correlation); the best by pixel agreement wins, no shift on
+    a near tie."""
     p, c = pack(prev), pack(cur)
     h, w = p.shape
-    cands = {(0, 0), tuple(last)}
+    cands = {(0, 0), tuple(last)} | {(sx * s, sy * s) for s in steps for sx, sy in ((1, 0), (-1, 0), (0, 1), (0, -1))}
     gp = cv2.cvtColor(prev, cv2.COLOR_RGB2GRAY).astype(np.float32)
     gc = cv2.cvtColor(cur, cv2.COLOR_RGB2GRAY).astype(np.float32)
     if gp.std() > 0 and gc.std() > 0:
@@ -213,6 +214,7 @@ class Effect:
 
 
 LINK = 10               # a mover continues a track whose box centre is within this many pixels of where it stood
+RECENT = 8             # a press that changed nothing is a bump only if the player walked this few frames ago
 DECAY = 0.98           # per press: how fast a track's recent agreement with the d-pad fades
 
 
@@ -227,6 +229,12 @@ class Watcher:
         self.player: Track | None = None
         self.walk: dict[str, Counter] = {}
         self.steps: Counter = Counter()          # the player's step size along the press (pixels)
+        self.last_moved = -10 ** 6
+
+    def box(self) -> tuple[int, int, int, int] | None:
+        """The player's box as last seen, if it was seen on the latest frame."""
+        p = self.player
+        return (int(p.x), int(p.y), p.w, p.h) if p is not None and p.last == self.i else None
 
     # ---- the player -------------------------------------------------------------------------------
     def _link(self, m: Mover, shift: tuple[int, int]) -> Track:
@@ -287,7 +295,7 @@ class Watcher:
     def see(self, prev: np.ndarray, press: str | None, cur: np.ndarray, keys_prev=None) -> Effect:
         """One press: what moved, where the player is after it, and whether a direction press moved it."""
         self.i += 1
-        dx, dy, agree = bg_shift(prev, cur, self.last_shift)
+        dx, dy, agree = bg_shift(prev, cur, self.last_shift, {8, 16} | {s for s, _ in self.steps.most_common(2)})
         ms, changed, diff = movers(prev, cur, (dx, dy))
         scene = agree < 0.5 or changed > SCENE
         eff = Effect((dx, dy), agree, changed, scene, ms)
@@ -364,9 +372,10 @@ class Watcher:
                 if along > 0:
                     eff.moved = True
                     self.steps[along] += 1
+                    self.last_moved = self.i
             elif (dx, dy) == (0, 0):
                 bx, by, bw, bh = (int(v) for v in before)
-                if not diff[by:by + bh, bx:bx + bw].any():
+                if not diff.any() and self.i - self.last_moved <= RECENT:
                     eff.step = (0, 0)
                     eff.moved = False      # nothing about the player changed, not even its pose (a turn would)
         return eff
@@ -379,3 +388,48 @@ class Watcher:
     def _same(self, m: Mover, box: tuple[int, int, int, int]) -> bool:
         x, y, w, h = box
         return abs(m.x - x) <= 4 and abs(m.y - y) <= 4
+
+
+# ---- the walk book: what the game said about the ground ------------------------------------------------
+class WalkBook:
+    """Cell key → how often the player stepped onto it and how often it stopped the player. Keys are the cellbook's
+    pixel keys, so a verdict about one patch of grass holds for every patch drawn the same."""
+
+    def __init__(self):
+        self.votes: dict[str, Counter] = {}
+
+    @staticmethod
+    def targets(keys: np.ndarray, phase: tuple[int, int], box: tuple[int, int, int, int], press: str,
+                step: int) -> list[str]:
+        """The keys of the cells (grid `keys` cut at `phase`) whose centres lie in the square of side `step` one step
+        ahead of the player's box centre."""
+        dx, dy = DIRS[press]
+        x, y, w, h = box
+        cx, cy = x + w / 2 + dx * step, y + h / 2 + dy * step
+        half = max(step, 8) / 2
+        px, py = phase
+        out = []
+        for r in range(keys.shape[0]):
+            for c in range(keys.shape[1]):
+                mx, my = px + c * 8 + 4, py + r * 8 + 4          # the cell's centre
+                if abs(mx - cx) <= half and abs(my - cy) <= half:
+                    out.append(keys[r, c])
+        return out
+
+    def add(self, cells: list[str], walkable: bool) -> None:
+        for k in cells:
+            self.votes.setdefault(k, Counter())["walk" if walkable else "block"] += 1
+
+    def says(self, cells: list[str]) -> bool | None:
+        """Walkable (every cell stepped onto at least once), blocked (a cell only ever blocked), or None (a cell never
+        judged)."""
+        if not cells:
+            return None
+        verdict = True
+        for k in cells:
+            v = self.votes.get(k)
+            if not v:
+                return None
+            if v["walk"] == 0:
+                verdict = False        # a cell the player ever stepped onto is ground: blocks come from things on it
+        return verdict

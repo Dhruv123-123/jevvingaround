@@ -54,7 +54,7 @@ def truth(pb, game: str) -> dict:
     return t
 
 
-def capture(game: str, out: str, presses: int, seed: int, hold: int, after: int) -> dict:
+def capture(game: str, out: str, presses: int, seed: int, hold: int, after: int, every: int = 0) -> dict:
     from pyboy import PyBoy
     g = GAMES[game]
     pb = PyBoy(g["rom"], window="null", sound_emulated=False)
@@ -67,18 +67,44 @@ def capture(game: str, out: str, presses: int, seed: int, hold: int, after: int)
     rng = random.Random(seed)
     frames = [np.array(pb.screen.ndarray[:, :, :3])]
     rows = [{"i": 0, "press": None, "truth": truth(pb, game)}]
+    fine, fine_rows = [frames[0]], [{"i": 0, "k": 0, "press": None, "held": False, "truth": rows[0]["truth"]}]
+
+    def run(n: int, i: int, b: str, held: bool, k0: int) -> int:
+        """Tick n frames; with `every`, keep a frame every `every` ticks (same emulation either way)."""
+        if not every:
+            pb.tick(n, False)
+            return k0
+        k = k0
+        while n > 0:
+            step = min(every, n)
+            pb.tick(step - 1, False) if step > 1 else None
+            pb.tick(1, True)
+            n -= step
+            k += step
+            fine.append(np.array(pb.screen.ndarray[:, :, :3]))
+            fine_rows.append({"i": i, "k": k, "press": b, "held": held, "truth": truth(pb, game)})
+        return k
+
     t0 = time.time()
     for i in range(1, presses + 1):
         b = rng.choices(BUTTONS, WEIGHTS)[0]
         pb.button_press(b)
-        pb.tick(hold, False)
+        k = run(hold, i, b, True, 0)
         pb.button_release(b)
-        pb.tick(after - 1, False)
-        pb.tick(1, True)
+        if every:
+            run(after, i, b, False, k)       # its last kept frame is the press's frame below
+        else:
+            pb.tick(after - 1, False)
+            pb.tick(1, True)
         frames.append(np.array(pb.screen.ndarray[:, :, :3]))
         rows.append({"i": i, "press": b, "truth": truth(pb, game)})
     pb.stop(save=False)
     os.makedirs(out, exist_ok=True)
+    if every:
+        np.savez_compressed(os.path.join(out, f"{game}-fine.npz"), frames=np.stack(fine))
+        with open(os.path.join(out, f"{game}-fine.jsonl"), "w") as f:
+            for r in fine_rows:
+                f.write(json.dumps(r) + "\n")
     np.savez_compressed(os.path.join(out, f"{game}.npz"), frames=np.stack(frames))
     with open(os.path.join(out, f"{game}.jsonl"), "w") as f:
         for r in rows:
@@ -94,9 +120,10 @@ def main() -> None:
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--hold", type=int, default=8)
     ap.add_argument("--after", type=int, default=16)
+    ap.add_argument("--every", type=int, default=0, help="also keep a frame every N ticks (GAME-fine.npz)")
     a = ap.parse_args()
     for game in a.games.split(","):
-        print(json.dumps(capture(game, a.out, a.presses, a.seed, a.hold, a.after)), flush=True)
+        print(json.dumps(capture(game, a.out, a.presses, a.seed, a.hold, a.after, a.every)), flush=True)
 
 
 if __name__ == "__main__":

@@ -17,7 +17,8 @@ from collections import Counter, defaultdict
 import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from anygame.perceive.watch import Watcher, DIRS  # noqa: E402
+from anygame.perceive.watch import Watcher, WalkBook, DIRS  # noqa: E402
+from anygame.perceive.cellbook import CellBook  # noqa: E402
 
 PER_MIN = 150
 
@@ -55,8 +56,8 @@ def truth_box(t: dict, slots: set[int]) -> tuple[int, int, int, int] | None:
         return None
     x0 = min(b[0] for b in boxes); y0 = min(b[1] for b in boxes)
     x1 = max(b[0] + b[2] for b in boxes); y1 = max(b[1] + b[3] for b in boxes)
-    if x1 <= 0 or y1 <= 0 or x0 >= 160 or y0 >= 144:
-        return None
+    if x1 <= 0 or y1 <= 0 or x0 >= 160 or y0 >= 144 or x1 - x0 > 48 or y1 - y0 > 48:
+        return None          # off screen, or far-apart sprites (a player slot lent to something else): no truth
     return x0, y0, x1 - x0, y1 - y0
 
 
@@ -87,19 +88,31 @@ def truth_moved(game: str, a: dict, b: dict, press: str) -> bool | None:
     return None
 
 
-def run(game: str, cap: str) -> dict:
-    frames = np.load(os.path.join(cap, f"{game}.npz"))["frames"]
-    rows = [json.loads(l) for l in open(os.path.join(cap, f"{game}.jsonl"))]
-    slots = player_slots(rows)
+def run(game: str, cap: str, fine: bool = False) -> dict:
+    """Watch one capture. `fine`: watch every kept frame (a frame every few ticks) and judge each press by all of
+    its frames; else only the frame after each press."""
+    suffix = "-fine" if fine else ""
+    frames = np.load(os.path.join(cap, f"{game}{suffix}.npz"))["frames"]
+    rows = [json.loads(l) for l in open(os.path.join(cap, f"{game}{suffix}.jsonl"))]
+    coarse = [json.loads(l) for l in open(os.path.join(cap, f"{game}.jsonl"))]
+    slots = player_slots(coarse)
     w = Watcher()
     per_min: dict[int, Counter] = defaultdict(Counter)
     walk = Counter()
     t0 = time.perf_counter()
-    for i in range(1, len(frames)):
-        press = rows[i]["press"]
-        eff = w.see(frames[i - 1], press, frames[i])
-        m = per_min[min(i // PER_MIN, (len(frames) - 2) // PER_MIN)]
-        tb = truth_box(rows[i]["truth"], slots) if slots else None
+    verdicts: dict[int, list] = defaultdict(list)       # press index -> the watcher's verdicts on its frames
+    boxes: dict[int, tuple] = {}                         # press index -> the player's box on the frame before it
+    book, wb, wbook = CellBook(), WalkBook(), Counter()
+    grids: dict[int, tuple] = {}
+    for j in range(1, len(frames)):
+        press = rows[j]["press"]
+        i = rows[j].get("i", j)
+        before = w.box()
+        eff = w.see(frames[j - 1], press, frames[j])
+        if i not in boxes:
+            boxes[i] = before
+        m = per_min[min(i // PER_MIN, (len(coarse) - 2) // PER_MIN)]
+        tb = truth_box(rows[j]["truth"], slots) if slots else None
         m["frames"] += 1
         m["truth"] += tb is not None
         m["pred"] += eff.player is not None
@@ -108,14 +121,32 @@ def run(game: str, cap: str) -> dict:
             m["pred_ok"] += ok
             m["found"] += ok
         m["scene"] += eff.scene
-        if press in DIRS and eff.moved is not None:
-            tm = truth_moved(game, rows[i - 1]["truth"], rows[i]["truth"], press)
-            k = ("moved" if eff.moved else "blocked") + "_" + {True: "truth_moved", False: "truth_blocked", None: "truth_unknown"}[tm]
-            walk[k] += 1
-        elif press in DIRS:
-            tm = truth_moved(game, rows[i - 1]["truth"], rows[i]["truth"], press)
+        verdicts[i].append(eff.moved)
+    step = max(w.steps, key=w.steps.get) if w.steps else 16
+    cframes = frames if not fine else np.load(os.path.join(cap, f"{game}.npz"))["frames"]
+    for i in range(1, len(coarse)):
+        keys = book.keys(cframes[i - 1])
+        book.see(cframes[i - 1], keys)
+        for k in set(keys.flat):
+            book.cells.setdefault(k, {"seen": 1})
+        press = coarse[i]["press"]
+        if press not in DIRS:
+            continue
+        vs = verdicts.get(i, [])
+        moved = True if any(v is True for v in vs) else (False if vs and all(v is False for v in vs) else None)
+        tm = truth_moved(game, coarse[i - 1]["truth"], coarse[i]["truth"], press)
+        # the walk book, judged before this press teaches it: what it says about the step ahead
+        if boxes.get(i):
+            cells = WalkBook.targets(keys, book.phase, boxes[i], press, step)
+            said = wb.says(cells)
             if tm is not None:
-                walk["unjudged_truth_" + ("moved" if tm else "blocked")] += 1
+                wbook[("none" if said is None else "right" if said == tm else "wrong_says_" + ("walk" if said else "block"))] += 1
+            if moved is not None:
+                wb.add(cells, moved)
+        if moved is not None:
+            walk[("moved" if moved else "blocked") + "_" + {True: "truth_moved", False: "truth_blocked", None: "truth_unknown"}[tm]] += 1
+        elif tm is not None:
+            walk["unjudged_truth_" + ("moved" if tm else "blocked")] += 1
     ms = 1000 * (time.perf_counter() - t0) / (len(frames) - 1)
     tot = Counter()
     warm = Counter()
@@ -131,7 +162,7 @@ def run(game: str, cap: str) -> dict:
     p = w.player
     return {"game": game, "player_slots": sorted(slots), "all": rates(tot), "warm": rates(warm),
             "player_track": None if p is None else {"agree": p.agree, "against": p.against, "poses": len(p.poses)},
-            "tracks": len(w.tracks), "steps": dict(w.steps.most_common(5)), "walk": dict(walk),
+            "tracks": len(w.tracks), "steps": dict(w.steps.most_common(5)), "walk": dict(walk), "walk_book": dict(wbook), "walk_book_cells": len(wb.votes),
             "scene_frames": tot["scene"], "ms_per_frame": round(ms, 2)}
 
 
@@ -139,12 +170,13 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--cap", default="/mnt/project-files/anygame/screen-only-phase1/cap")
     ap.add_argument("--out", required=True)
+    ap.add_argument("--fine", action="store_true", help="watch the frames kept every few ticks (capture --every)")
     ap.add_argument("--games", default="tobutobugirl,postbot,renegade-rush,gbhack,aevilia,pokemon,pokemon-cold")
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
     res = []
     for g in a.games.split(","):
-        r = run(g, a.cap)
+        r = run(g, a.cap, a.fine)
         res.append(r)
         print(json.dumps(r), flush=True)
         with open(os.path.join(a.out, "watch.json"), "w") as f:
