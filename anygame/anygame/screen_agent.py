@@ -83,7 +83,12 @@ class Nodes:
 
 
 class ScreenAgent:
-    def __init__(self, device, seed: int = 0, buttons=BUTTONS, epsilon: float = 0.1, bonus: float = 0.5):
+    def __init__(self, device, seed: int = 0, buttons=BUTTONS, epsilon: float = 0.1, bonus: float = 0.5,
+                 place_weight: float = 1.0, place_cell: int = 0, settle: int = 3,
+                 frontier: bool = True):
+        self.place_cell = place_cell
+        self.settle = settle
+        self.frontier = frontier
         self.dev = device
         self.rng = random.Random(seed)
         self.buttons = list(buttons)
@@ -94,6 +99,15 @@ class ScreenAgent:
         self.edges: dict[str, dict[str, Counter]] = defaultdict(lambda: defaultdict(Counter))   # node → button → next nodes
         self.yield_: dict[str, list[float]] = {b: [PRIOR[b], 1.0] for b in self.buttons}       # button → [sum, n]
         self.last: tuple[str, str] | None = None
+        # odometry (press-and-watch): the camera's place in the current room, from how the picture scrolled, plus the
+        # player's place on screen when it is known; a room starts at every scene change and is named by its first
+        # screen. New places are novelty too, so walking into unseen ground counts even where screens never repeat.
+        from .perceive.watch import Watcher
+        self.watch = Watcher() if place_weight else None
+        self.place_weight = place_weight
+        self.room: str | None = None
+        self.cam = [0, 0]
+        self.prev_img: np.ndarray | None = None
         self.total_cost = 0.0
         self.errors = 0
         self.goalbook = None
@@ -111,9 +125,48 @@ class ScreenAgent:
         total = sum(sum(o.values()) for o in self.edges[node].values())
         return nov + self.bonus * math.sqrt(math.log(1 + total) / n) * 0.5
 
+    def _open(self, state: str) -> list[str]:
+        """Buttons still worth a first try here: never pressed, or pressed once and nothing happened (a first press
+        can only turn the player to face that way). Start and Select are left to chance."""
+        e = self.edges.get(state, {})
+        out = []
+        for b in self.buttons:
+            if PRIOR[b] < 0.5:
+                continue
+            outs = e.get(b)
+            if not outs or (sum(outs.values()) < 2 and set(outs) == {state}):
+                out.append(b)
+        return out
+
+    def _plan(self, state: str, limit: int = 4000) -> str | None:
+        """The first button on the shortest known way to a state with a button still to try (each press assumed to
+        lead where it led most often)."""
+        from collections import deque
+        seen = {state}
+        q = deque([(state, None)])
+        while q and len(seen) < limit:
+            s, first = q.popleft()
+            if first is not None and self._open(s):
+                return first
+            for b, outs in self.edges.get(s, {}).items():
+                if not outs:
+                    continue
+                nxt = outs.most_common(1)[0][0]
+                if nxt not in seen:
+                    seen.add(nxt)
+                    q.append((nxt, first or b))
+        return None
+
     def choose(self, node: str) -> str:
         if self.rng.random() < self.epsilon:
             return self.rng.choices(self.buttons, [PRIOR[b] for b in self.buttons])[0]
+        if self.frontier:
+            open_ = self._open(node)
+            if open_:
+                return self.rng.choices(open_, [PRIOR[b] for b in open_])[0]
+            b = self._plan(node)
+            if b is not None:
+                return b
         vals = {b: self._value(node, b) for b in self.buttons}
         top = max(vals.values())
         best = [b for b, v in vals.items() if v >= top - 1e-9]
@@ -122,18 +175,52 @@ class ScreenAgent:
     def step(self) -> dict[str, Any]:
         img = native(self.dev.frame())
         node = self.nodes(img)
+        # let a transition (a fade, a menu sliding in) finish before judging the press: up to `settle` more looks,
+        # until the screen stays the same node
+        for _ in range(self.settle):
+            nxt = native(self.dev.frame())
+            nn = self.nodes(nxt)
+            img, same, node = nxt, nn == node, nn
+            if same:
+                break
+        place = self._where(img, node)
+        # the state: where the player stands in this room when it is found, else the screen itself (a menu, a title)
+        state = place if place is not None else node
         if self.last is not None:
             prev, b = self.last
-            gain = 0.0 if node == prev else self.novelty(node)
-            self.edges[prev][b][node] += 1
-            s = self.yield_[b]
-            s[0] += gain
-            s[1] += 1
-        self.visits[node] += 1
-        b = self.choose(node)
+            gain = 0.0 if state == prev else self.novelty(state)
+            self.edges[prev][b][state] += 1
+            y = self.yield_[b]
+            y[0] += gain
+            y[1] += 1
+        self.visits[state] += 1
+        b = self.choose(state)
         self.dev.press(b)
-        self.last = (node, b)
-        return {"action": b, "choice": {"node": node, "nodes": len(self.visits)}}
+        self.last = (state, b)
+        return {"action": b, "choice": {"node": node, "place": place, "states": len(self.visits)}}
+
+    def _where(self, img: np.ndarray, node: str) -> str | None:
+        """Move the odometer by what the last press did; return the player's place (room, cell) as a key, or None
+        when the player is not found on this frame."""
+        if self.watch is None:
+            return None
+        prev, self.prev_img = self.prev_img, img
+        if prev is None:
+            self.room = node
+            return None
+        eff = self.watch.see(prev, self.last[1] if self.last else None, img)
+        if eff.scene:
+            self.room, self.cam = node, [0, 0]
+        else:
+            self.cam[0] -= eff.shift[0]
+            self.cam[1] -= eff.shift[1]
+        box = self.watch.box(within=self.settle + 3)
+        if box is None:
+            return None
+        # a place is one step of the player's (as press-and-watch measured it) on a side
+        cell = self.place_cell or max(8, self.watch.steps.most_common(1)[0][0] if self.watch.steps else 16)
+        px, py = self.cam[0] + box[0] + box[2] // 2, self.cam[1] + box[1] + box[3] // 2
+        return f"{self.room}@{px // cell},{py // cell}"
 
     def close(self) -> None:
         pass

@@ -231,10 +231,10 @@ class Watcher:
         self.steps: Counter = Counter()          # the player's step size along the press (pixels)
         self.last_moved = -10 ** 6
 
-    def box(self) -> tuple[int, int, int, int] | None:
-        """The player's box as last seen, if it was seen on the latest frame."""
+    def box(self, within: int = 0) -> tuple[int, int, int, int] | None:
+        """The player's box as last seen, if it was seen on one of the latest `within` + 1 frames."""
         p = self.player
-        return (int(p.x), int(p.y), p.w, p.h) if p is not None and p.last == self.i else None
+        return (int(p.x), int(p.y), p.w, p.h) if p is not None and self.i - p.last <= within else None
 
     # ---- the player -------------------------------------------------------------------------------
     def _link(self, m: Mover, shift: tuple[int, int]) -> Track:
