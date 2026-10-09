@@ -162,8 +162,10 @@ def azure_spend(path: Path) -> dict[str, Any] | None:
         from anygame.chat import ledger_path
         shared = ledger_path()
         if shared is not None and shared != path and "PYTEST_CURRENT_TEST" not in os.environ:
-            with open(shared, "a") as f:
-                f.write(path.read_text())
+            from anygame.chat import append_line
+            for line in path.read_text().splitlines():
+                if line.strip():
+                    append_line(shared, line)
     except (ImportError, OSError):
         pass
     calls, dollars, by = 0, 0.0, {}
