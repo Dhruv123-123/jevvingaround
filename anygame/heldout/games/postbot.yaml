@@ -1,0 +1,13 @@
+# PostBot (Tobias Rojahn, 2018): a programming puzzle; write a program for the robot so it reaches every transmitter.
+# MIT (github.com/MasterIV/PostBot). Addresses from PostBot.c's globals: program[20] at 0xC0A5, then screen (int16,
+# 0 title, 1 level, 2 running, 3 programming), objectives, level. Checked by running a program that clears level 1
+# (forward, turn right, forward, transmit): level went 0 → 1.
+id: postbot
+kind: puzzle
+rom: { url: https://hh3.gbdev.io/static/database-gb/entries/postbot/PostBot.gb, sha256: 65824d3d7df8003f19923b38055a0660c20542cc363894091da661d9d49d13ad, license: MIT }
+milestones:
+  - { id: editor,  desc: "opened the program editor",  when: { u8: 0xC0B9, eq: 3 } }
+  - { id: ran,     desc: "ran a program",              when: { u8: 0xC0B9, eq: 2 } }
+  - { id: level1,  desc: "solved level 1",             when: { u8: 0xC0BD, ge: 1 } }
+  - { id: level2,  desc: "solved level 2",             when: { u8: 0xC0BD, ge: 2 } }
+  - { id: level3,  desc: "solved level 3",             when: { u8: 0xC0BD, ge: 3 } }
