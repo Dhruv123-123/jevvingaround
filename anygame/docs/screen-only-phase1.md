@@ -1,7 +1,7 @@
 # Screen-only phase 1: press-and-watch, a screen agent, Azure advice
 
 Branch `claude/anygame-screen-only-phase1-cbd753`, draft PR #33 on the #31 branch. The agent sees pixels and presses
-buttons; RAM is read only by the graders. Spend so far: **$1.7 Azure of the $100 budget**, $0 Jev.
+buttons; RAM is read only by the graders. Spend so far: **$3.1 Azure logged since Oct 9 20:00Z, of the $100 budget**, $0 Jev.
 
 ## 1. Press and watch on pixels (`anygame/perceive/watch.py`)
 
