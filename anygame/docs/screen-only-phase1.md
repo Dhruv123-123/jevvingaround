@@ -1,7 +1,7 @@
 # Screen-only phase 1: press-and-watch, a screen agent, Azure advice
 
 Branch `claude/anygame-screen-only-phase1-cbd753`, draft PR #33 on the #31 branch. The agent sees pixels and presses
-buttons; RAM is read only by the graders. Spend so far: **about $5 Azure logged since Oct 9 20:00Z, of the $100 budget**, $0 Jev.
+buttons; RAM is read only by the graders. Spend so far: **$16.6 Azure logged since Oct 9 20:00Z, of the $100 budget**, $0 Jev.
 
 ## 1. Press and watch on pixels (`anygame/perceive/watch.py`)
 
@@ -98,6 +98,18 @@ screen+advice, 5 seeds, normalised against random:
 Medium reasoning instead of low did not help (PostBot 0, Aevilia +0.30). PostBot stays at random: the advisor
 cannot place the editor cursor reliably from the picture. Held-out runs are wall-time bound (900 s), so each advice
 call costs presses; about 40 calls fit in a run.
+
+## 7. Step grid (commit 26f7fb0, off by default) and 30,000-press runs
+
+A faint grid on the advisor's picture, one player step per square, with the player's square named. Pokemon from
+Blue's house, 5,000 presses, 16 seeds: Viridian 4/16 with the grid vs 2/16 without, and half the presses spent in
+battles (854 vs 1,744 a run). On the held-out harness over 10 seeds it scored a little lower (Aevilia 0.24 vs 0.32,
+Pokemon 0.21 vs 0.25), so it stays off until a longer measure decides.
+
+From power-on with the grid, 30,000 presses (about 2 hours of wall time and $1 of Azure each), 4 seeds: Viridian
+City on 3 (presses 5,281, 6,730, 15,799), Route 22 on 2, the parcel errand on none. The advisor's goal stays
+"head north to Pewter", which the game blocks until Oak's parcel is delivered; nothing told it that, and no
+game-specific hint is allowed.
 
 ## Cost per game-hour
 
