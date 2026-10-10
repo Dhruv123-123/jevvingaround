@@ -111,6 +111,17 @@ City on 3 (presses 5,281, 6,730, 15,799), Route 22 on 2, the parcel errand on no
 "head north to Pewter", which the game blocks until Oak's parcel is delivered; nothing told it that, and no
 game-specific hint is allowed.
 
+Asking the advisor to name the game and set goals by its story (10,000 presses from Blue's house, 8 seeds each)
+sent it to Oak's lab more often (4/8 vs 1/8) but reached Viridian no more often (2/8 vs 3/8) and the Mart on none
+either way; dropped.
+
+## Where this leaves things
+
+The explorer plus a cheap advisor gets through Pokemon's opening and to Viridian City from pixels alone, and lifts
+the held-out median a little. What stops it now is long-horizon story knowledge (the parcel errand), and the
+held-out action games (Tobu, PostBot) where a slow advisor cannot steer. Each further idea above cost about
+$2 and 1-2 hours to measure on 8-16 seeds, and the last several moved nothing outside noise.
+
 ## Cost per game-hour
 
 Advice is the only paid part: at most 150 calls ($0.06) per 1,500-press run, so under $0.25 a game-hour.
