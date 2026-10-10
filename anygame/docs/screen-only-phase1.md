@@ -149,6 +149,19 @@ advice. Screen agent without advice, 5 seeds, against the same agent with defaul
 Both within noise or worse on the held-out games. Moving Tobu or PostBot past random looks like it needs a policy
 that learns from play, not a setting.
 
+## 10. Place recognition (tried, not committed)
+
+The advisor names the area on each call; the name sticks to that screen and room, and later calls are told by
+pixels which named place the screen matches (or that it is new) and which places led to which. From power-on,
+15,000 presses, 4 seeds each:
+
+| | Viridian | first Viridian press | Mart |
+|---|---|---|---|
+| with place recognition | 2/4 | 3,702 and 12,710 | 0 |
+| without | 3/4 | 12,780 to 14,726 | 0 |
+
+No clear gain; the patch is kept at `screen-only-phase1/place-recognition.patch`.
+
 ## Where this leaves things
 
 The explorer plus a cheap advisor gets through Pokemon's opening and to Viridian City from pixels alone, and lifts
