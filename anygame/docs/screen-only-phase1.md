@@ -132,6 +132,23 @@ The model does recognise Pokemon from the title screen and knows the parcel erra
 descriptions; following that memory cost progress. The Blue's-house save hides the title screen, so game knowledge
 must be measured from power-on.
 
+## 9. Cheap reflex knobs for the action games (tried, dropped)
+
+Held-out runs stop on the game-frame budget (36,000 frames), not wall time, so press choice matters more there than
+advice. Screen agent without advice, 5 seeds, against the same agent with defaults (in brackets):
+
+| game | long presses (4x hold) | no settle wait |
+|---|---|---|
+| Tobu Tobu Girl | 0.52 (0.52) | 0.60 (0.52) |
+| PostBot | 0.40 (0.44) | 0.40 (0.44) |
+| Renegade Rush | 0.28 (0.32) | 0.32 (0.32) |
+| GBHack | 0.24 (0.36) | 0.28 (0.36) |
+| Aevilia | 0.28 (0.16) | 0.20 (0.16) |
+| Pokemon Red | 0.23 (0.21) | 0.19 (0.21) |
+
+Both within noise or worse on the held-out games. Moving Tobu or PostBot past random looks like it needs a policy
+that learns from play, not a setting.
+
 ## Where this leaves things
 
 The explorer plus a cheap advisor gets through Pokemon's opening and to Viridian City from pixels alone, and lifts
