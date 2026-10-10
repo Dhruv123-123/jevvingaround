@@ -1,7 +1,7 @@
 # Screen-only phase 1: press-and-watch, a screen agent, Azure advice
 
 Branch `claude/anygame-screen-only-phase1-cbd753`, draft PR #33 on the #31 branch. The agent sees pixels and presses
-buttons; RAM is read only by the graders. Spend so far: **$3.1 Azure logged since Oct 9 20:00Z, of the $100 budget**, $0 Jev.
+buttons; RAM is read only by the graders. Spend so far: **about $5 Azure logged since Oct 9 20:00Z, of the $100 budget**, $0 Jev.
 
 ## 1. Press and watch on pixels (`anygame/perceive/watch.py`)
 
@@ -79,6 +79,25 @@ Tried and dropped (no gain on the same measures): snapping the odometer to a scr
 room (rooms in one house look alike, and the merge hid new ground), a mode that heads straight out of battles and
 menus (fewer places explored), following advised walks closed-loop around walls, and counting buttons tried on a
 near-identical screen as tried. Battles still take about 30% of presses on Route 1.
+
+## 6. Advice sooner and more often (commit d2a456d)
+
+Asking after 10 stale presses (was 30) and refreshing the heading every 50 presses (was 200). Held-out score,
+screen+advice, 5 seeds, normalised against random:
+
+| game | before | after |
+|---|---|---|
+| Tobu Tobu Girl | 0 | +0.09 |
+| PostBot | 0 | 0 |
+| Renegade Rush | +0.21 | +0.16 |
+| GBHack | +0.06 | +0.06 |
+| **held-out median** | **+0.03** | **+0.08** |
+| Aevilia (dev) | +0.17 | +0.39 |
+| Pokemon Red (dev) | +0.125 | +0.125 |
+
+Medium reasoning instead of low did not help (PostBot 0, Aevilia +0.30). PostBot stays at random: the advisor
+cannot place the editor cursor reliably from the picture. Held-out runs are wall-time bound (900 s), so each advice
+call costs presses; about 40 calls fit in a run.
 
 ## Cost per game-hour
 
