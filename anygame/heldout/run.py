@@ -251,7 +251,8 @@ def run_one(suite: dict[str, Any], gid: str, decider: str, seed: int, out: Path,
                 advisor = Chat(timeout=90)
                 if advisor.api not in ("azure", "azure-models"):
                     raise SystemExit("the advisor runs on Azure only (ANYGAME_LLM_API=azure)")
-            agent = ScreenAgent(device, seed=seed, advisor=advisor)
+            # ANYGAME_SCREEN_KW: ScreenAgent settings as JSON, for trying a variant on the suite
+            agent = ScreenAgent(device, seed=seed, advisor=advisor, **json.loads(os.environ.get("ANYGAME_SCREEN_KW") or "{}"))
         else:
             agent = Agent(pack, device, sensor, None, background=False)
         meter = _ExploreMeter()

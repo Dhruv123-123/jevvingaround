@@ -149,8 +149,8 @@ def parse_heading(text: str) -> str | None:
 class ScreenAgent:
     def __init__(self, device, seed: int = 0, buttons=BUTTONS, epsilon: float = 0.1, bonus: float = 0.5,
                  place_weight: float = 1.0, place_cell: int = 0, settle: int = 3,
-                 frontier: bool = True, advisor=None, stuck: int = 30, max_advice: int = 150,
-                 advice_per_screen: int = 2, lean: float = 2.0, every: int = 200):
+                 frontier: bool = True, advisor=None, stuck: int = 10, max_advice: int = 150,
+                 advice_per_screen: int = 2, lean: float = 2.0, every: int = 50, effort: str = "low"):
         self.place_cell = place_cell
         self.settle = settle
         self.frontier = frontier
@@ -165,6 +165,7 @@ class ScreenAgent:
         # advisor is asked again every `every` presses to keep it fresh
         self.heading: str | None = None
         self.lean, self.every, self.since_ask = lean, every, 0
+        self.effort = effort                           # the advisor's reasoning effort
         self.asked: Counter = Counter()
         self.queue: list[str] = []
         self.since_new = 0
@@ -375,7 +376,7 @@ class ScreenAgent:
         entry: dict[str, Any] = {"node": node, "states_at": len(self.visits)}
         try:
             before = self.advisor.cost
-            text, usage, ms = self.advisor.complete(msgs, max_tokens=3000, extra={"reasoning_effort": "low"})
+            text, usage, ms = self.advisor.complete(msgs, max_tokens=3000, extra={"reasoning_effort": self.effort})
             self.total_cost += self.advisor.cost - before
             presses, why = parse_presses(text, self.buttons)
             goal, book = parse_notebook(text)
