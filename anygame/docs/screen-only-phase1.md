@@ -115,6 +115,23 @@ Asking the advisor to name the game and set goals by its story (10,000 presses f
 sent it to Oak's lab more often (4/8 vs 1/8) but reached Viridian no more often (2/8 vs 3/8) and the Mart on none
 either way; dropped.
 
+## 8. Story memory (tried, dropped)
+
+A journal kept for the whole run: the advisor names the area each call and adds lasting facts (what someone said,
+items, events, blocked ways), and sees up to 6 of the distinct screens since its last call, so dialogue the explorer
+pressed through is read. From power-on, 15,000 presses, 4 seeds each:
+
+| variant | Viridian | Mart | presses in Oak's lab |
+|---|---|---|---|
+| earlier runs without journal (8) | about 2 in 4 | 0 | |
+| journal + goals set by the game's story | 1/4 | 0 | 6,458 on seed 1 |
+| journal only | 0/4 | 0 | |
+
+The model does recognise Pokemon from the title screen and knows the parcel errand, but it misreads where it is
+(it set "heal at the Viridian Pokemon Center" while still in Pallet Town) and the journal fills with screen
+descriptions; following that memory cost progress. The Blue's-house save hides the title screen, so game knowledge
+must be measured from power-on.
+
 ## Where this leaves things
 
 The explorer plus a cheap advisor gets through Pokemon's opening and to Viridian City from pixels alone, and lifts
