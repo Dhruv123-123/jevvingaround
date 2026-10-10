@@ -99,9 +99,23 @@ lies in from here (the way to walk across this area to reach it); the agent lean
 are asked again. Say "none" in menus, fights and dialogues, or when the goal is in no particular direction."""
 
 
-def _png(img_rgb: np.ndarray, scale: int = 3) -> str:
+def _png(img_rgb: np.ndarray, scale: int = 3, grid: int = 0) -> str:
+    """The frame as a PNG data URL, scaled up; with `grid`, faint lines every `grid` native pixels and each column and
+    row numbered from 0, so the model can say where things are in steps."""
     import base64
     big = cv2.resize(img_rgb[:, :, ::-1], None, fx=scale, fy=scale, interpolation=cv2.INTER_NEAREST)
+    if grid:
+        g = grid * scale
+        over = big.copy()
+        for x in range(0, big.shape[1], g):
+            cv2.line(over, (x, 0), (x, big.shape[0]), (0, 0, 255), 1)
+        for y in range(0, big.shape[0], g):
+            cv2.line(over, (0, y), (big.shape[1], y), (0, 0, 255), 1)
+        big = cv2.addWeighted(over, 0.35, big, 0.65, 0)
+        for i, x in enumerate(range(0, big.shape[1], g)):
+            cv2.putText(big, str(i), (x + 2, 10), cv2.FONT_HERSHEY_PLAIN, 0.7, (0, 0, 255), 1)
+        for j, y in enumerate(range(0, big.shape[0], g)):
+            cv2.putText(big, str(j), (1, y + g - 3), cv2.FONT_HERSHEY_PLAIN, 0.7, (0, 0, 255), 1)
     ok, buf = cv2.imencode(".png", big)
     return "data:image/png;base64," + base64.b64encode(buf.tobytes()).decode()
 
@@ -150,7 +164,8 @@ class ScreenAgent:
     def __init__(self, device, seed: int = 0, buttons=BUTTONS, epsilon: float = 0.1, bonus: float = 0.5,
                  place_weight: float = 1.0, place_cell: int = 0, settle: int = 3,
                  frontier: bool = True, advisor=None, stuck: int = 10, max_advice: int = 150,
-                 advice_per_screen: int = 2, lean: float = 2.0, every: int = 50, effort: str = "low"):
+                 advice_per_screen: int = 2, lean: float = 2.0, every: int = 50, effort: str = "low",
+                 grid: bool = False):
         self.place_cell = place_cell
         self.settle = settle
         self.frontier = frontier
@@ -166,6 +181,7 @@ class ScreenAgent:
         self.heading: str | None = None
         self.lean, self.every, self.since_ask = lean, every, 0
         self.effort = effort                           # the advisor's reasoning effort
+        self.grid = grid                               # draw a step grid on the picture the advisor sees
         self.asked: Counter = Counter()
         self.queue: list[str] = []
         self.since_new = 0
@@ -371,7 +387,16 @@ class ScreenAgent:
         parts: list[dict[str, Any]] = [{"type": "text", "text": head}]
         for im in self.recent[:-1] if len(self.recent) > 1 else []:
             parts.append({"type": "image_url", "image_url": {"url": _png(im, 2), "detail": "low"}})
-        parts.append({"type": "image_url", "image_url": {"url": _png(img), "detail": "high"}})
+        grid = 0
+        if self.grid and self.watch is not None:
+            grid = self.watch.steps.most_common(1)[0][0] if self.watch.steps else 16
+            box = self.watch.box(within=0)
+            parts[0]["text"] += (f"\nThe current screen has a faint red grid, one step of the player's ({grid} pixels) per "
+                                 "square, columns and rows numbered from 0 at the top left."
+                                 + (f" The player (or cursor) is in column {(box[0] + box[2] // 2) // grid}, row "
+                                    f"{(box[1] + box[3] // 2) // grid}." if box else "")
+                                 + " Count squares on it to say how many presses a walk takes.")
+        parts.append({"type": "image_url", "image_url": {"url": _png(img, grid=grid), "detail": "high"}})
         msgs = [{"role": "system", "content": ADVICE}, {"role": "user", "content": parts}]
         entry: dict[str, Any] = {"node": node, "states_at": len(self.visits)}
         try:
