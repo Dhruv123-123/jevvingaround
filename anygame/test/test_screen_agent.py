@@ -56,4 +56,5 @@ def test_the_agent_covers_the_room_better_than_chance():
 
 def test_parse_presses():
     assert parse_presses('ok {"why": "go", "presses": ["Right", "jump", "a"]}', ["right", "a"]) == (["right", "a"], "go")
+    assert parse_presses('{"presses": ["up*3", "a*x", "b"]}', ["up", "a", "b"])[0] == ["up", "up", "up", "a", "b"]
     assert parse_presses("no json", ["a"]) == ([], "")

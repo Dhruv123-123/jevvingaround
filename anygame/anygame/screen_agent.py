@@ -83,12 +83,20 @@ class Nodes:
 
 
 ADVICE = """You are helping an agent play a video game it has never seen. It sees only the screen and can press the
-console's buttons: up, down, left, right, a, b, start, select. It has been exploring by trying buttons and has stopped
-finding anything new. Look at the screen (and the earlier screens, oldest first, if given) and say what a person
-would do next to make progress in the game: get past a title or menu, finish a dialogue, walk to an exit, door,
-stairs, person or item that has not been visited, or start the actual game. Answer with JSON only:
-{"why": "<one short sentence>", "presses": ["right", "right", "a", ...]}
-with 1 to 12 presses, in order. Prefer a few deliberate presses toward one goal over many random ones."""
+console's buttons: up, down, left, right, a, b, start, select. It explores by trying buttons and has stopped finding
+anything new. Use what you know about games (and this game, if you recognise it) to say what a person would do next
+to make real progress: get past a title or menu, finish a dialogue, leave a room, head for the next town or area the
+game wants you to reach, talk to someone who matters, win or flee a fight.
+
+You keep a notebook between calls: the current long-term goal and a few short notes (where things are, what worked,
+what did not). Rewrite both each time; keep notes to the facts that will still help later.
+
+Answer with JSON only:
+{"goal": "<the long-term goal, one sentence>", "notes": ["<short fact>", ...], "why": "<one short sentence>",
+ "heading": "up|down|left|right|none", "presses": ["up*6", "right", "a", ...]}
+Presses are in order; "up*6" means up six times. Up to 30 presses in all. "heading" is the screen direction the goal
+lies in from here (the way to walk across this area to reach it); the agent leans its exploring that way until you
+are asked again. Say "none" in menus, fights and dialogues, or when the goal is in no particular direction."""
 
 
 def _png(img_rgb: np.ndarray, scale: int = 3) -> str:
@@ -104,15 +112,45 @@ def parse_presses(text: str, buttons) -> tuple[list[str], str]:
         d = json.loads(text[text.index("{"): text.rindex("}") + 1])
     except (ValueError, AttributeError):
         return [], ""
-    ps = [str(p).lower().strip() for p in (d.get("presses") or []) if str(p).lower().strip() in buttons]
-    return ps[:12], str(d.get("why") or "")[:200]
+    ps: list[str] = []
+    for p in d.get("presses") or []:
+        name, _, times = str(p).lower().strip().partition("*")
+        name = name.strip()
+        if name not in buttons:
+            continue
+        try:
+            n = max(1, min(int(times), 30)) if times else 1
+        except ValueError:
+            n = 1
+        ps += [name] * n
+    return ps[:30], str(d.get("why") or "")[:200]
+
+
+def parse_notebook(text: str) -> tuple[str, list[str]]:
+    import json
+    try:
+        d = json.loads(text[text.index("{"): text.rindex("}") + 1])
+    except (ValueError, AttributeError):
+        return "", []
+    notes = [str(n)[:160] for n in (d.get("notes") or []) if str(n).strip()][:8]
+    return str(d.get("goal") or "")[:200], notes
+
+
+def parse_heading(text: str) -> str | None:
+    import json
+    try:
+        d = json.loads(text[text.index("{"): text.rindex("}") + 1])
+    except (ValueError, AttributeError):
+        return None
+    h = str(d.get("heading") or "").lower().strip()
+    return h if h in ("up", "down", "left", "right") else None
 
 
 class ScreenAgent:
     def __init__(self, device, seed: int = 0, buttons=BUTTONS, epsilon: float = 0.1, bonus: float = 0.5,
                  place_weight: float = 1.0, place_cell: int = 0, settle: int = 3,
                  frontier: bool = True, advisor=None, stuck: int = 30, max_advice: int = 150,
-                 advice_per_screen: int = 2):
+                 advice_per_screen: int = 2, lean: float = 2.0, every: int = 200):
         self.place_cell = place_cell
         self.settle = settle
         self.frontier = frontier
@@ -121,6 +159,12 @@ class ScreenAgent:
         # in order, then exploring resumes
         self.advisor, self.stuck, self.max_advice, self.advice_per_screen = advisor, stuck, max_advice, advice_per_screen
         self.advice: list[dict[str, Any]] = []
+        self.goal, self.notes = "", []                 # the advisor's notebook, handed back to it on every call
+        self.scene = False
+        # the advisor's heading: while it holds, the explorer prefers unexplored places that lie that way, and the
+        # advisor is asked again every `every` presses to keep it fresh
+        self.heading: str | None = None
+        self.lean, self.every, self.since_ask = lean, every, 0
         self.asked: Counter = Counter()
         self.queue: list[str] = []
         self.since_new = 0
@@ -202,9 +246,52 @@ class ScreenAgent:
                     q.append((nxt, first or b))
         return None
 
+    @staticmethod
+    def _xy(state: str) -> tuple[str, int, int] | None:
+        if "@" not in state:
+            return None
+        room, _, xy = state.partition("@")
+        x, _, y = xy.partition(",")
+        return room, int(x), int(y)
+
+    def _lean(self, state: str, limit: int = 3000) -> str | None:
+        """The first button toward the open state that best trades distance for progress along the heading: open
+        places in this room score their known distance minus `lean` times how far they lie the heading's way."""
+        from collections import deque
+        here = self._xy(state)
+        ax, sign = {"up": (1, -1), "down": (1, 1), "left": (0, -1), "right": (0, 1)}[self.heading]
+        best, top = None, None
+        open_here = self._open(state)
+        if self.heading in open_here:
+            return self.heading
+        if open_here:
+            best, top = self.rng.choices(open_here, [PRIOR[b] for b in open_here])[0], 0.0
+        seen = {state}
+        q = deque([(state, None, 0)])
+        while q and len(seen) < limit:
+            s, first, d = q.popleft()
+            if first is not None and self._open(s):
+                xy = self._xy(s)
+                prog = sign * (xy[1 + ax] - here[1 + ax]) if xy and xy[0] == here[0] else 0
+                score = d - self.lean * prog
+                if top is None or score < top:
+                    best, top = first, score
+            for b, outs in self.edges.get(s, {}).items():
+                if not outs:
+                    continue
+                nxt = outs.most_common(1)[0][0]
+                if nxt not in seen:
+                    seen.add(nxt)
+                    q.append((nxt, first or b, d + 1))
+        return best
+
     def choose(self, node: str) -> str:
         if self.rng.random() < self.epsilon:
             return self.rng.choices(self.buttons, [PRIOR[b] for b in self.buttons])[0]
+        if self.frontier and self.lean and self.heading and "@" in node:
+            b = self._lean(node)
+            if b is not None:
+                return b
         if self.frontier:
             open_ = self._open(node)
             if open_:
@@ -246,11 +333,15 @@ class ScreenAgent:
         if not self.recent or self.nodes(self.recent[-1]) != node:
             self.recent = (self.recent + [img])[-3:]
         how = "explore"
-        if not self.queue and self.advisor is not None and self.since_new >= self.stuck and \
-                len(self.advice) < self.max_advice and self.asked[node] < self.advice_per_screen:
+        self.since_ask += 1
+        if not self.queue and self.advisor is not None and len(self.advice) < self.max_advice and (
+                (self.since_new >= self.stuck and self.asked[node] < self.advice_per_screen)
+                or (self.lean and place is not None and self.since_ask >= self.every)):
             self._ask(img, node)
         if self.advice and "states_at" in self.advice[-1] and "new" not in self.advice[-1] and not self.queue:
             self.advice[-1]["new"] = len(self.visits) > self.advice[-1]["states_at"]
+        if self.scene and self.queue:
+            self.queue = []        # the advice was for another screen (a door, a fight broke in): ask again later
         if self.queue:
             b, how = self.queue.pop(0), "advice"
         else:
@@ -263,6 +354,7 @@ class ScreenAgent:
     def _ask(self, img: np.ndarray, node: str) -> None:
         self.asked[node] += 1
         self.since_new = 0
+        self.since_ask = 0
         # what earlier advice did: so it does not send the player back where it already went for nothing
         notes = []
         for e in self.advice[-5:]:
@@ -270,7 +362,9 @@ class ScreenAgent:
                 notes.append(f"- {e['why']} ({' '.join(e.get('presses') or [])}): "
                              + ("found something new" if e.get("new") else "found nothing new"))
         seen_here = self.visits.get(node, 0)
-        head = (f"Screens seen so far: {len(self.nodes.ids)}. This screen has been seen {seen_here} times.\n"
+        book = ((f"Your goal so far: {self.goal}\n" if self.goal else "")
+                + ("Your notes:\n" + "\n".join(f"- {n}" for n in self.notes) + "\n" if self.notes else ""))
+        head = book + (f"Screens seen so far: {len(self.nodes.ids)}. This screen has been seen {seen_here} times.\n"
                 + ("Your earlier advice, oldest first:\n" + "\n".join(notes) + "\n" if notes else "")
                 + "Earlier screens, oldest first, then the current one.")
         parts: list[dict[str, Any]] = [{"type": "text", "text": head}]
@@ -284,7 +378,11 @@ class ScreenAgent:
             text, usage, ms = self.advisor.complete(msgs, max_tokens=3000, extra={"reasoning_effort": "low"})
             self.total_cost += self.advisor.cost - before
             presses, why = parse_presses(text, self.buttons)
-            entry.update(presses=presses, why=why, ms=ms)
+            goal, book = parse_notebook(text)
+            if goal:
+                self.goal, self.notes = goal, book
+            self.heading = parse_heading(text)
+            entry.update(presses=presses, why=why, ms=ms, goal=goal)
             self.queue = list(presses)
         except Exception as e:  # noqa: BLE001 - a failed call costs one chance, not the run
             self.errors += 1
@@ -301,6 +399,7 @@ class ScreenAgent:
             self.room = node
             return None
         eff = self.watch.see(prev, self.last[1] if self.last else None, img)
+        self.scene = eff.scene
         if eff.scene:
             self.room, self.cam = node, [0, 0]
         else:
@@ -312,6 +411,7 @@ class ScreenAgent:
         # a place is one step of the player's (as press-and-watch measured it) on a side
         cell = self.place_cell or max(8, self.watch.steps.most_common(1)[0][0] if self.watch.steps else 16)
         px, py = self.cam[0] + box[0] + box[2] // 2, self.cam[1] + box[1] + box[3] // 2
+        self.cell_at = (self.room, px // cell, py // cell)
         return f"{self.room}@{px // cell},{py // cell}"
 
     def close(self) -> None:
