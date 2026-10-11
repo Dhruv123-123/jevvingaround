@@ -240,6 +240,11 @@ Training to level 13 from Pewter (the gym's real prerequisite), goal seeded, `fi
 |---|---|---|---|
 | as saved (21 of 34 HP), 150 advice calls | 5,000 | 0/6 | 4 lost a battle and woke up at home |
 | full health, up to 1,500 advice calls | 5,000 | 0/6 | none lost; 4 wandered Route 2 and the Forest, 2 went into Pewter buildings |
+| full health, up to 3,000 advice calls | 20,000 | **3/4** (after 11,963 to 16,022 presses) | the fourth ended at level 11 with 4 HP |
+
+So every stage of the first badge now works some of the time on its own except the walk through Viridian Forest:
+parcel pickup 3/6, handover 3/10, Forest 0/6, training to level 13 3/4, Brock with that team 2/6. About $0.55 per
+20,000-press training run.
 
 ## Where this leaves things
 
