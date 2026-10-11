@@ -197,6 +197,22 @@ advisor talks to an aide or Mom and takes it for Oak, reads a bookcase message a
 START. Each stage alone works some of the time; chained, the odds multiply down to near zero. About $0.02 a run at
 the lab, $0.15 for the 6,000-press errand.
 
+## 13. The rest of the route to the first badge, stage by stage
+
+The fixture walker (RAM, test setup only) hands over the parcel, walks Route 2, wins the Viridian Forest trainer
+fights by mashing A, and reaches Pewter with Bulbasaur at level 11. Saves: `route2`, `forest`, `pewter`, `gym-door`.
+Skill tests from those, targets on:
+
+| stage | result | how runs ended |
+|---|---|---|
+| Viridian Forest to Pewter, 5,000 presses | 0/6 | 2 lost a battle and woke up at home, the rest wandered the forest |
+| gym door to the Boulder Badge, 3,000 presses | 0/6 | all 6 lost a trainer battle |
+| same, advice every 10 presses and on every battle screen | 0/6 | 4 lost a battle |
+
+The fixture's own A-mashing also loses in the gym: Bulbasaur at level 11 with Tackle first is not enough for Brock's
+side of the gym. So past the parcel errand, the next missing skill is battles: choosing moves (Leech Seed, Vine Whip
+at level 13), healing at the Pokemon Center, and training up before the gym. Spend on sections 11-13: about $6.6.
+
 ## Where this leaves things
 
 The explorer plus a cheap advisor gets through Pokemon's opening and to Viridian City from pixels alone, and lifts
