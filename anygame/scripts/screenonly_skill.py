@@ -5,7 +5,7 @@ and how fast does it get there? Pokemon Red only (grader-side RAM: the map byte 
 
 e.g. from a Viridian City save, goal "Go into the Poke Mart (the building with the blue roof)", map 42. MAP "parcel"
 runs until Oak's Parcel has been picked up and handed over (it enters the bag at the Mart and leaves it in Oak's lab);
-MAP "badge" runs until the Boulder Badge is won.
+MAP "badge" runs until the Boulder Badge is won; "levelN" until the first party member reaches level N.
 """
 from __future__ import annotations
 import json
@@ -41,7 +41,8 @@ def main() -> None:
     a.goal = goal
     mem = dev._pb.memory
     errand, badge = target == "parcel", target == "badge"
-    target = None if errand or badge else int(target)
+    level = int(target[5:]) if target.startswith("level") else None
+    target = None if errand or badge or level else int(target)
     got = None
     maps = []
     parcel: dict[str, int] = {}
@@ -50,7 +51,11 @@ def main() -> None:
         mp = mem[0xD35E]
         if not maps or maps[-1] != mp:
             maps.append(mp)
-        if badge:
+        if level:
+            if mem[0xD18C] >= level:
+                got = i
+                break
+        elif badge:
             if mem[0xD356] & 1:
                 got = i
                 break
@@ -64,10 +69,11 @@ def main() -> None:
         elif mp == target:
             got = i
             break
+    end = {"map": mem[0xD35E], "level": mem[0xD18C], "hp": mem[0xD16C] * 256 + mem[0xD16D], "badges": mem[0xD356]}
     dev.close()
     shutil.rmtree(work, ignore_errors=True)
     walks = [e.get("walk") for e in a.advice if "target" in e]
-    print(json.dumps({"seed": seed, "reached": got, "maps": maps, "parcel": parcel, "advice": len(a.advice),
+    print(json.dumps({"seed": seed, "reached": got, "maps": maps, "parcel": parcel, "end": end, "advice": len(a.advice),
                       "walks": walks,
                       "log": [{k: e.get(k) for k in ("goal", "why", "target", "walk", "presses", "error") if e.get(k)}
                               for e in a.advice],

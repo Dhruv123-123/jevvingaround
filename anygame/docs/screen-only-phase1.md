@@ -230,6 +230,17 @@ The two health and moves changes are test setup written into the save, the way a
 Pokemon Center and some training. So with a fair team the screen-only agent can win the first badge; what it still
 lacks is getting that team itself (training to level 13 and healing first). About $0.35 a run.
 
+Held-out check with `fights` on (seeds 1-3, `heldout/screen-advice-fights-runs.jsonl`): PostBot 0.4 = 0.4, Renegade
+Rush 0.47 vs 0.4, GBHack 0.33 vs 0.4, Tobu 0.53 vs 0.6, all within noise; Aevilia 0.2 vs 0.53 (as with targets), so
+`fights` stays off by default.
+
+Training to level 13 from Pewter (the gym's real prerequisite), goal seeded, `fights` and `targets` on:
+
+| start | presses | level 13 | how runs ended |
+|---|---|---|---|
+| as saved (21 of 34 HP), 150 advice calls | 5,000 | 0/6 | 4 lost a battle and woke up at home |
+| full health, up to 1,500 advice calls | 5,000 | 0/6 | none lost; 4 wandered Route 2 and the Forest, 2 went into Pewter buildings |
+
 ## Where this leaves things
 
 The explorer plus a cheap advisor gets through Pokemon's opening and to Viridian City from pixels alone, and lifts
