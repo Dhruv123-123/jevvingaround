@@ -4,8 +4,8 @@ From a save, walk to the next map in a route by greedy moves on the RAM position
 run from wild battles. Saves the state on arrival.
 
     python scripts/pokemon_fixture_walk.py IN.state OUT.state 0:10,0 12:-,0 1
-    (each leg is MAP:X,Y, the spot to head for on that map, '-' for any; the last argument is the map to stop on, or
-    MAP@X,Y to stop on a spot)
+    (each leg is MAP:X,Y, the spot to head for on that map, '-' for any, taken in order; the last argument is the map
+    to stop on, or MAP@X,Y to stop on a spot)
 """
 from __future__ import annotations
 import random
@@ -68,11 +68,12 @@ def main() -> None:
         stop, xy = stop.split("@")
         spot = tuple(int(v) for v in xy.split(","))
     stop = int(stop)
-    goals = {}
+    goals = []
     for leg in legs:
         m, xy = leg.split(":")
         gx, gy = xy.split(",")
-        goals[int(m)] = (None if gx == "-" else int(gx), None if gy == "-" else int(gy))
+        goals.append((int(m), None if gx == "-" else int(gx), None if gy == "-" else int(gy)))
+    leg = 0
     rom = tempfile.mkdtemp(prefix="pkfx-") + "/p.gb"
     shutil.copyfile(ROM, rom)
     pb = PyBoy(rom, window="null", sound_emulated=False)
@@ -89,7 +90,9 @@ def main() -> None:
         mp, x, y = m[MAP], m[X], m[Y]
         if mp == stop and (spot is None or (x, y) == spot):
             break
-        d = route(mp, x, y, goals.get(mp, (None, None)), blocked, rng)
+        if leg + 1 < len(goals) and goals[leg][0] != mp and goals[leg + 1][0] == mp:
+            leg += 1        # legs are taken in order, so a map met twice can have two different spots
+        d = route(mp, x, y, goals[leg][1:] if goals[leg][0] == mp else (None, None), blocked, rng)
         if d is None:
             blocked = {b for b in blocked if b[0] != mp}
             continue
