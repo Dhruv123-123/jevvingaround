@@ -162,6 +162,21 @@ pixels which named place the screen matches (or that it is new) and which places
 
 No clear gain; the patch is kept at `screen-only-phase1/place-recognition.patch`.
 
+## 11. Walking to a square the advisor names (commit e47d8e1, `targets`, off by default)
+
+The advisor can answer with `"target": [column, row]` on the step grid and `"then"` presses for arrival; the agent
+walks there itself, step by step, going around steps it has seen blocked. Skill test (`scripts/screenonly_skill.py`)
+from Viridian City saves made by `scripts/pokemon_fixture_walk.py` (a RAM walker used only to make test saves), goal
+"go into the Poke Mart", graded by the map byte:
+
+| start | targets on | targets off |
+|---|---|---|
+| city entrance, 600 presses | 1/4 | 0/4 |
+| 5 steps from the door, 300 presses | 3/6 | 1/6 |
+
+Each run cost about $0.01. The failures are misreading the picture, not walking: the advisor sees a barrier that is
+not there, or walks into the house next door and takes it for the Mart.
+
 ## Where this leaves things
 
 The explorer plus a cheap advisor gets through Pokemon's opening and to Viridian City from pixels alone, and lifts
