@@ -1,0 +1,13 @@
+# Tobu Tobu Girl (Tangram Games, 2017): an arcade platformer, climb by bouncing off enemies before time runs out.
+# Code MIT, assets CC BY 4.0 (github.com/SimonLarsen/tobutobugirl). Addresses found by RAM search against the source's
+# variable order (gamestate.c, game.c): gamestate went 2 → 3 → 4 from title to level select to play, and progress
+# climbs 0..112 as the screen scrolls up (the portal at the top spawns at 112).
+id: tobutobugirl
+kind: platformer
+rom: { url: https://hh3.gbdev.io/static/database-gb/entries/tobutobugirl/tobu.gb, sha256: 5d3871cae77db2287807e8914fd21f76203e73aa3fec20955489d45cb4571d8f, license: "MIT (code), CC BY 4.0 (assets)" }
+milestones:
+  - { id: menu,      desc: "past the title screen, at the level select", when: { u8: 0xC0A4, ge: 3 } }
+  - { id: playing,   desc: "playing the first level",                     when: { u8: 0xC0A4, eq: 4 } }
+  - { id: half,      desc: "climbed half of a level",                     when: { all: [{ u8: 0xC0A4, eq: 4 }, { u8: 0xC0DC, ge: 56 }] } }
+  - { id: cleared,   desc: "cleared the first level",                     when: { u8: 0xC0A7, ge: 1 } }
+  - { id: cleared2,  desc: "cleared the second level",                    when: { u8: 0xC0A7, ge: 2 } }

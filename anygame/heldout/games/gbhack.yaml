@@ -1,0 +1,12 @@
+# GBHack (2026): a NetHack-like roguelike for the Game Boy Color, menus and a message log. Code MIT, art CC0
+# (github.com/statico/gbhack). The Player struct (common.h) was found in RAM by its shape at the start of a game:
+# x, y, hp = max_hp, ac, strength, level 1, xp, gold, nutrition 900, dungeon_level 1, hunger, turns; it sits at 0xC98C.
+id: gbhack
+kind: roguelike
+rom: { url: https://hh3.gbdev.io/static/database-gb/entries/gbhack/gbhack.gbc, sha256: f93a27e8b6272771bbba96105a2754f27ffc3f8317d71c063bdbd60dd0d74527, license: "MIT (code), CC0 (art)" }
+milestones:
+  - { id: started,   desc: "started a game (pet chosen, in the dungeon)", when: { all: [{ u8: 0xC999, ge: 1 }, { u8: 0xC98F, ge: 1 }] } }
+  - { id: dlvl2,     desc: "went down to dungeon level 2",                when: { u8: 0xC999, ge: 2 } }
+  - { id: xlevel2,   desc: "reached experience level 2",                  when: { all: [{ u8: 0xC999, ge: 1 }, { u8: 0xC992, ge: 2 }] } }
+  - { id: dlvl3,     desc: "went down to dungeon level 3",                when: { u8: 0xC999, ge: 3 } }
+  - { id: dlvl5,     desc: "went down to dungeon level 5",                when: { u8: 0xC999, ge: 5 } }

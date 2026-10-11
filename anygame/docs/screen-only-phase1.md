@@ -1,0 +1,180 @@
+# Screen-only phase 1: press-and-watch, a screen agent, Azure advice
+
+Branch `claude/anygame-screen-only-phase1-cbd753`, draft PR #33 on the #31 branch. The agent sees pixels and presses
+buttons; RAM is read only by the graders. Spend so far: **$16.6 Azure logged since Oct 9 20:00Z, of the $100 budget**, $0 Jev.
+
+## 1. Press and watch on pixels (`anygame/perceive/watch.py`)
+
+After each press the watcher finds the background shift (phase correlation plus step-sized candidates), the sprites
+that moved (changed pixels explained by a displacement whose source also changed, ghosts on tiled floors dropped),
+links them into tracks and calls the player the track that follows the d-pad on both axes. A press after which
+nothing at all changed, shortly after walking, is a bump. A walk book keeps walk/block votes per screen cell;
+any cell ever stepped onto is ground.
+
+Scored against OAM/position truth (`scripts/screenonly_watch.py`):
+
+| game | player recall | precision | walk verdicts | walk book right |
+|---|---|---|---|---|
+| Pokemon (Blue's house save) | 0.87 | 0.80 | 336/336 | 96.6% |
+| Pokemon (power-on) | 0.95 | 0.86 | | 94.4% |
+| Aevilia | 0.80 | 1.00 | 223/223 | 88% |
+
+Tobu, PostBot and Renegade have noisy sprite truth; GBHack has no sprites.
+
+## 2. Screen agent (`anygame/screen_agent.py`)
+
+A novelty explorer on a graph of states. A state is the player's place (room fingerprint at the last scene change
+plus camera odometry, in units of the measured step) or, without a player, a tolerant screen fingerprint (8x8 grey
+blocks, at most 3% different). It plans to the nearest state with an untried button, drops buttons that never change
+anything in a kind of state, and lets screens settle for up to 3 frames.
+
+Distinct RAM places reached in 1,500 presses, mean of 5 seeds:
+
+| game | random | agent | agent + advice |
+|---|---|---|---|
+| Pokemon power-on | 91 | 135 | 94 |
+| Pokemon, Blue's house save | 113 | 145 | 161 |
+| Aevilia | 48 | 50 | 71 |
+
+## 3. Advice from Azure
+
+After 30 presses with no new state the agent sends the frame to gpt-5.6-luna (low reasoning), which answers 1 to 12
+presses. It remembers its earlier advice and whether it found something. Capped at 150 calls a run and 2 per screen;
+about $0.0004 a call.
+
+## 4. Scores
+
+Held-out score, screen+advice, 5 seeds, 900 s / 1,500 presses ($0.22 for all 30 runs):
+
+| game | random | agent | normalised |
+|---|---|---|---|
+| Tobu Tobu Girl | 0.56 | 0.56 | 0 |
+| PostBot | 0.40 | 0.40 | 0 |
+| Renegade Rush | 0.24 | 0.40 | +0.21 |
+| GBHack | 0.36 | 0.32 | -0.06 |
+| Aevilia (dev) | 0.08 | 0.20 | +0.13 |
+| Pokemon Red (dev) | 0.15 | 0.24 | +0.11 |
+
+Held-out median 0.0 (no-advice runs gave +0.03). Pokemon Red screen-only reached Route 1 on 3 of 5 seeds; random
+reaches it on none. A 7,000-press power-on run picked a starter by press 2,188-2,300 and reached Route 1 by
+3,405-4,618.
+
+## 5. Notebook and heading (commit 4a7cf78)
+
+The advisor now keeps a notebook (a goal and a few notes, handed back on every call), may answer with repeats
+("up*6", up to 30 presses), and names a heading. While the heading holds, the frontier search prefers open places
+that lie that way (distance minus 2x progress), and the advisor is asked again every 200 presses.
+
+Pokemon Red from Blue's house, 5,000 presses, 8 seeds (`scripts/screenonly_route1.py`):
+
+| | Route 1 | Viridian City | northmost Route 1 y (median, 0 = top) |
+|---|---|---|---|
+| advice, no heading | 8/8 | 0/8 | 28 |
+| advice + heading | 7/8 | 2/8 | 14 |
+
+From power-on, 15,000 presses, 6 runs: starter and Route 1 on all, Viridian City on 3 (presses 4,425, 4,652,
+13,859), Route 22 on 1. About $0.11 of Azure a run. Aevilia places in 1,500 presses with advice: 71 to 79.
+
+Tried and dropped (no gain on the same measures): snapping the odometer to a screen seen before when re-entering a
+room (rooms in one house look alike, and the merge hid new ground), a mode that heads straight out of battles and
+menus (fewer places explored), following advised walks closed-loop around walls, and counting buttons tried on a
+near-identical screen as tried. Battles still take about 30% of presses on Route 1.
+
+## 6. Advice sooner and more often (commit d2a456d)
+
+Asking after 10 stale presses (was 30) and refreshing the heading every 50 presses (was 200). Held-out score,
+screen+advice, 5 seeds, normalised against random:
+
+| game | before | after |
+|---|---|---|
+| Tobu Tobu Girl | 0 | +0.09 |
+| PostBot | 0 | 0 |
+| Renegade Rush | +0.21 | +0.16 |
+| GBHack | +0.06 | +0.06 |
+| **held-out median** | **+0.03** | **+0.08** |
+| Aevilia (dev) | +0.17 | +0.39 |
+| Pokemon Red (dev) | +0.125 | +0.125 |
+
+Medium reasoning instead of low did not help (PostBot 0, Aevilia +0.30). PostBot stays at random: the advisor
+cannot place the editor cursor reliably from the picture. Held-out runs are wall-time bound (900 s), so each advice
+call costs presses; about 40 calls fit in a run.
+
+## 7. Step grid (commit 26f7fb0, off by default) and 30,000-press runs
+
+A faint grid on the advisor's picture, one player step per square, with the player's square named. Pokemon from
+Blue's house, 5,000 presses, 16 seeds: Viridian 4/16 with the grid vs 2/16 without, and half the presses spent in
+battles (854 vs 1,744 a run). On the held-out harness over 10 seeds it scored a little lower (Aevilia 0.24 vs 0.32,
+Pokemon 0.21 vs 0.25), so it stays off until a longer measure decides.
+
+From power-on with the grid, 30,000 presses (about 2 hours of wall time and $1 of Azure each), 4 seeds: Viridian
+City on 3 (presses 5,281, 6,730, 15,799), Route 22 on 2, the parcel errand on none. The advisor's goal stays
+"head north to Pewter", which the game blocks until Oak's parcel is delivered; nothing told it that, and no
+game-specific hint is allowed.
+
+Asking the advisor to name the game and set goals by its story (10,000 presses from Blue's house, 8 seeds each)
+sent it to Oak's lab more often (4/8 vs 1/8) but reached Viridian no more often (2/8 vs 3/8) and the Mart on none
+either way; dropped.
+
+## 8. Story memory (tried, dropped)
+
+A journal kept for the whole run: the advisor names the area each call and adds lasting facts (what someone said,
+items, events, blocked ways), and sees up to 6 of the distinct screens since its last call, so dialogue the explorer
+pressed through is read. From power-on, 15,000 presses, 4 seeds each:
+
+| variant | Viridian | Mart | presses in Oak's lab |
+|---|---|---|---|
+| earlier runs without journal (8) | about 2 in 4 | 0 | |
+| journal + goals set by the game's story | 1/4 | 0 | 6,458 on seed 1 |
+| journal only | 0/4 | 0 | |
+
+The model does recognise Pokemon from the title screen and knows the parcel errand, but it misreads where it is
+(it set "heal at the Viridian Pokemon Center" while still in Pallet Town) and the journal fills with screen
+descriptions; following that memory cost progress. The Blue's-house save hides the title screen, so game knowledge
+must be measured from power-on.
+
+## 9. Cheap reflex knobs for the action games (tried, dropped)
+
+Held-out runs stop on the game-frame budget (36,000 frames), not wall time, so press choice matters more there than
+advice. Screen agent without advice, 5 seeds, against the same agent with defaults (in brackets):
+
+| game | long presses (4x hold) | no settle wait |
+|---|---|---|
+| Tobu Tobu Girl | 0.52 (0.52) | 0.60 (0.52) |
+| PostBot | 0.40 (0.44) | 0.40 (0.44) |
+| Renegade Rush | 0.28 (0.32) | 0.32 (0.32) |
+| GBHack | 0.24 (0.36) | 0.28 (0.36) |
+| Aevilia | 0.28 (0.16) | 0.20 (0.16) |
+| Pokemon Red | 0.23 (0.21) | 0.19 (0.21) |
+
+Both within noise or worse on the held-out games. Moving Tobu or PostBot past random looks like it needs a policy
+that learns from play, not a setting.
+
+## 10. Place recognition (tried, not committed)
+
+The advisor names the area on each call; the name sticks to that screen and room, and later calls are told by
+pixels which named place the screen matches (or that it is new) and which places led to which. From power-on,
+15,000 presses, 4 seeds each:
+
+| | Viridian | first Viridian press | Mart |
+|---|---|---|---|
+| with place recognition | 2/4 | 3,702 and 12,710 | 0 |
+| without | 3/4 | 12,780 to 14,726 | 0 |
+
+No clear gain; the patch is kept at `screen-only-phase1/place-recognition.patch`.
+
+## Where this leaves things
+
+The explorer plus a cheap advisor gets through Pokemon's opening and to Viridian City from pixels alone, and lifts
+the held-out median a little. What stops it now is long-horizon story knowledge (the parcel errand), and the
+held-out action games (Tobu, PostBot) where a slow advisor cannot steer. Each further idea above cost about
+$2 and 1-2 hours to measure on 8-16 seeds, and the last several moved nothing outside noise.
+
+## Cost per game-hour
+
+Advice is the only paid part: at most 150 calls ($0.06) per 1,500-press run, so under $0.25 a game-hour.
+
+## Next
+
+Pokemon past Route 1 (Viridian, the parcel), fewer wasted presses in menus and small rooms, object labelling on Azure.
+
+Data: `screen-only-phase1/` (captures, watch scores, held-out runs).

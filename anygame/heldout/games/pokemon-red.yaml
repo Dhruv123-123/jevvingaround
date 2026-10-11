@@ -1,0 +1,27 @@
+# Pokemon Red: the campaign demo (pokemon-red-spec.md). Never downloaded and never in the repo: the owner puts his
+# own dump at the path below (or ANYGAME_POKEMON_ROM). Milestones are the spec's table, conditions from pret/pokered's
+# RAM map (wCurMap 0xD35E, wPartyCount 0xD163, wObtainedBadges 0xD356). This file is grading only: the agent never
+# reads it (Dhruv's decision, 2026-10-03: the map grades, the agent discovers its own state).
+# Milestones marked "verify" in the spec (Oak's Parcel, HM01 and later event flags) are left out until checked
+# against the ROM; the Pokemon thread adds them here, as `bit:` conditions on the event flags, or replaces the list
+# with `grader: python:<module>:<function>`.
+id: pokemon-red
+kind: rpg
+rom: { path: /mnt/project-files/roms/pokemon-red.gb, env: ANYGAME_POKEMON_ROM, sha1: ea9bcae617fdf159b045185467ae58b2e4a48b9a, license: "commercial: the owner's own copy, never fetched" }
+budget: { frames: 216000, presses: 8000 }        # one game-hour: the campaign is long
+milestones:
+  - { id: bedroom,  desc: "past the intro, in Red's room",              when: { u8: 0xD35E, eq: 0x26 } }
+  - { id: pallet,   desc: "out of the house, in Pallet Town",           when: { u8: 0xD35E, eq: 0x00 }, after: bedroom }
+  - { id: starter,  desc: "has a starter",                              when: { u8: 0xD163, ge: 1 }, after: bedroom }
+  - { id: route1,   desc: "left Pallet Town with a Pokemon",            when: { all: [{ u8: 0xD163, ge: 1 }, { u8: 0xD35E, eq: 0x0C }] }, after: starter }
+  - { id: pewter,   desc: "crossed Viridian Forest to Pewter City",     when: { u8: 0xD35E, eq: 0x02 }, after: route1 }
+  - { id: boulder,  desc: "Boulder Badge",                              when: { bit: 0xD356, n: 0 }, after: bedroom }
+  - { id: cerulean, desc: "crossed Mt. Moon to Cerulean City",          when: { u8: 0xD35E, eq: 0x03 }, after: route1 }
+  - { id: cascade,  desc: "Cascade Badge",                              when: { bit: 0xD356, n: 1 }, after: bedroom }
+  - { id: thunder,  desc: "Thunder Badge",                              when: { bit: 0xD356, n: 2 }, after: bedroom }
+  - { id: rainbow,  desc: "Rainbow Badge",                              when: { bit: 0xD356, n: 3 }, after: bedroom }
+  - { id: soul,     desc: "Soul Badge",                                 when: { bit: 0xD356, n: 4 }, after: bedroom }
+  - { id: marsh,    desc: "Marsh Badge",                                when: { bit: 0xD356, n: 5 }, after: bedroom }
+  - { id: volcano,  desc: "Volcano Badge",                              when: { bit: 0xD356, n: 6 }, after: bedroom }
+  - { id: earth,    desc: "Earth Badge",                                when: { bit: 0xD356, n: 7 }, after: bedroom }
+  - { id: champion, desc: "Hall of Fame",                               when: { u8: 0xD35E, eq: 0x76 }, after: earth }

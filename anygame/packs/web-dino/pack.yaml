@@ -1,0 +1,75 @@
+game: web-dino
+site: chromedino.com
+# Hand-written for the real-web trial (2026-10-01); reflex version 2026-10-02. The game starts at ~360 px/s and
+# speeds up to ~780 px/s; a Jev call takes ~350 ms, during which an obstacle closes 120-270 px. So the rules time
+# every move on the frame (`reflex`, and the `rules`), and Jev sets the policy for birds: it is asked once about
+# each new obstacle, beside the loop (`ask: async`), and its ranking (jump or duck) is used when it arrives.
+screen: { orientation: portrait, size: [540, 560] }
+zones:
+  # the road in front of the dino, 6 px columns, from just past its nose when it ducks (a ducking dino reaches
+  # x 111). Four 10 px rows: head (only a tall cactus or a bird reaches it), chest, waist, low (just above the
+  # ground; a bird with nothing here can be ducked under)
+  ahead:  { rect_px: [114, 222, 540, 262], grid: [71, 4] }
+  front:  { rect_px: [44, 256, 114, 264] }       # under the dino and up to the road: a cactus going under it
+  feet:   { rect_px: [56, 255, 80, 263] }        # the dino's body when it stands or runs; empty while it is in the air
+  sky:    { rect_px: [72, 165, 92, 222] }        # above the dino's head: its body is here only while it jumps
+  banner: { rect_px: [170, 175, 375, 195] }      # "GAME OVER"
+read:
+  road:   { kind: color, zone: ahead, stat: mean, max_dist: 400, options: { ".": "#f7f7f7", "#": "#c8c8c8" } }   # "#": a sixth or more of the cell is ink
+  next:   { kind: gap, in: road, symbol: "#", cell_px: 6, row_names: [head, chest, waist, low], speed0: 380, speed_range: [200, 1200] }
+  under:  { kind: color, zone: front, stat: accent, min_share: 0.03, max_dist: 80, otherwise: clear, options: { clear: "#f7f7f7", ink: "#535353" } }   # any ink: even one thin cactus
+  dino:   { kind: color, zone: feet, stat: mean, max_dist: 400, options: { air: "#f7f7f7", ground: "#808080" } }   # ground: the body fills most of the box
+  above:  { kind: color, zone: sky, stat: accent, min_share: 0.05, max_dist: 80, otherwise: clear, options: { clear: "#f7f7f7", dino: "#535353" } }
+  status: { kind: color, zone: banner, stat: accent, min_share: 0.02, max_dist: 80, otherwise: running, options: { running: "#f7f7f7", over: "#535353" } }
+act:
+  # Chrome ends a jump early when Space comes up after it has risen ~35 px: a 60 ms press is a low jump (~60 px,
+  # ~460 ms in the air), 250 ms the full one (~90 px, ~580 ms). The low jump is too low and too short to time
+  # reliably at 15 frames a second (tried for close pairs on 2026-10-03: worse), so both actions are full jumps.
+  # lock_ms: no other key for 100 ms after the jump. One frame later the screen can still show the dino on the
+  # ground, and if Jev's answer for a bird lands then, a duck key would be a fast drop out of the jump (2026-10-03)
+  - { id: jump, kind: key, key: Space, hold_ms: 250, release: later, again_ms: 60, lock_ms: 100, description: "jump over a cactus or a low bird" }
+  - { id: duck, kind: key, key: ArrowDown, hold_ms: 350, release: later, repeat: hold, description: "duck under a bird flying at chest height" }
+  - { id: drop, kind: key, key: ArrowDown, hold_ms: 40, release: later, description: "in the air: fall fast, to land in time for the next obstacle" }
+  - { id: keep, kind: wait, description: "keep running" }
+tick_hz: 30
+frames: stream                            # a screenshot takes ~40 ms, which held the loop near 15 frames a second
+reflex: { read: next.ttc_ms, lte: 900 }   # an obstacle is closer than one Jev call plus its slack: act on the last answers
+ask: async                                # never wait for Jev: the loop keeps acting on its last answers while it thinks
+ask_when: [{ read: next.px, lte: 384 }, { read: next.age_ms, lte: 300 }]   # once per obstacle: when it is the nearest and fully in view
+stop_when: { read: status, equals: over }
+play: >
+  The Chrome dinosaur runs right and obstacles come from the right. `next` describes the nearest one: `px` is how
+  far ahead it is, `width_px` how wide, `rows` which heights it fills (head, chest, waist, low: with `low` it is a
+  cactus or a low bird and must be jumped; with `head` and `low` it is a tall cactus; without `low` it is a bird
+  to duck under; `none`: the road is clear), `speed` the game's speed in px/s, `ttc_ms` the time until it reaches
+  the dino, and `then_ms` how soon after it the following obstacle arrives (none in view: null). You are asked
+  while it is still far away; your answer is used when it arrives, and the rules time it. Rank the move that
+  clears it first: `jump` for a cactus or a low bird, `duck` for a bird without `low`. `keep` only when the
+  road is clear. `drop` is for the rules.
+questions: []
+rules:
+  # timing is the rules' job: no move before the obstacle is close, then a jump at 205 ms to contact from the
+  # road's start (about 250 ms from the dino's nose)
+  - { if: { read: next.ttc_ms, gte: 206 }, exclude: [jump, duck] }
+  - { if: { read: next.rows, equals: none }, exclude: [jump, duck, drop] }
+  - { if: [{ read: next.ttc_ms, lte: 205 }, { read: dino, equals: ground }, { read: above, equals: clear }], exclude: [keep, drop] }
+  # in the air a jump key does nothing useful, and letting go of Space cuts the jump short (Chrome ends a jump on
+  # key up). A cactus under a jumping dino fills `feet`; then its body shows in `sky`
+  - { if: { read: dino, equals: air }, exclude: [jump, duck] }
+  - { if: { read: above, equals: dino }, exclude: [jump, duck] }
+  # fall fast only in the air, with nothing under the dino, when the obstacle ahead is a new one (the one jumped
+  # has just gone by) and close: the dino lands in time to jump again
+  - { if: { read: dino, equals: ground }, exclude: [drop] }
+  - { if: { read: under, equals: ink }, exclude: [drop] }
+  - { if: { read: next.age_ms, gte: 121 }, exclude: [drop] }         # one press per flight
+  - { if: { read: next.ttc_ms, gte: 416 }, exclude: [drop] }
+  - { if: [{ read: dino, equals: air }, { read: next.age_ms, lte: 120 }, { read: next.ttc_ms, lte: 415 }], exclude: [keep], unless: { read: under, equals: ink } }
+  # a low obstacle cannot be ducked; a bird with nothing low is ducked or jumped, by Jev's ranking, and a bird
+  # only at head height is never jumped into
+  - { if: { read: next.rows, contains: low }, exclude: [duck] }
+  - { if: { read: next.rows, equals: head }, exclude: [jump] }
+tests:
+  - frame: fixtures/running.png
+    expect: { status: running }
+  - frame: fixtures/over.png
+    expect: { status: over }

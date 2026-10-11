@@ -9,7 +9,11 @@ const packsDir = join("..", "packs");
 const packs = {};
 for (const name of readdirSync(packsDir)) {
   const p = join(packsDir, name, "pack.yaml");
-  if (existsSync(p)) packs[name] = readFileSync(p, "utf8");
+  if (!existsSync(p)) continue;
+  const text = readFileSync(p, "utf8");
+  // a pack for an emulator (`emulator:` block: RAM, save states, branching) has no tab to run in; it stays CLI-only
+  if (/^emulator:/m.test(text)) continue;
+  packs[name] = text;
 }
 // the pool index: every pack with a `pool:` section (urls it applies to) becomes an entry other installs can find
 import yaml from "js-yaml";

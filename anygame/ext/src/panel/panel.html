@@ -47,6 +47,22 @@
     <div class="row">
       <label><input type="checkbox" id="improve"> keep learning: after a loss the model revises the pack, the revision must replay better on that loss, the game restarts, and a revision that plays worse is reverted</label>
     </div>
+    <details id="practice">
+      <summary>practice tasks and the episode rater (use the chat model in "keys and models")</summary>
+      <div class="row">
+        <label title="the chat model looks at the screen and proposes new practice tasks on the first and every other episode"><input type="checkbox" id="settasks"> task setter: propose up to</label>
+        <select id="settasksk" style="width:auto" title="tasks proposed per round"><option>1</option><option>2</option><option selected>3</option></select>
+        <span class="dim">tasks on the first and every other episode</span>
+      </div>
+      <div class="row">
+        <button id="proposenow" disabled title="ask the setter now, from the current screen (while playing)">propose tasks now</button>
+        <span id="setterinfo" class="dim">limits are clamped to a sane range; tasks that can never be done are refused</span>
+      </div>
+      <div class="row">
+        <label><input type="checkbox" id="rate"> rate each episode: completion and directedness 0 to 100 from sampled frames (the score when the pack has none)</label>
+      </div>
+      <div id="tasklist" class="dim"></div>
+    </details>
     <details id="authorbox">
       <summary>no pack for this game? write one</summary>
       <input id="game" placeholder="the game in a sentence: 'Tetris, arrow keys rotate and move, space drops'">
@@ -63,9 +79,9 @@
       <label>OpenRouter key (Jev) <input id="k_openrouter" type="password" placeholder="sk-or-…"></label>
       <label>CLM server <input id="k_clmBase" placeholder="http://127.0.0.1:8700 (clm-serve) or a hosted /v1/systemone"></label>
       <label>CLM key (if the host needs one) <input id="k_clmKey" type="password" placeholder="optional"></label>
-      <label>chat model endpoint <input id="k_llmBase" placeholder="https://<resource>.services.ai.azure.com/openai/v1/responses or https://openrouter.ai/api/v1"></label>
+      <label>chat model endpoint <input id="k_llmBase" placeholder="https://<resource>.services.ai.azure.com/openai/v1/responses"></label>
       <label>chat model key <input id="k_llmKey" type="password"></label>
-      <label>chat model / deployment <input id="k_llmModel" placeholder="gpt-5.6-luna or anthropic/claude-sonnet-5"></label>
+      <label>chat model / deployment <input id="k_llmModel" placeholder="your Azure deployment, e.g. gpt-5.6-luna"></label>
       <button id="savekeys">save</button>
       <span class="dim">Keys stay in this browser's extension storage and go only to the endpoints above. Jev sees compiled state, never frames; the chat model sees frames only while authoring.</span>
     </details>
@@ -78,6 +94,8 @@
     <div id="nouls"></div>
     <div id="rules" class="dim"></div>
     <div id="meta" class="dim"></div>
+    <div id="taskline" class="dim"></div>
+    <div id="rating" class="dim"></div>
     <details open>
       <summary class="dim">the paragraph (edit and apply: it takes effect on the next tick)</summary>
       <textarea id="playtext" rows="6"></textarea>

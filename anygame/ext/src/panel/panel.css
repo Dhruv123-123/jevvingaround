@@ -20,3 +20,4 @@ summary { cursor: pointer; }
 .bar.belief > div { background: #fbbf24; }
 pre { font-size: 11px; color: #9ca3af; white-space: pre-wrap; max-height: 22vh; overflow: auto; background: #0d0d0d; border-radius: 6px; padding: 6px; }
 #log { max-height: 26vh; }
+input[type=checkbox] { width: auto; margin: 0 6px 0 0; vertical-align: middle; }

@@ -22,6 +22,7 @@ act:
 tick_hz: 6
 sensor_timeout_s: 0.8
 settle: screen_change
+reflex: { read: head_around.ahead_free, lte: 1 }   # a fresh answer would land after the next step: the rules act on the last answers now
 stop_when: { read: status, equals: dead }
 play: >
   Snake on a 12x12 grid, cells c1..c12 (columns, left to right) by r1..r12 (rows, top to bottom). In `cells`,
@@ -43,7 +44,7 @@ rules:
   - { if: { read: head_around.left,  in: [s, wall] }, exclude: [left] }
   - { if: { read: head_around.right, in: [s, wall] }, exclude: [right] }
   - { if: { read: head_around.ahead, in: [s, wall] }, exclude: [keep] }
-  - { if: { read: head_around.ahead_free, lte: 1 }, exclude: [keep, $head_moving] }
+  - { if: { read: head_around.ahead_free, lte: 1 }, unless: { read: head_around.ahead, equals: F }, exclude: [keep, $head_moving] }
   - { if: { read: head_around.up_space,    lte: 6 }, exclude: [up] }
   - { if: { read: head_around.down_space,  lte: 6 }, exclude: [down] }
   - { if: { read: head_around.left_space,  lte: 6 }, exclude: [left] }

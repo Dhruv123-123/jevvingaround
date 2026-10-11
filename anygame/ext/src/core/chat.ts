@@ -1,6 +1,13 @@
 // One chat-completion client for every model that is not Jev: the authoring model and llm: sensors.
 // Azure OpenAI / Foundry v1 endpoints (paste the portal URL), classic Azure deployments, or any OpenAI-compatible server.
+// There is no default endpoint or model, and OpenRouter is refused: it is for Jev only.
 import type { Keys } from "./sensors.js";
+
+export const NOT_CONFIGURED = "no chat model configured: set the chat model endpoint, key and model in \"keys and models\"";
+
+export function forbidden(base: string): boolean {
+  return base.toLowerCase().includes("openrouter");
+}
 
 export class Chat {
   base: string;
@@ -11,13 +18,15 @@ export class Chat {
   cost = 0;
 
   constructor(keys: Keys, private timeoutMs = 240000) {
-    let base = (keys.llmBase ?? "https://openrouter.ai/api/v1").replace(/\/$/, "");
+    if (!keys.llmBase) throw new Error(NOT_CONFIGURED);
+    let base = keys.llmBase.replace(/\/$/, "");
     if (base.endsWith("/responses") || base.endsWith("/chat/completions")) base = base.slice(0, base.lastIndexOf("/"));
     this.base = base;
     this.api = keys.llmApi ?? (base.endsWith("/openai/v1") || base.includes(".openai.azure.com") ? "azure" : base.includes(".services.ai.azure.com") ? "azure-models" : "openai");
-    this.model = keys.llmModel ?? (base.includes("openrouter") ? "anthropic/claude-sonnet-5" : "");
+    this.model = keys.llmModel ?? "";
     if (!this.model) throw new Error("set the authoring model (on Azure: the deployment name)");
-    this.key = keys.llmKey ?? (base.includes("openrouter") ? keys.openrouter ?? "" : "");
+    if (forbidden(base)) throw new Error("OpenRouter is for Jev only: set the chat model endpoint (e.g. Azure)");
+    this.key = keys.llmKey ?? "";
     if (!this.key) throw new Error(`no key for ${this.base}`);
     this.version = keys.llmApiVersion ?? "2024-10-21";
   }
@@ -36,7 +45,6 @@ export class Chat {
     const body: any = { messages, model: this.model };
     const strict = this.api.startsWith("azure") || /^(gpt-5|o1|o3|o4)/.test(this.model.split("/").pop() ?? "");
     if (strict) body.max_completion_tokens = maxTokens; else { body.max_tokens = maxTokens; body.temperature = temperature; }
-    if (this.base.includes("openrouter")) body.usage = { include: true };
     const t0 = performance.now();
     let r: Response | null = null;
     for (let attempt = 0; attempt < 4; attempt++) {

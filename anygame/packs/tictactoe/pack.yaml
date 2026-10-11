@@ -13,6 +13,13 @@ read:
   empty:     { kind: locate, in: board, symbol: ".", many: true }
 act:
   - { id: mark, kind: tap, zone: board, description: "put an X in a cell" }
+plausible:                                       # what a right reading can never do: a reading that breaks one is read again, never acted on
+  - { read: board, sticky: [X, O] }              # a mark never changes or disappears (a cleared board is a new game)
+  - { read: board, max_changes: 2 }              # our X and the page's O, at most, between two ticks
+  - { read: board, count: [X, O], diff: [0, 1] } # X moves first
+  - { when: { read: status, equals: our_turn }, read: board, count: [X, O], diff: [0, 0] }
+  - { when: { read: status, equals: their_turn }, read: board, count: [X, O], diff: [1, 1] }
+  - { when: { line: board, symbols: [X, O], length: 3 }, require: { read: status, in: [we_won, we_lost] } }
 tick_hz: 3
 act_when:  { read: status, equals: our_turn }
 stop_when: { read: status, in: [we_won, we_lost, draw] }

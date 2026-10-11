@@ -10,7 +10,7 @@ from typing import Any
 
 import numpy as np
 
-from .pack import Pack, PackError, TASK_CATEGORIES, check_tasks
+from .pack import Pack, PackError, TASK_CATEGORIES, SETTER_LIMIT_MAX, SETTER_LIMIT_MIN, check_tasks
 
 SETTER = """You set practice tasks for a game-playing runtime. The player is a fast judgment model that sees only the
 compiled reads below (labels, numbers, cells) and is told one task at a time beside the play notes. A task is
@@ -25,7 +25,7 @@ runs, margin) and thresholds instead. Answer with ONE JSON array of task objects
 [{"id": "<snake_case>", "instruction": "<one line the player follows>",
   "done": {"read": "<read id or id.path>", "equals"|"in"|"not"|"gte"|"lte": <value>}  (or a list of such conditions, all must hold),
   "when": {... optional: when the task is available ...},
-  "hold_ticks": 1, "limit_ticks": <ticks>, "category": "<one of %s>"}]
+  "hold_ticks": 1, "limit_ticks": <ticks, %d to %d>, "category": "<one of %s>"}]
 No prose outside the array."""
 
 
@@ -88,7 +88,7 @@ def propose_tasks(chat, pack: Pack, frame: np.ndarray, values: dict[str, Any], r
             f"EXISTING TASKS: {json.dumps([{kk: t[kk] for kk in ('id', 'instruction', 'done', 'category', 'limit_ticks')} for t in pack.tasks])[:2000]}\n"
             f"RECORD per category (rate = completions / attempts): {json.dumps(st['categories'])}\nWEAKEST categories to prefer: {weak}\n\n"
             f"Propose up to {k} NEW tasks (ids not in the existing list).")
-    messages = [{"role": "system", "content": SETTER % "|".join(TASK_CATEGORIES)},
+    messages = [{"role": "system", "content": SETTER % (SETTER_LIMIT_MIN, SETTER_LIMIT_MAX, "|".join(TASK_CATEGORIES))},
                 {"role": "user", "content": [{"type": "text", "text": text}, {"type": "image_url", "image_url": {"url": _data_url(frame)}}]}]
     out: list[dict[str, Any]] = []
     try:
@@ -110,10 +110,12 @@ def propose_tasks(chat, pack: Pack, frame: np.ndarray, values: dict[str, Any], r
         if not t["id"] or t["id"] in have:
             continue
         try:
-            ok = check_tasks([t], pack.reads, "setter")[0]
+            ok = check_tasks([t], pack.reads, "setter", clamp=(SETTER_LIMIT_MIN, SETTER_LIMIT_MAX), zones=pack.zones)[0]
         except PackError as e:
-            log(f"tasks: rejected {t.get('id')}: {str(e)[:100]}")
+            log(f"tasks: rejected {t.get('id')}: {str(e)[:140]}")
             continue
+        if ok["limit_ticks"] != t.get("limit_ticks", 150):
+            log(f"tasks: {ok['id']}: limit_ticks {t.get('limit_ticks')} clamped to {ok['limit_ticks']} (the setter's range is {SETTER_LIMIT_MIN}..{SETTER_LIMIT_MAX})")
         # a task whose done condition already holds is not a task
         from .loop import Agent
         if all(Agent._cond(c, values) for c in ok["done"]):

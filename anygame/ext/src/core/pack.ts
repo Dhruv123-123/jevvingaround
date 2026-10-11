@@ -26,11 +26,53 @@ export interface Pack {
 export interface TaskDef { id: string; instruction: string; done: Record<string, any>[]; when?: Record<string, any>; hold_ticks: number; limit_ticks: number; category: string; [k: string]: any }
 export const TASK_CATEGORIES = ["navigate", "collect", "score", "survive", "clear", "build", "avoid", "other"];
 
-const condOk = (c: any) => c && typeof c === "object" && "read" in c && ["equals", "in", "not", "gte", "lte"].some((k) => k in c);
+const condOk = (c: any) => c && typeof c === "object" && "read" in c && ["equals", "in", "not", "gte", "lte", "contains"].some((k) => k in c);
+
+// Bounds on a task's tick budget. Any pack: limit_ticks and hold_ticks are whole numbers of at least 1, and the
+// condition must hold for no longer than the attempt lasts. Proposed by the setter (a model guessing at the game):
+// limit_ticks is clamped to [SETTER_LIMIT_MIN, SETTER_LIMIT_MAX]. Same bounds as pack.py.
+export const TASK_LIMIT_MAX = 20000;
+export const SETTER_LIMIT_MIN = 20, SETTER_LIMIT_MAX = 2000;
+
+const whole = (v: any): number | null => (typeof v === "number" && Number.isInteger(v) ? v : null);
+const isNum = (v: any) => typeof v === "number" && Number.isFinite(v);
+
+/** The values a read can take when they are a closed set (a colour read on one rect, or a zone without a grid, with
+ *  named options), else null: open values, or a zone not known here. */
+function labelsOf(r: ReadDef | undefined, zones?: Record<string, Zone>): Set<any> | null {
+  if (!r || r.kind !== "color" || !r.options || typeof r.options !== "object" || Array.isArray(r.options) || r.parse || r.as) return null;
+  if ("zone" in r && (!zones || !zones[r.zone] || zones[r.zone].grid)) return null;
+  return new Set([...Object.keys(r.options), r.otherwise ?? "unknown"]);
+}
+
+/** Why these conditions (all must hold) can never hold together, or "". Same checks as pack.py's _impossible. */
+export function impossibleConds(conds: Record<string, any>[], reads: Record<string, ReadDef>, zones?: Record<string, Zone>): string {
+  const lo: Record<string, number> = {}, hi: Record<string, number> = {};
+  for (const c of conds) {
+    const rid = String(c.read);
+    const labels = labelsOf(reads[rid], zones);
+    const names = () => JSON.stringify([...(labels ?? [])].map(String).sort());
+    for (const op of ["gte", "lte"] as const) {
+      if (!(op in c)) continue;
+      if (!isNum(c[op])) return `${rid} ${op} ${JSON.stringify(c[op])}: a threshold must be a number`;
+      if (labels) return `${rid} gives one of ${names()}, never a number to compare with ${op}`;
+      if (op === "gte") lo[rid] = Math.max(lo[rid] ?? -Infinity, c[op]); else hi[rid] = Math.min(hi[rid] ?? Infinity, c[op]);
+    }
+    if ("in" in c && (!Array.isArray(c.in) || !c.in.length)) return `${rid} in ${JSON.stringify(c.in)}: \`in\` takes a non-empty list`;
+    if (labels) {
+      const want = "equals" in c ? [c.equals] : "in" in c ? c.in : [];
+      const bad = want.filter((v: any) => !labels.has(v));
+      if (bad.length && bad.length === want.length) return `${rid} never reads ${JSON.stringify(bad[0])}: it gives one of ${names()}`;
+    }
+  }
+  for (const rid of Object.keys(lo)) if (rid in hi && lo[rid] > hi[rid]) return `${rid} cannot be at least ${lo[rid]} and at most ${hi[rid]}`;
+  return "";
+}
 
 /** Tasks are goals the runtime can verify from the reads: `done` (one condition or a list that must all hold) marks
- *  completion once it has held `hold_ticks` ticks; `when` says when the task is available; `limit_ticks` bounds the attempt. */
-export function checkTasks(tasks: any, reads: Record<string, ReadDef>, where = "pack"): TaskDef[] {
+ *  completion once it has held `hold_ticks` ticks; `when` says when the task is available; `limit_ticks` bounds the attempt.
+ *  A task that can never complete is refused; `clamp` [lo, hi] pulls limit_ticks into that range first (the setter's). */
+export function checkTasks(tasks: any, reads: Record<string, ReadDef>, where = "pack", clamp?: [number, number], zones?: Record<string, Zone>): TaskDef[] {
   const out: TaskDef[] = []; const seen = new Set<string>();
   for (const t of (tasks ?? []) as any[]) {
     if (!t || typeof t !== "object" || !t.id || !t.instruction || t.done === undefined) throw new PackError(`${where}: every task needs id, instruction and done: {read, equals|in|not|gte|lte} (or a list of them)`);
@@ -38,12 +80,20 @@ export function checkTasks(tasks: any, reads: Record<string, ReadDef>, where = "
     if (seen.has(id)) throw new PackError(`${where}: task '${id}' is listed twice`);
     seen.add(id);
     const conds = Array.isArray(t.done) ? t.done : [t.done];
+    if (!conds.length) throw new PackError(`${where}: task '${id}': done is an empty list`);
     for (const c of [...conds, ...(t.when ? [t.when] : [])]) {
       if (!condOk(c)) throw new PackError(`${where}: task '${id}': a condition is {read: <id or id.path>, equals|in|not|gte|lte: v}`);
       if (!(String(c.read).split(".")[0] in reads)) throw new PackError(`${where}: task '${id}': unknown read '${c.read}'`);
     }
+    const why = impossibleConds(conds, reads, zones) || (t.when ? impossibleConds([t.when], reads, zones) : "");
+    if (why) throw new PackError(`${where}: task '${id}' can never be done: ${why}`);
+    let limit = whole(t.limit_ticks ?? 150); const hold = whole(t.hold_ticks ?? 1);
+    if (limit === null || hold === null) throw new PackError(`${where}: task '${id}': limit_ticks and hold_ticks are whole numbers of ticks`);
+    if (clamp && limit >= 1) limit = Math.max(clamp[0], Math.min(clamp[1], limit));
+    if (limit < 1 || limit > TASK_LIMIT_MAX) throw new PackError(`${where}: task '${id}': limit_ticks ${limit} is outside 1..${TASK_LIMIT_MAX}`);
+    if (hold < 1 || hold > limit) throw new PackError(`${where}: task '${id}': hold_ticks ${hold} must be between 1 and limit_ticks (${limit}), or the task can never be done`);
     const cat = String(t.category ?? "other");
-    out.push({ ...t, id, done: conds, hold_ticks: Number(t.hold_ticks ?? 1), limit_ticks: Number(t.limit_ticks ?? 150), category: TASK_CATEGORIES.includes(cat) ? cat : "other" });
+    out.push({ ...t, id, done: conds, hold_ticks: hold, limit_ticks: limit, category: TASK_CATEGORIES.includes(cat) ? cat : "other" });
   }
   return out;
 }
@@ -72,7 +122,7 @@ export function dumpPack(raw: Record<string, any>): string {
 
 export class PackError extends Error {}
 
-export const READ_KINDS = new Set(["bar", "templates", "ocr", "vocab", "blobs", "color", "locate", "runs", "around", "tetris", "json", "json_grid", "predict", "margin"]);
+export const READ_KINDS = new Set(["bar", "templates", "ocr", "vocab", "blobs", "color", "locate", "runs", "around", "tetris", "json", "json_grid", "predict", "margin", "go", "slide", "head", "gap"]);
 export const QUESTION_TYPES = new Set(["noul", "choice", "score"]);
 
 function parseRect(v: any): Rect {
@@ -113,8 +163,16 @@ export function loadPack(text: string, name = "pack"): Pack {
       if (!(r.in in reads) || r.symbol === undefined) throw new PackError(`${name}: read '${rid}': ${r.kind} needs 'in' (a grid read id) and 'symbol'`);
     } else if (r.kind === "around") {
       if (!(r.of in reads) || !(r.in in reads)) throw new PackError(`${name}: read '${rid}': around needs 'of' and 'in'`);
+    } else if (r.kind === "go") {
+      if (!(r.in in reads)) throw new PackError(`${name}: read '${rid}': go needs 'in' (the board grid read)`);
     } else if (r.kind === "tetris") {
       if (!(r.in in reads)) throw new PackError(`${name}: read '${rid}': tetris needs 'in'`);
+    } else if (r.kind === "slide") {
+      if (!(r.in in reads)) throw new PackError(`${name}: read '${rid}': slide needs 'in' (the 4x4 number grid read), optionally depth and corner`);
+    } else if (r.kind === "gap") {
+      if (!(r.in in reads) || r.symbol === undefined) throw new PackError(`${name}: read '${rid}': gap needs 'in' (a grid read, scanned left to right) and 'symbol' (what counts as an obstacle)`);
+    } else if (r.kind === "head") {
+      if (!(r.in in reads)) throw new PackError(`${name}: read '${rid}': head needs 'in' (a grid read) and 'symbol' (the body's symbol)`);
     } else if (r.kind === "margin") {
       if (!(r.of in reads) || (r.in !== undefined && !(r.in in reads)) || (r.in === undefined && r.lower === undefined && r.upper === undefined)) throw new PackError(`${name}: read '${rid}': margin needs 'of' (a locate read) and 'in' (a grid read), or 'of' (a number read) with lower and/or upper`);
     } else if (r.kind === "predict") {
@@ -148,14 +206,17 @@ export function loadPack(text: string, name = "pack"): Pack {
   if (raw.settle !== undefined && raw.settle !== null && raw.settle !== "screen_change") throw new PackError(`${name}: settle must be 'screen_change'`);
   const rules: Record<string, any>[] = raw.rules ?? [];
   for (const rl of rules) {
-    const c = rl.if ?? {};
-    const okNoul = "noul" in c && ("gte" in c || "lte" in c);
-    const okRead = "read" in c && ["equals", "in", "not", "gte", "lte"].some((k) => k in c);
-    if (!okNoul && !okRead) throw new PackError(`${name}: rule needs if: {noul, gte|lte} or if: {read, equals|in|not|gte|lte}`);
+    const cs: any[] = Array.isArray(rl.if) && rl.if.length ? rl.if : [rl.if ?? {}];   // a list: all must hold
+    for (const c of cs) {
+      const okNoul = c && "noul" in c && ("gte" in c || "lte" in c);
+      if (!okNoul && !condOk(c)) throw new PackError(`${name}: rule needs if: {noul, gte|lte} or if: {read, equals|in|not|gte|lte|contains}`);
+    }
+    if (rl.unless !== undefined && !(Array.isArray(rl.unless) && rl.unless.length ? rl.unless : [rl.unless]).every(condOk))
+      throw new PackError(`${name}: rule 'unless' needs {read, equals|in|not|gte|lte|contains}: the rule does not apply when it holds`);
     if (!["exclude", "set", "avoid", "only"].some((k) => k in rl)) throw new PackError(`${name}: rule needs exclude, set, avoid or only`);
   }
   const tests: Test[] = raw.tests ?? [];
-  const tasks = checkTasks(raw.tasks, reads, name);
+  const tasks = checkTasks(raw.tasks, reads, name, undefined, zones);
   const modes: Record<string, Pack> = {};
   for (const [mn, m] of Object.entries<any>(raw.modes ?? {})) {
     if (!m || typeof m !== "object" || !m.when) throw new PackError(`${name}: mode '${mn}' needs 'when' ({read, equals|in|not} or {fingerprint})`);

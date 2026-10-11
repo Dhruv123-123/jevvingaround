@@ -94,7 +94,8 @@ of ordinary ticks banked from every episode that the decider is re-asked on so a
 everywhere else, an **option-order A/B** on the banked states, a **conformal floor** for the calibrator (at most a
 quarter of revisions as good as the kept ones are refused; no veto until three have been kept), **`margin`**
 reads (the room after each move with the decision latency compensated) and a per-tick **`budget_ms`** that lets
-the rules act on the decider's last answers when the tick cannot afford it. `anygame audit <pack> --sensor jev`
+the rules act on the decider's last answers when the tick cannot afford it. A pack's **`reflex`** condition does the same whenever it holds (Snake: one free cell ahead, where a fresh
+answer would land after the next step); see [docs/snake-reflex.md](docs/snake-reflex.md). `anygame audit <pack> --sensor jev`
 prints all of it for a bank. On the Snake bank it found that listing `keep` first makes Jev want it 45% of the
 time against 20% for no bias and want a rule-excluded move 62% of the time against 28% as authored, and that the
 learned pack still owns one of its four banked losses, the pocket death a one-step rule cannot see.
@@ -113,7 +114,11 @@ done within its limit and done at all (SIMA's two numbers), per category, agains
 the task has one; the pack as written is the held-out number, `--learned` the learned one.
 `anygame learn --rate` adds an **episode rater** (the chat model scores sampled frames and the action log 0 to
 100 for completion and directedness), used as the score where the pack has none and calibrated against the
-trial order the loop already trusts (`anygame audit` reports the agreement). And the input vocabulary grew
+trial order the loop already trusts (`anygame audit` reports the agreement). A task that can never be done is
+refused when the pack loads: a limit under one tick, `hold_ticks` past `limit_ticks`, a threshold that is not a
+number, `gte` above `lte`, or a label a colour read never gives. The setter's own proposals are also held to
+20 to 2000 ticks (clamped, and logged). In the extension, the "practice tasks and the episode rater" box turns
+the setter (with a "propose tasks now" button) and the rater on; the tasks it adds are saved with the pack. And the input vocabulary grew
 for 3D and action games: `key` takes `hold_ms`, `mouse_move` moves the pointer by `dx, dy`, and `chunk` plays
 a short key sequence as one decision, which the demonstration digest proposes from recurring key runs.
 
@@ -242,11 +247,11 @@ loop never notices because score is not the reward.
 ### Which model goes where
 
 Jev always goes to OpenRouter (`OPENROUTER_API_KEY`) or `JEV_BASE_URL`. Every other model call, the authoring
-model and any `llm:` sensor, goes wherever `ANYGAME_LLM_BASE` points:
+model and any `llm:` sensor, goes wherever `ANYGAME_LLM_BASE` points. There is no default: with nothing set,
+authoring, revision and `llm:` sensors stop with a message naming these variables. OpenRouter is for Jev
+only: a chat model pointed at it is refused, whatever the model.
 
 ```bash
-# default: OpenRouter, any model id
-ANYGAME_LLM_MODEL=anthropic/claude-sonnet-5
 # Azure OpenAI / Foundry v1 endpoint: paste the portal's URL as is, the model is your deployment name
 ANYGAME_LLM_BASE=https://<resource>.services.ai.azure.com/openai/v1/responses  ANYGAME_LLM_KEY=<api key>  ANYGAME_LLM_MODEL=<deployment>
 # classic Azure OpenAI deployments endpoint
@@ -437,7 +442,7 @@ anygame author --device "web://games/tictactoe.html" --game "Tic-tac-toe, we are
 ```
 
 The runtime probes the game (start screen, then after taps and arrow keys), hands the frames to a vision
-model (Claude Sonnet through OpenRouter by default, `--model` for any other) with a 50 px pixel grid drawn on
+model (the one `ANYGAME_LLM_*` configures, `--model` for another) with a 50 px pixel grid drawn on
 them, the dominant colours as measured hex codes, the pack format and three real packs, and asks for a
 pack.yaml with tests over those frames. Then it loads the pack, runs every read on every frame, and sends the
 model exactly what its reads saw next to the images, so it corrects colours, rects and expectations. Up to

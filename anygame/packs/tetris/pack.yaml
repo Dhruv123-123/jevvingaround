@@ -12,7 +12,7 @@ read:
   preview: { kind: color, zone: preview, inset: 0.25, max_dist: 60, otherwise: "#",
              options: { ".": "#131a2e", I: "#22d3ee", O: "#facc15", T: "#a855f7", S: "#4ade80", Z: "#f87171", J: "#60a5fa", L: "#fb923c" } }
   status:  { kind: color, zone: status, options: { playing: "#3b82f6", over: "#ef4444" }, max_dist: 90, otherwise: playing }
-  piece:   { kind: tetris, in: board, next_in: preview, empty: ".", top_k: 6, moves_per_row: 3,
+  piece:   { kind: tetris, in: board, next_in: preview, empty: ".", top_k: 6, moves_per_row: 3, lookahead: true,
              keys: { rotate: ArrowUp, left: ArrowLeft, right: ArrowRight, drop: Space } }
 act:
   - { id: place, kind: macro, options: piece, key_ms: 40, description: "rotate, move and hard-drop the piece onto one of the computed landings" }
@@ -23,11 +23,11 @@ act_when:  { read: piece.phase, in: [spawned, falling] }
 stop_when: { read: status, equals: over }
 play: >
   Tetris on a 10x20 board. `piece` is the falling tetromino and `next` the one after it. `landings` are the
-  reachable places this piece can be dropped, each with its computed consequences: lines cleared, holes made
-  (+n is bad), the stack height afterwards, bumpiness, and whether it keeps the well (the deepest column)
-  open for an I piece. Pick the landing that clears lines when the stack is high, otherwise the one that
-  makes no holes and keeps the surface flat and the well open. Prefer a landing that sets up a clear for
-  `next`. `place` is the only useful action; `wait` only when `landings` is empty.
+  reachable places this piece can be dropped, each with its computed consequences (lines cleared, holes made,
+  the stack height afterwards, bumpiness), already ranked best first by a placement score that weighs all of
+  them and also looks ahead to where `next` will fit: `a` is the best by that score. Take `a`. A landing that
+  clears a line now can still be worse than `a`, because `a` may set up a bigger clear with `next`.
+  `place` is the only useful action; `wait` only when `landings` is empty.
 questions:
   - id: stack_dangerous
     type: noul

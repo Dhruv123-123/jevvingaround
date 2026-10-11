@@ -1,0 +1,234 @@
+game: "Snake on playsnake.org — SLUG"
+screen: { orientation: portrait, size: [540, 560] }
+
+zones:
+  board:       { rect_px: [121, 161, 420, 376], grid: [15, 10] }
+  menu_levels: { rect_px: [145, 303, 395, 350], grid: [3, 1] }
+  overlay:     { rect_px: [180, 215, 365, 325] }
+  score:       { rect_px: [118, 384, 130, 402] }
+
+read:
+  cells:
+    kind: color
+    zone: board
+    inset: 0.25
+    max_dist: 40
+    otherwise: "."
+    as: matrix
+    options:
+      ".": "#a9cb65"
+      "s": "#2b3319"
+      "F": "#677d3c"
+
+  food_cells:
+    kind: locate
+    in: cells
+    symbol: F
+    many: true
+
+  food_blobs:
+    kind: blobs
+    zone: board
+    colors:
+      F: "#677d3c"
+    min_area: 2
+    tol: 40
+    max: 20
+
+  snake_blobs:
+    kind: blobs
+    zone: board
+    colors:
+      s: "#2b3319"
+    min_area: 20
+    tol: 40
+    max: 40
+
+  head:
+    kind: locate
+    in: cells
+    symbol: s
+
+  head_around:
+    kind: around
+    of: head
+    in: cells
+    free: [".", F]
+
+  mode:
+    kind: ocr
+    zone: overlay
+    every: 1
+
+  score:
+    kind: ocr
+    zone: score
+    parse: int
+    every: 4
+
+act:
+  - { id: start_slug, kind: tap, zone: menu_levels, description: "start the SLUG level by tapping the left menu cell" }
+  - { id: up, kind: key, key: ArrowUp, description: "turn up into a free cell" }
+  - { id: down, kind: key, key: ArrowDown, description: "turn down into a free cell" }
+  - { id: left, kind: key, key: ArrowLeft, description: "turn left into a free cell" }
+  - { id: right, kind: key, key: ArrowRight, description: "turn right into a free cell" }
+  - { id: keep, kind: wait, description: "continue straight" }
+
+tick_hz: 4
+settle: screen_change
+
+stop_when:
+  read: mode
+  in: ["GAME OUER!", "GAME OVER!"]
+
+play: >
+  On the level menu, choose start_slug. During Go! or 000, use cells, head_around,
+  and food_cells: choose a direction whose head_around direction_free is true and
+  that moves toward a listed food_cells cell; otherwise use keep. Never choose a
+  direction excluded by the safety rules, and stop on GAME OUER! or GAME OVER!.
+
+questions:
+  - id: food_visible
+    type: noul
+    instructions: "Does food_cells list at least one cell?"
+    criteria:
+      true: "Food is visible."
+      false: "No food cell is visible."
+
+  - id: action
+    type: choice
+    instructions: "Choose start_slug on the menu; during play choose a safe turn toward food, or keep moving straight."
+    criteria:
+      start_slug: "Start SLUG."
+      up: "Turn up if head_around.up_free is true."
+      down: "Turn down if head_around.down_free is true."
+      left: "Turn left if head_around.left_free is true."
+      right: "Turn right if head_around.right_free is true."
+      keep: "Continue straight."
+
+rules:
+  - { if: { read: mode, in: ["CH00SE  LEWEL:", "CH00SE LEUEL:", "CHOOSE LEVEL:"] }, set: { start_slug__cell: c1r1 } }
+  - { if: { read: mode, in: ["CH00SE  LEWEL:", "CH00SE LEUEL:", "CHOOSE LEVEL:", "GAME OUER!", "GAME OVER!"] }, exclude: [up, down, left, right, keep] }
+  - { if: { read: mode, in: ["Go!", "000", "GAME OUER!", "GAME OVER!"] }, exclude: [start_slug] }
+  - { if: { read: head_around.up_free, equals: false }, exclude: [up] }
+  - { if: { read: head_around.down_free, equals: false }, exclude: [down] }
+  - { if: { read: head_around.left_free, equals: false }, exclude: [left] }
+  - { if: { read: head_around.right_free, equals: false }, exclude: [right] }
+  - { if: { read: mode, in: ["GAME OUER!", "GAME OVER!"] }, exclude: [up, down, left, right, keep, start_slug] }
+
+tasks:
+  - id: start_slug
+    instruction: "Start the slowest SLUG level."
+    category: navigate
+    done: { read: mode, in: ["Go!", "000"] }
+    hold_ticks: 1
+    limit_ticks: 20
+
+  - id: first_food
+    instruction: "Eat one food."
+    category: collect
+    done: { read: score, gte: 10 }
+    when: { read: mode, in: ["Go!", "000"] }
+    limit_ticks: 120
+
+  - id: survive
+    instruction: "Stay alive during gameplay."
+    category: survive
+    done: { read: mode, not: "GAME OUER!" }
+    when: { read: mode, in: ["Go!", "000"] }
+    hold_ticks: 100
+    limit_ticks: 120
+
+tests:
+  - frame: fixtures/probe-1.png
+    expect:
+      cells:
+        - "..............."
+        - "..............."
+        - ".....s.s...s..."
+        - "...s...sFFsF..."
+        - "..............."
+        - "..............."
+        - "..............."
+        - "..............."
+        - "..............."
+        - "..............."
+      food_cells: [c9r4, c10r4, c12r4]
+      food_blobs: { F: [] }
+      mode: "CH00SE  LEWEL:"
+      score: 0
+
+  - frame: fixtures/probe-2.png
+    expect:
+      cells:
+        - "..............."
+        - "..............."
+        - "..............."
+        - "..............."
+        - "....s..ss......"
+        - "....s..ss......"
+        - ".....s........."
+        - "..............."
+        - "..............."
+        - "..............."
+      food_cells: []
+      food_blobs: { F: [] }
+      mode: "Go!"
+      score: 0
+
+  - frame: fixtures/probe-3.png
+    expect:
+      cells:
+        - "..............."
+        - "..............."
+        - "..............."
+        - "..............."
+        - "..............."
+        - ".......s......."
+        - ".......s......."
+        - "..............."
+        - "..............."
+        - "..............."
+      food_cells: []
+      food_blobs: { F: [] }
+      mode: "000"
+      score: 0
+
+  - frame: fixtures/probe-4.png
+    expect:
+      cells:
+        - "..............."
+        - "..............."
+        - ".....s.s...s..."
+        - "...s...sFFsF..."
+        - "..............."
+        - "..............."
+        - "..............."
+        - ".........sFsss."
+        - ".........sssss."
+        - "..............."
+      food_cells: [c9r4, c10r4, c12r4, c11r8]
+      food_blobs: { F: [] }
+      mode: "CH00SE LEUEL:"
+      score: 0
+
+  - frame: fixtures/probe-5.png
+    expect:
+      cells:
+        - "..............."
+        - "..............."
+        - "..............."
+        - ".....ssF..F...."
+        - "....s.....s...."
+        - ".......s.F....."
+        - ".....Fss.s....."
+        - "..............."
+        - "..............."
+        - ".......F......."
+      food_cells: [c8r4, c11r4, c10r6, c6r7, c8r10]
+      food_blobs:
+        F:
+          - { cell: c4r1, size: large }
+          - { cell: c8r10, size: large }
+      mode: "GAME OUER!"
+      score: 0

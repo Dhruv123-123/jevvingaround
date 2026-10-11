@@ -19,7 +19,11 @@ class Jev:
         if not key:
             raise RuntimeError("set OPENROUTER_API_KEY (or JEV_API_KEY)")
         self.key, self.base, self.model = key, (base or "https://api.typesafe.ai").rstrip("/"), mdl or "jev-latest"
+        if "openrouter" in self.base.lower() and not self.model.startswith("typesafe/jev"):
+            raise RuntimeError(f"OpenRouter is for Jev only, not {self.model}")
         self.timeout = timeout if timeout is not None else float(os.environ.get("ANYGAME_JEV_TIMEOUT", "4"))
+        # Jev's price applies to Jev's hosts; a self-hosted server (CLM on your GPU) costs nothing per call unless it says so
+        self.price = USD_PER_INPUT_TOKEN if any(h in self.base for h in ("openrouter.ai", "typesafe.ai")) else 0.0
         self.s = requests.Session()
 
     def ask(self, state, questions: dict) -> dict:
@@ -40,6 +44,6 @@ class Jev:
             "latency_ms": int((time.perf_counter() - t0) * 1000),
             "server_ms": float(r.headers["X-CLM-Latency-Ms"]) if "X-CLM-Latency-Ms" in r.headers else None,   # CLM reports its own time
             "input_tokens": usage.get("input_tokens", 0),
-            "cost_usd": usage.get("cost", usage.get("input_tokens", 0) * USD_PER_INPUT_TOKEN),
+            "cost_usd": usage.get("cost", usage.get("input_tokens", 0) * self.price),
             "model": j.get("model", self.model),
         }

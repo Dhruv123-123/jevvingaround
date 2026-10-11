@@ -1,0 +1,50 @@
+game: web-snake
+site: playsnake.org
+# Hand-written for the real-web trial (2026-10-01), level "Slug". Head, body and food are all drawn dark on the
+# page; food is a small flower (a lighter mean than a body segment). The head is not drawn differently, so it is
+# derived (`kind: head`): the body cell that newly appeared at an end.
+screen: { orientation: portrait, size: [540, 560] }
+zones:
+  board:  { rect_px: [123, 163, 419, 375], grid: [21, 15] }
+  banner: { rect_px: [195, 218, 340, 262] }          # where "GAME OVER!" is written
+read:
+  cells:  { kind: color, zone: board, stat: mean, inset: 0.1, max_dist: 70, otherwise: ".", as: matrix,
+            options: { ".": "#aacc66", s: "#2b3319", F: "#4d5c2e" } }
+  head:   { kind: head, in: cells, symbol: s, history: 1 }
+  food:   { kind: locate, in: cells, symbol: F }
+  head_around: { kind: around, of: head, in: cells, free: [".", F] }
+  status: { kind: color, zone: banner, stat: mean, max_dist: 60, otherwise: playing, options: { playing: "#a9cb65", dead: "#667a3d" } }
+act:
+  - { id: up,    kind: key, key: ArrowUp,    description: "turn the snake to move up" }
+  - { id: down,  kind: key, key: ArrowDown,  description: "turn to move down" }
+  - { id: left,  kind: key, key: ArrowLeft,  description: "turn to move left" }
+  - { id: right, kind: key, key: ArrowRight, description: "turn to move right" }
+  - { id: keep,  kind: wait, description: "keep going straight" }
+tick_hz: 6
+sensor_timeout_s: 0.8
+stop_when: { read: status, equals: dead }
+play: >
+  Snake on a 21x15 grid, cells c1..c21 (columns, left to right) by r1..r15 (rows, top to bottom). In `cells`,
+  '.' is empty, 's' the snake, 'F' the food. `head` is the head's cell and `head_moving` the current direction.
+  `head_around` says what is next to the head in each direction and straight `ahead` ('.' or 'F' is safe, 's' or
+  wall is death), and `<direction>_free` counts the open cells that way. The snake moves about seven cells a second,
+  so it travels two or three cells while you decide: turn away from a wall early. It cannot reverse. Pick a safe
+  direction that brings the head closer to the food: match the food's column first, then its row. 'keep' only
+  when `ahead` is safe with room to spare and the current direction is toward the food.
+rules:
+  - { if: { read: head_around.up,    in: [s, wall] }, exclude: [up] }
+  - { if: { read: head_around.down,  in: [s, wall] }, exclude: [down] }
+  - { if: { read: head_around.left,  in: [s, wall] }, exclude: [left] }
+  - { if: { read: head_around.right, in: [s, wall] }, exclude: [right] }
+  - { if: { read: head_around.ahead, in: [s, wall] }, exclude: [keep] }
+  - { if: { read: head_around.ahead_free, lte: 4 }, exclude: [keep, $head_moving] }   # 2-3 cells pass between the frame and the key
+  - { if: { read: head_around.up_free,    lte: 2 }, exclude: [up] }       # a turn into less room than that is a turn into the wall
+  - { if: { read: head_around.down_free,  lte: 2 }, exclude: [down] }
+  - { if: { read: head_around.left_free,  lte: 2 }, exclude: [left] }
+  - { if: { read: head_around.right_free, lte: 2 }, exclude: [right] }
+  - { if: { read: head_moving, in: [up, down, left, right] }, exclude: [$head_reverse] }
+tests:
+  - frame: fixtures/play.png
+    expect: { food: c14r4, status: playing }
+  - frame: fixtures/over.png
+    expect: { status: dead }

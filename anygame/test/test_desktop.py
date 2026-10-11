@@ -33,10 +33,18 @@ def _client(log, title="anygame-xclient", display=":97"):
     raise RuntimeError("the x client did not start")
 
 
+def _desktop_extra():
+    import importlib.util
+    missing = [m for m in ("mss", "pynput", "Xlib") if importlib.util.find_spec(m) is None]   # not imported: pynput needs a display
+    if missing:
+        pytest.skip(f"desktop extra not installed ({', '.join(missing)}): pip install -e '.[desktop]'")
+
+
 @pytest.fixture(scope="module")
 def xdisplay():
     if not XVFB:
         pytest.skip("no Xvfb")
+    _desktop_extra()
     p = _xvfb("97")
     saved = os.environ.get("DISPLAY")
     os.environ["DISPLAY"] = ":97"
@@ -164,6 +172,7 @@ def test_window_device_delivers_keys_and_clicks_to_one_window_only(xdisplay, tmp
 def test_nested_display_runs_the_game_in_a_sandbox_the_runtime_owns(tmp_path):
     if not XVFB:
         pytest.skip("no Xvfb")
+    _desktop_extra()
     from anygame.device import open_device
     log = str(tmp_path / "events.txt")
     run = f"{sys.executable} {os.path.join(ROOT, 'test', 'xclient.py')} {log} sandboxed 400 300"

@@ -1,8 +1,9 @@
 // Perception: pixels → values, and the derived reads that do the counting Jev must never do
 // (locate, runs, around). OCR / templates / detectors are not available in the extension and read as null.
 import { crop, inset, type Frame, type Rect } from "./geometry.js";
-import { accentColor, hexToRgb, labDist, meanColor, medianColor, nearestNamed, rgbToLab, type RGB } from "./color.js";
+import { accentColor, isHollow, hexToRgb, labDist, meanColor, medianColor, nearestNamed, rgbToLab, type RGB } from "./color.js";
 import type { Pack, ReadDef } from "./pack.js";
+import { goRead } from "./go.js";
 
 export type Values = Record<string, any>;
 
@@ -22,6 +23,7 @@ function sample(img: Frame, r: ReadDef): RGB {
 
 function labelOf(img: Frame, r: ReadDef, hit?: { n: number; ok: number }): any {
   if (!img.width || !img.height) return r.otherwise ?? "unknown";
+  if ((r.stat ?? "median") === "accent" && r.hollow !== undefined && r.hollow !== null && isHollow(img, Number(r.min_share ?? 0.03), 40, Number(r.inset ?? 0))) return r.hollow;
   const options: Record<string, string> = {};
   for (const [k, v] of Object.entries(r.options ?? {})) options[String(k)] = String(v);
   const [name, dist] = nearestNamed(sample(img, r), options);
@@ -214,8 +216,9 @@ export function readAll(pack: Pack, frame: Frame, only?: Set<string>, state?: an
       case "bar": values[rid] = readBar(frame, pack, r); conf[rid] = 1; break;
       case "locate": values[rid] = locate(values[r.in], r); if (!r.many) conf[rid] = values[rid] ? 1 : 0; break;
       case "runs": values[rid] = runsOf(values[r.in], r); break;
-      case "around": case "tetris": case "predict": case "margin": continue;
-      default: values[rid] = null;   // ocr, templates, blobs, vocab: not in the extension
+      case "go": values[rid] = goRead(values[r.in], r); break;
+      case "around": case "tetris": case "predict": case "margin": case "slide": case "head": continue;
+      default: values[rid] = null;   // ocr, templates, blobs, vocab, gap: not in the extension
     }
     timings[rid] = Math.round((performance.now() - t0) * 10) / 10;
   }
