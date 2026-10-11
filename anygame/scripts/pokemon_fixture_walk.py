@@ -5,7 +5,7 @@ run from wild battles. Saves the state on arrival.
 
     python scripts/pokemon_fixture_walk.py IN.state OUT.state 0:10,0 12:-,0 1
     (each leg is MAP:X,Y, the spot to head for on that map, '-' for any, taken in order; the last argument is the map
-    to stop on, or MAP@X,Y to stop on a spot)
+    to stop on, or MAP@X,Y to stop on a spot; a leg ending in '!' faces up and talks on arrival, as with Oak)
 """
 from __future__ import annotations
 import random
@@ -26,11 +26,14 @@ def press(pb, b, hold=6, after=20):
 
 
 def flee(pb):
-    """Mash through a wild battle: B to clear text, then RUN (bottom right of the battle menu)."""
-    for _ in range(400):
+    """Get through a battle: try RUN (bottom right of the battle menu) from wild ones; trainers refuse, so then fight
+    with the first move by mashing A."""
+    for k in range(600):
         if not pb.memory[BATTLE]:
             return
-        press(pb, "down"); press(pb, "right"); press(pb, "a", after=60); press(pb, "b", after=30)
+        if pb.memory[BATTLE] == 1 and k % 4 == 0:
+            press(pb, "down"); press(pb, "right"); press(pb, "a", after=60)
+        press(pb, "a", after=40)
 
 
 def route(mp, x, y, goal, blocked, rng):
@@ -52,7 +55,7 @@ def route(mp, x, y, goal, blocked, rng):
         for d in order:
             dx, dy = DIRS[d]
             nx, ny = cx + dx, cy + dy
-            if (mp, cx, cy, d) in blocked or (nx, ny) in seen or not (-1 <= nx <= 60 and -1 <= ny <= 60):
+            if (mp, cx, cy, d) in blocked or (nx, ny) in seen or not (-1 <= nx <= 120 and -1 <= ny <= 120):
                 continue
             seen[(nx, ny)] = ((cx, cy), d)
             todo.append((nx, ny))
@@ -71,8 +74,9 @@ def main() -> None:
     goals = []
     for leg in legs:
         m, xy = leg.split(":")
-        gx, gy = xy.split(",")
-        goals.append((int(m), None if gx == "-" else int(gx), None if gy == "-" else int(gy)))
+        talk = xy.endswith("!")
+        gx, gy = xy.rstrip("!").split(",")
+        goals.append((int(m), None if gx == "-" else int(gx), None if gy == "-" else int(gy), talk))
     leg = 0
     rom = tempfile.mkdtemp(prefix="pkfx-") + "/p.gb"
     shutil.copyfile(ROM, rom)
@@ -82,26 +86,44 @@ def main() -> None:
     pb.tick(2)
     rng = random.Random(0)
     blocked: set = set()
+    doors: set = set()
     m = pb.memory
     for i in range(20000):
         if m[BATTLE]:
             flee(pb)
             continue
         mp, x, y = m[MAP], m[X], m[Y]
+        if i % 400 == 399:
+            blocked.clear()             # a step seen blocked behind a person or a text box may be open now
         if mp == stop and (spot is None or (x, y) == spot):
             break
         if leg + 1 < len(goals) and goals[leg][0] != mp and goals[leg + 1][0] == mp:
             leg += 1        # legs are taken in order, so a map met twice can have two different spots
-        d = route(mp, x, y, goals[leg][1:] if goals[leg][0] == mp else (None, None), blocked, rng)
+        g = goals[leg]
+        if not g[3] and (mp, x, y) == g[:3] and leg + 1 < len(goals) and goals[leg + 1][0] == mp:
+            leg += 1                    # a waypoint on this map: on to the next one
+            g = goals[leg]
+        if g[3] and (mp, x, y) == g[:3]:
+            press(pb, "up")             # face up and talk (Oak across his desk), then read through the scene
+            for _ in range(80):
+                press(pb, "a", after=30)
+            leg = min(leg + 1, len(goals) - 1)
+            continue
+        if g[0] != mp:      # wandered back onto an earlier map: head for that map's exit again
+            g = next((h for h in reversed(goals[:leg]) if h[0] == mp and not h[3]), (mp, None, None, False))
+        d = route(mp, x, y, g[1:3], blocked | doors, rng)
         if d is None:
             blocked = {b for b in blocked if b[0] != mp}
             continue
         press(pb, d, hold=8, after=12)
+        if m[MAP] != mp and m[MAP] != goals[leg][0] and not (leg + 1 < len(goals) and m[MAP] == goals[leg + 1][0]):
+            doors.add((mp, x, y, d))    # a door off the route: never take it again
         if (m[MAP], m[X], m[Y]) == (mp, x, y) and not m[BATTLE]:
             press(pb, "b")
             if (m[MAP], m[X], m[Y]) == (mp, x, y):
                 blocked.add((mp, x, y, d))
-    print("map", m[MAP], "x", m[X], "y", m[Y], "presses", i)
+    print("map", m[MAP], "x", m[X], "y", m[Y], "presses", i, "leg", leg, "bag", [m[0xD31E + 2 * k] for k in range(min(m[0xD31D], 20))])
+    pb.screen.image.save(out + ".png")
     if m[MAP] == stop and (spot is None or (m[X], m[Y]) == spot):
         for _ in range(60):
             pb.tick()
