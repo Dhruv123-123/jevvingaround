@@ -157,6 +157,13 @@ to (the agent walks there itself and goes around walls), and "then": the presses
 or short moves."""
 
 
+FIGHTS = """
+In a turn-based fight, do not just press A through it: read the screen. Open the attack list and pick the attack that
+suits the matchup (one the foe is weak to, or one that drains or weakens a strong foe), one menu step at a time, and
+say which attack and why. Watch both health bars. When yours is low, heal with an item or switch; when a fight keeps
+being lost, first train on easier foes nearby and heal at the healing place, then come back."""
+
+
 def parse_heading(text: str) -> str | None:
     import json
     try:
@@ -172,7 +179,7 @@ class ScreenAgent:
                  place_weight: float = 1.0, place_cell: int = 0, settle: int = 3,
                  frontier: bool = True, advisor=None, stuck: int = 10, max_advice: int = 150,
                  advice_per_screen: int = 2, lean: float = 2.0, every: int = 50, effort: str = "low",
-                 grid: bool = False, targets: bool = False):
+                 grid: bool = False, targets: bool = False, fights: bool = False):
         self.place_cell = place_cell
         self.settle = settle
         self.frontier = frontier
@@ -191,6 +198,7 @@ class ScreenAgent:
         # targets: the advisor may name a grid square to walk to; the agent walks there itself, step by step and
         # around what blocks it (it sees the player move or not), then plays the advice's remaining presses
         self.targets = targets
+        self.fights = fights            # tell the advisor how to fight turn by turn instead of mashing A
         self.grid = grid or targets                    # draw a step grid on the picture the advisor sees
         self.nav: dict[str, Any] | None = None
         self.asked: Counter = Counter()
@@ -462,7 +470,7 @@ class ScreenAgent:
                                     f"{(box[1] + box[3] // 2) // grid}." if box else "")
                                  + " Count squares on it to say how many presses a walk takes.")
         parts.append({"type": "image_url", "image_url": {"url": _png(img, grid=grid), "detail": "high"}})
-        msgs = [{"role": "system", "content": ADVICE + (TARGETS if self.targets else "")},
+        msgs = [{"role": "system", "content": ADVICE + (TARGETS if self.targets else "") + (FIGHTS if self.fights else "")},
                 {"role": "user", "content": parts}]
         entry: dict[str, Any] = {"node": node, "states_at": len(self.visits)}
         try:
