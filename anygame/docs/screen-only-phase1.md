@@ -177,6 +177,26 @@ from Viridian City saves made by `scripts/pokemon_fixture_walk.py` (a RAM walker
 Each run cost about $0.01. The failures are misreading the picture, not walking: the advisor sees a barrier that is
 not there, or walks into the house next door and takes it for the Mart.
 
+Held-out check with targets on (seeds 1-3, `heldout/screen-advice-targets-runs.jsonl`): PostBot, Renegade Rush and
+GBHack score the same as without (0.4 each), Tobu 0.53 against 0.6 (noise). Aevilia, a dev game, drops from 0.53 to
+0.2, so targets stays off by default.
+
+## 12. Oak's parcel, stage by stage
+
+The skill test grades the errand by the bag (MAP `parcel`: the parcel enters at the Mart and leaves in Oak's lab).
+Starts are fixture saves (`states/` in the data folder), goal text seeded into the advisor's notebook:
+
+| stage | targets on | targets off |
+|---|---|---|
+| near the Mart: get the parcel, 6,000 presses | 3/6 picked up, 3 of those reached the lab, 0 handed over | 2/6 picked up |
+| same, 1,000 advice calls instead of 150 | 2/6 picked up, 0 handed over | |
+| lab door with the parcel: hand it over, 600 presses | 3/10 | 1/4 |
+
+The goal survives in the notebook all the way (logged in `skill-handover/`). The failures are reading the room: the
+advisor talks to an aide or Mom and takes it for Oak, reads a bookcase message as Oak's, or decides the game wants
+START. Each stage alone works some of the time; chained, the odds multiply down to near zero. About $0.02 a run at
+the lab, $0.15 for the 6,000-press errand.
+
 ## Where this leaves things
 
 The explorer plus a cheap advisor gets through Pokemon's opening and to Viridian City from pixels alone, and lifts
