@@ -4,7 +4,8 @@ and how fast does it get there? Pokemon Red only (grader-side RAM: the map byte 
     python scripts/screenonly_skill.py STATE GOAL MAP SEED PRESSES '{"targets": true}'
 
 e.g. from a Viridian City save, goal "Go into the Poke Mart (the building with the blue roof)", map 42. MAP "parcel"
-runs until Oak's Parcel has been picked up and handed over (it enters the bag at the Mart and leaves it in Oak's lab).
+runs until Oak's Parcel has been picked up and handed over (it enters the bag at the Mart and leaves it in Oak's lab);
+MAP "badge" runs until the Boulder Badge is won.
 """
 from __future__ import annotations
 import json
@@ -39,8 +40,8 @@ def main() -> None:
     a = ScreenAgent(dev, seed=seed, advisor=chat, **kw)
     a.goal = goal
     mem = dev._pb.memory
-    errand = target == "parcel"
-    target = None if errand else int(target)
+    errand, badge = target == "parcel", target == "badge"
+    target = None if errand or badge else int(target)
     got = None
     maps = []
     parcel: dict[str, int] = {}
@@ -49,7 +50,11 @@ def main() -> None:
         mp = mem[0xD35E]
         if not maps or maps[-1] != mp:
             maps.append(mp)
-        if errand:
+        if badge:
+            if mem[0xD356] & 1:
+                got = i
+                break
+        elif errand:
             held = has_parcel(mem)
             if held:
                 parcel.setdefault("got", i)
