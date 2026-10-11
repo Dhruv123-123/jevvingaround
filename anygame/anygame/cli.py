@@ -109,12 +109,12 @@ def _match(expected, got, tol=0.05):
 def cmd_eval(a):
     import cv2
     import numpy as np
-    from .jev import Jev
     from .loop import Agent
     from .pack import load_pack
     from .perceive import read_all
+    from .sensors import open_sensor
     pack = load_pack(find_pack(a.pack))
-    jev = Jev() if a.sensor == "jev" else None
+    jev = open_sensor(a.sensor) if a.sensor in ("jev", "openai", "default") or a.sensor.startswith("openai:") else None
     failed = 0
     print(f"{pack.name}  sensor={a.sensor}")
     for t in pack.tests:
@@ -228,7 +228,7 @@ def _start_fresh(device):
         device.reload()
 
 
-def cmd_play_inline(pack_dir, device_url: str, ticks: int, log_path: str | None = None, sensor: str = "jev", record_dir: str | None = None) -> dict:
+def cmd_play_inline(pack_dir, device_url: str, ticks: int, log_path: str | None = None, sensor: str = "default", record_dir: str | None = None) -> dict:
     """Play a pack for N ticks and return the summary (used by `author --play-ticks` and `bench`)."""
     from .device import open_device
     from .loop import Agent
@@ -907,7 +907,7 @@ def main(argv=None):
     p = argparse.ArgumentParser(prog="anygame", description="One paragraph, any game.")
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("packs").set_defaults(fn=cmd_packs)
-    pl = sub.add_parser("play"); pl.add_argument("pack"); pl.add_argument("--device", default=os.environ.get("DEVICE", "adb")); pl.add_argument("--sensor", default="jev", help="jev | none | random[:seed] | llm:<model>"); pl.add_argument("--saves", default=None, help="a directory: a save state at each graded milestone (emulator devices)")
+    pl = sub.add_parser("play"); pl.add_argument("pack"); pl.add_argument("--device", default=os.environ.get("DEVICE", "adb")); pl.add_argument("--sensor", default="default", help="default (openai if OPENAI_API_KEY is set, else jev) | openai[:<model>] | jev | none | random[:seed] | llm:<model>"); pl.add_argument("--saves", default=None, help="a directory: a save state at each graded milestone (emulator devices)")
     pl.add_argument("--audit", type=int, default=0, help="Jev audit: play Jev's pick and the top-ranked pick this many decisions forward from a save state when they differ")
     pl.add_argument("--audit-max", dest="audit_max", type=int, default=None, help="at most this many audits played out")
     pl.add_argument("--checkpoint", default=None, help="a directory: the run's state (emulator, world, memory, goals) saved there")
@@ -923,7 +923,7 @@ def main(argv=None):
     pl.add_argument("--record", help="save annotated frames here (then `anygame render`)")
     pl.add_argument("--coach", action="store_true", help="suggest every move on the HUD and never perform it (for games whose anti-cheat forbids injected input)"); pl.set_defaults(fn=cmd_play)
     ln = sub.add_parser("learn", help="play episode after episode; a loss becomes a revision that must replay better; keep what plays better")
-    ln.add_argument("pack"); ln.add_argument("--device", default=os.environ.get("DEVICE", "adb")); ln.add_argument("--sensor", default="jev")
+    ln.add_argument("pack"); ln.add_argument("--device", default=os.environ.get("DEVICE", "adb")); ln.add_argument("--sensor", default="default")
     ln.add_argument("--episodes", type=int, default=5, help="0 = forever"); ln.add_argument("--max-ticks", type=int, default=None); ln.add_argument("--goal", default=None)
     ln.add_argument("--fallback", action="store_true", help="VLM fallback on screens the pack cannot read (restart prompts, game-over cards)")
     ln.add_argument("--bank", default=None, help="where episodes and incidents go (default <pack>/bank)"); ln.add_argument("--out", default=None, help="the learned pack (default <pack>/pack.learned.yaml)")
@@ -932,7 +932,7 @@ def main(argv=None):
     ln.add_argument("--fresh", action="store_true", help="ignore an existing learned pack"); ln.add_argument("--no-requery", dest="requery", action="store_false", help="do not re-ask the decider on banked states when judging a revision"); ln.set_defaults(fn=cmd_learn, requery=True)
     su = sub.add_parser("suite", help="the evaluation suite: packs with tasks over seeds; per task done within its limit and at all, per category, against a reference")
     su.add_argument("packs", help="comma-separated pack names"); su.add_argument("--device", required=True, help="use {seed} where the seed goes"); su.add_argument("--seeds", default="1,2,3")
-    su.add_argument("--sensor", default="jev"); su.add_argument("--max-ticks", type=int, default=300); su.add_argument("--learned", action="store_true", help="evaluate pack.learned.yaml instead of the pack as written")
+    su.add_argument("--sensor", default="default"); su.add_argument("--max-ticks", type=int, default=300); su.add_argument("--learned", action="store_true", help="evaluate pack.learned.yaml instead of the pack as written")
     su.add_argument("--out", default=None, help="append one row per task run to this jsonl"); su.set_defaults(fn=cmd_suite)
     ad = sub.add_parser("audit", help="what the bank says about a pack: question value, ignored reads, option-order A/B, counterfactual return on banked losses")
     ad.add_argument("pack"); ad.add_argument("--bank", default=None); ad.add_argument("--out", default=None, help="the learned pack to audit (default <pack>/pack.learned.yaml if it exists)")
@@ -947,7 +947,7 @@ def main(argv=None):
     au.add_argument("--model", default=None, help="authoring model (deployment name on Azure); default $ANYGAME_LLM_MODEL, routed by $ANYGAME_LLM_BASE")
     au.add_argument("--play-ticks", type=int, default=0, help="after the pack passes, play it for N ticks")
     au.add_argument("--tune", type=int, default=0, help="rounds of play → digest → revised paragraph/questions/rules (needs --play-ticks)")
-    au.add_argument("--sensor", default="jev", help="sensor used for the play rounds: jev | random | llm:<model>")
+    au.add_argument("--sensor", default="default", help="sensor used for the play rounds: default | openai | jev | random | llm:<model>")
     au.add_argument("--score-read", default=None, help="read id that measures progress, for keeping the best pack")
     au.add_argument("--resume", action="store_true", help="start from the pack and probe frames already in --out (revise it instead of probing and writing anew)")
     au.add_argument("--demo", default=None, help="a demonstration directory (from `anygame explore` or the extension) to author from instead of probing"); au.set_defaults(fn=cmd_author)
@@ -959,15 +959,15 @@ def main(argv=None):
     go.add_argument("device", help="web://<url or file>, pyboy://<rom>, adb://<host:port>"); go.add_argument("--game", default=None, help="the game's name and anything the model should know")
     go.add_argument("--play", default=None, help="how you want it played"); go.add_argument("--packs", default=os.environ.get("ANYGAME_HOME", os.path.expanduser("~/.anygame/packs")))
     go.add_argument("--hud", type=int, default=int(os.environ.get("HUD_PORT", "8080"))); go.add_argument("--max-ticks", type=int, default=None); go.add_argument("--size", default="540x560")
-    go.add_argument("--model", default=None); go.add_argument("--tune", type=int, default=1); go.add_argument("--play-ticks", type=int, default=40); go.add_argument("--sensor", default="jev")
+    go.add_argument("--model", default=None); go.add_argument("--tune", type=int, default=1); go.add_argument("--play-ticks", type=int, default=40); go.add_argument("--sensor", default="default")
     go.add_argument("--fresh", action="store_true", help="from scratch: ignore a cached pack, the pool and its lessons"); go.add_argument("--explore", type=int, default=0, metavar="SECONDS", help="let the vision model play first and author from that demonstration"); go.add_argument("--rounds", type=int, default=3, help="authoring rounds until the pack passes its tests"); go.add_argument("--pack", default=None, help="use this bundled pack instead of authoring")
     go.set_defaults(fn=cmd_go)
     bt = sub.add_parser("battle", help="two packs on one screen, alternating turns")
-    bt.add_argument("pack_a"); bt.add_argument("pack_b"); bt.add_argument("--device", required=True); bt.add_argument("--sensor", default="jev")
+    bt.add_argument("pack_a"); bt.add_argument("pack_b"); bt.add_argument("--device", required=True); bt.add_argument("--sensor", default="default")
     bt.add_argument("--sensor-a", default=None); bt.add_argument("--sensor-b", default=None); bt.add_argument("--max-ticks", type=int, default=200); bt.add_argument("--log", default=None)
     bt.set_defaults(fn=cmd_battle)
     bn = sub.add_parser("bench", help="one pack, several seeds, one sensor: outcomes, latency and cost")
-    bn.add_argument("pack"); bn.add_argument("--device", required=True, help="use {seed} where the seed goes"); bn.add_argument("--sensor", default="jev")
+    bn.add_argument("pack"); bn.add_argument("--device", required=True, help="use {seed} where the seed goes"); bn.add_argument("--sensor", default="default")
     bn.add_argument("--seeds", default="1,2,3"); bn.add_argument("--max-ticks", type=int, default=200); bn.add_argument("--score-read", default=None)
     bn.add_argument("--out", default="bench"); bn.add_argument("--append", default=None, help="append the summary row to this jsonl")
     bn.set_defaults(fn=cmd_bench)
