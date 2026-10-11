@@ -150,6 +150,13 @@ def parse_notebook(text: str) -> tuple[str, list[str]]:
     return str(d.get("goal") or "")[:200], notes
 
 
+TARGETS = """
+To send the player somewhere on this screen, you can instead give "target": [column, row], the grid square to walk
+to (the agent walks there itself and goes around walls), and "then": the presses to make on arrival (for example
+["up"] to step into a door above, or ["a"] to talk to someone in front). Give "presses" only for menus, dialogue,
+or short moves."""
+
+
 def parse_heading(text: str) -> str | None:
     import json
     try:
@@ -165,7 +172,7 @@ class ScreenAgent:
                  place_weight: float = 1.0, place_cell: int = 0, settle: int = 3,
                  frontier: bool = True, advisor=None, stuck: int = 10, max_advice: int = 150,
                  advice_per_screen: int = 2, lean: float = 2.0, every: int = 50, effort: str = "low",
-                 grid: bool = False):
+                 grid: bool = False, targets: bool = False):
         self.place_cell = place_cell
         self.settle = settle
         self.frontier = frontier
@@ -181,7 +188,11 @@ class ScreenAgent:
         self.heading: str | None = None
         self.lean, self.every, self.since_ask = lean, every, 0
         self.effort = effort                           # the advisor's reasoning effort
-        self.grid = grid                               # draw a step grid on the picture the advisor sees
+        # targets: the advisor may name a grid square to walk to; the agent walks there itself, step by step and
+        # around what blocks it (it sees the player move or not), then plays the advice's remaining presses
+        self.targets = targets
+        self.grid = grid or targets                    # draw a step grid on the picture the advisor sees
+        self.nav: dict[str, Any] | None = None
         self.asked: Counter = Counter()
         self.queue: list[str] = []
         self.since_new = 0
@@ -204,6 +215,7 @@ class ScreenAgent:
         self.watch = Watcher() if place_weight else None
         self.place_weight = place_weight
         self.room: str | None = None
+        self.cell_at: tuple[str, int, int] | None = None
         self.cam = [0, 0]
         self.prev_img: np.ndarray | None = None
         self.total_cost = 0.0
@@ -239,6 +251,45 @@ class ScreenAgent:
             if not outs or (sum(outs.values()) < 2 and set(outs) == {state}):
                 out.append(b)
         return out
+
+    STEP = {"up": (0, -1), "down": (0, 1), "left": (-1, 0), "right": (1, 0)}
+
+    def _target(self, text: str, entry: dict[str, Any]) -> None:
+        """Advice with a "target" square: walk there closed-loop, then play its "then" presses."""
+        import json
+        try:
+            d = json.loads(text[text.index("{"): text.rindex("}") + 1])
+            col, row = (int(v) for v in d.get("target") or [])
+        except (ValueError, TypeError, AttributeError):
+            return
+        box = self.watch.box(within=0) if self.watch is not None else None
+        if self.cell_at is None or box is None or not self.watch.steps:
+            return
+        step = self.watch.steps.most_common(1)[0][0]
+        pc, pr = (box[0] + box[2] // 2) // step, (box[1] + box[3] // 2) // step
+        room, cx, cy = self.cell_at
+        then = [str(p).lower() for p in (d.get("then") or []) if str(p).lower() in self.buttons][:6]
+        dist = abs(col - pc) + abs(row - pr)
+        self.nav = {"room": room, "tx": cx + col - pc, "ty": cy + row - pr, "left": 3 * dist + 12, "then": then,
+                    "been": Counter(), "entry": entry}
+        entry["target"] = [col, row]
+        self.queue = []
+
+    def _toward(self, state: str, n: dict[str, Any]) -> str:
+        """One step toward the target: the d-pad press that most shortens the way, never one that has walked into
+        a wall from here, and avoiding squares already stood on during this walk."""
+        _, cx, cy = self.cell_at
+        n["been"][(cx, cy)] += 1
+        best, top = None, None
+        for b, (sx, sy) in self.STEP.items():
+            outs = self.edges.get(state, {}).get(b)
+            if outs and sum(outs.values()) >= 2 and outs.most_common(1)[0][0] == state:
+                continue
+            nx, ny = cx + sx, cy + sy
+            score = abs(n["tx"] - nx) + abs(n["ty"] - ny) + 1.5 * n["been"][(nx, ny)] + self.rng.random() * 0.1
+            if top is None or score < top:
+                best, top = b, score
+        return best or self.rng.choice(list(self.STEP))
 
     @staticmethod
     def _kind(state: str) -> str:
@@ -351,7 +402,7 @@ class ScreenAgent:
             self.recent = (self.recent + [img])[-3:]
         how = "explore"
         self.since_ask += 1
-        if not self.queue and self.advisor is not None and len(self.advice) < self.max_advice and (
+        if not self.queue and self.nav is None and self.advisor is not None and len(self.advice) < self.max_advice and (
                 (self.since_new >= self.stuck and self.asked[node] < self.advice_per_screen)
                 or (self.lean and place is not None and self.since_ask >= self.every)):
             self._ask(img, node)
@@ -359,7 +410,21 @@ class ScreenAgent:
             self.advice[-1]["new"] = len(self.visits) > self.advice[-1]["states_at"]
         if self.scene and self.queue:
             self.queue = []        # the advice was for another screen (a door, a fight broke in): ask again later
-        if self.queue:
+        b = None
+        if self.nav is not None:
+            n = self.nav
+            if self.scene or place is None or self.cell_at is None or self.cell_at[0] != n["room"] or n["left"] <= 0:
+                n["entry"]["walk"] = "scene" if self.scene else "lost" if place is None else "gave up"
+                self.nav = None
+            elif self.cell_at[1:] == (n["tx"], n["ty"]):
+                n["entry"]["walk"] = "arrived"
+                self.queue, self.nav = list(n["then"]), None
+            else:
+                n["left"] -= 1
+                b, how = self._toward(state, n), "walk"
+        if b is not None:
+            pass
+        elif self.queue:
             b, how = self.queue.pop(0), "advice"
         else:
             b = self.choose(state)
@@ -397,7 +462,8 @@ class ScreenAgent:
                                     f"{(box[1] + box[3] // 2) // grid}." if box else "")
                                  + " Count squares on it to say how many presses a walk takes.")
         parts.append({"type": "image_url", "image_url": {"url": _png(img, grid=grid), "detail": "high"}})
-        msgs = [{"role": "system", "content": ADVICE}, {"role": "user", "content": parts}]
+        msgs = [{"role": "system", "content": ADVICE + (TARGETS if self.targets else "")},
+                {"role": "user", "content": parts}]
         entry: dict[str, Any] = {"node": node, "states_at": len(self.visits)}
         try:
             before = self.advisor.cost
@@ -410,6 +476,8 @@ class ScreenAgent:
             self.heading = parse_heading(text)
             entry.update(presses=presses, why=why, ms=ms, goal=goal)
             self.queue = list(presses)
+            if self.targets:
+                self._target(text, entry)
         except Exception as e:  # noqa: BLE001 - a failed call costs one chance, not the run
             self.errors += 1
             entry["error"] = str(e)[:200]
@@ -437,6 +505,7 @@ class ScreenAgent:
         # a place is one step of the player's (as press-and-watch measured it) on a side
         cell = self.place_cell or max(8, self.watch.steps.most_common(1)[0][0] if self.watch.steps else 16)
         px, py = self.cam[0] + box[0] + box[2] // 2, self.cam[1] + box[1] + box[3] // 2
+        self.cell_at = (self.room, px // cell, py // cell)
         self.cell_at = (self.room, px // cell, py // cell)
         return f"{self.room}@{px // cell},{py // cell}"
 
