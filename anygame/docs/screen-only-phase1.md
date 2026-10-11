@@ -213,6 +213,23 @@ The fixture's own A-mashing also loses in the gym: Bulbasaur at level 11 with Ta
 side of the gym. So past the parcel errand, the next missing skill is battles: choosing moves (Leech Seed, Vine Whip
 at level 13), healing at the Pokemon Center, and training up before the gym. Spend on sections 11-13: about $6.6.
 
+## 14. The gym with a fights hint (commit 71d5cf0, `fights`, off by default)
+
+`fights` adds a paragraph to the advisor prompt: read the fight, open the attack list and pick an attack that suits
+the matchup, watch both health bars, heal or train on easier foes when a fight keeps being lost. With it the advisor
+stops mashing A and picks moves (it chose Leech Seed against Diglett). All from the gym door, advice every 10 presses
+and on every battle screen, 3,000 presses:
+
+| start | Boulder Badge |
+|---|---|
+| as the fixture walker left it (Bulbasaur level 11, 21 of 34 HP) | 0/6 |
+| same, full health | 0/6 |
+| full health, and Vine Whip in place of Growl (learned at level 13) | **2/6** (after 657 and 2,703 presses) |
+
+The two health and moves changes are test setup written into the save, the way a player would arrive after a
+Pokemon Center and some training. So with a fair team the screen-only agent can win the first badge; what it still
+lacks is getting that team itself (training to level 13 and healing first). About $0.35 a run.
+
 ## Where this leaves things
 
 The explorer plus a cheap advisor gets through Pokemon's opening and to Viridian City from pixels alone, and lifts
