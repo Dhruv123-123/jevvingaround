@@ -246,6 +246,12 @@ loop never notices because score is not the reward.
 
 ### Which model goes where
 
+The decider answers the pack's typed questions every tick. `--sensor default` (the default) uses OpenAI's
+Decisions API (`POST /v1/decisions`, `gpt-6-luna`, input tokens only at $0.10/M) when `OPENAI_API_KEY` is set, else
+Jev. The questions are the same: a Jev `noul` goes out as a Decisions `predicate`, choices and score levels map
+one to one, and answers come back in Jev's shape (`anygame/decisions.py`). Pick one explicitly with
+`--sensor openai[:<model>]` or `--sensor jev`, or set `ANYGAME_SENSOR`.
+
 Jev always goes to OpenRouter (`OPENROUTER_API_KEY`) or `JEV_BASE_URL`. Every other model call, the authoring
 model and any `llm:` sensor, goes wherever `ANYGAME_LLM_BASE` points. There is no default: with nothing set,
 authoring, revision and `llm:` sensors stop with a message naming these variables. OpenRouter is for Jev
@@ -535,7 +541,7 @@ anygame play <pack> --device <url> --fallback [--goal "…"]                # VL
 anygame learn <pack> --device <url> --episodes 5 [--fallback] [--max-ticks N]   # episodes; a loss → a replay-verified revision; keep what plays better
 anygame stamp [pack …]                                                    # fixture fingerprints into pack.yaml, for the pool
 anygame battle <pack-a> <pack-b> --device <url> [--sensor-a …] [--sensor-b …]
-anygame bench <pack> --device "<url with {seed}>" --sensor jev|random|llm:<model> --seeds 1,2,3 [--score-read score]
+anygame bench <pack> --device "<url with {seed}>" --sensor openai|jev|random|llm:<model> --seeds 1,2,3 [--score-read score]
 ```
 
 `--sensor none` runs perception and the HUD with no model, for authoring a pack against a live screen.
