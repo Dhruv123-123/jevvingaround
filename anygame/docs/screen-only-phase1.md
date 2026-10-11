@@ -177,6 +177,10 @@ from Viridian City saves made by `scripts/pokemon_fixture_walk.py` (a RAM walker
 Each run cost about $0.01. The failures are misreading the picture, not walking: the advisor sees a barrier that is
 not there, or walks into the house next door and takes it for the Mart.
 
+Held-out check with targets on (seeds 1-3, `heldout/screen-advice-targets-runs.jsonl`): PostBot, Renegade Rush and
+GBHack score the same as without (0.4 each), Tobu 0.53 against 0.6 (noise). Aevilia, a dev game, drops from 0.53 to
+0.2, so targets stays off by default.
+
 ## Where this leaves things
 
 The explorer plus a cheap advisor gets through Pokemon's opening and to Viridian City from pixels alone, and lifts
