@@ -46,6 +46,8 @@ def main() -> None:
     shutil.rmtree(work, ignore_errors=True)
     walks = [e.get("walk") for e in a.advice if "target" in e]
     print(json.dumps({"seed": seed, "reached": got, "maps": maps, "advice": len(a.advice), "walks": walks,
+                      "log": [{k: e.get(k) for k in ("why", "target", "walk", "presses", "error") if e.get(k)}
+                              for e in a.advice],
                       "usd": round(a.total_cost, 4)}))
 
 

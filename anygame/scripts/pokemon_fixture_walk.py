@@ -4,7 +4,8 @@ From a save, walk to the next map in a route by greedy moves on the RAM position
 run from wild battles. Saves the state on arrival.
 
     python scripts/pokemon_fixture_walk.py IN.state OUT.state 0:10,0 12:-,0 1
-    (each leg is MAP:X,Y, the spot to head for on that map, '-' for any; the last number is the map to stop on)
+    (each leg is MAP:X,Y, the spot to head for on that map, '-' for any; the last argument is the map to stop on, or
+    MAP@X,Y to stop on a spot)
 """
 from __future__ import annotations
 import random
@@ -32,10 +33,41 @@ def flee(pb):
         press(pb, "down"); press(pb, "right"); press(pb, "a", after=60); press(pb, "b", after=30)
 
 
+def route(mp, x, y, goal, blocked, rng):
+    """First step of a shortest path to the goal over the steps not yet seen blocked (unseen steps count as open)."""
+    gx, gy = goal
+    if gx is None and gy is None:
+        return rng.choice(list(DIRS))
+    from collections import deque
+    order = list(DIRS)
+    rng.shuffle(order)
+    seen = {(x, y): None}
+    todo = deque([(x, y)])
+    while todo:
+        cx, cy = todo.popleft()
+        if (gx is None or cx == gx) and (gy is None or cy == gy):
+            while seen[(cx, cy)] is not None and seen[(cx, cy)][0] != (x, y):
+                cx, cy = seen[(cx, cy)][0]
+            return seen[(cx, cy)][1] if seen[(cx, cy)] else rng.choice(order)
+        for d in order:
+            dx, dy = DIRS[d]
+            nx, ny = cx + dx, cy + dy
+            if (mp, cx, cy, d) in blocked or (nx, ny) in seen or not (-1 <= nx <= 60 and -1 <= ny <= 60):
+                continue
+            seen[(nx, ny)] = ((cx, cy), d)
+            todo.append((nx, ny))
+    return None
+
+
 def main() -> None:
     from pyboy import PyBoy
     src, out, *legs = sys.argv[1:]
-    stop = int(legs.pop())
+    stop = legs.pop()
+    spot = None
+    if "@" in stop:
+        stop, xy = stop.split("@")
+        spot = tuple(int(v) for v in xy.split(","))
+    stop = int(stop)
     goals = {}
     for leg in legs:
         m, xy = leg.split(":")
@@ -55,26 +87,19 @@ def main() -> None:
             flee(pb)
             continue
         mp, x, y = m[MAP], m[X], m[Y]
-        if mp == stop:
+        if mp == stop and (spot is None or (x, y) == spot):
             break
-        gx, gy = goals.get(mp, (None, None))
-        opts = []
-        for d, (dx, dy) in DIRS.items():
-            if (mp, x, y, d) in blocked:
-                continue
-            dist = (abs(x + dx - gx) if gx is not None else 0) + (abs(y + dy - gy) if gy is not None else 0)
-            opts.append((dist + rng.random() * 3, d))
-        if not opts:
+        d = route(mp, x, y, goals.get(mp, (None, None)), blocked, rng)
+        if d is None:
             blocked = {b for b in blocked if b[0] != mp}
             continue
-        d = min(opts)[1] if rng.random() < 0.8 else rng.choice(opts)[1]
         press(pb, d, hold=8, after=12)
         if (m[MAP], m[X], m[Y]) == (mp, x, y) and not m[BATTLE]:
             press(pb, "b")
             if (m[MAP], m[X], m[Y]) == (mp, x, y):
                 blocked.add((mp, x, y, d))
     print("map", m[MAP], "x", m[X], "y", m[Y], "presses", i)
-    if m[MAP] == stop:
+    if m[MAP] == stop and (spot is None or (m[X], m[Y]) == spot):
         for _ in range(60):
             pb.tick()
         with open(out, "wb") as f:
