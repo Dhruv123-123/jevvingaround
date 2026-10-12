@@ -404,6 +404,19 @@ the counter. So the next stage to add is the one the advisor already asks for: a
 before the Forest, which heals and moves the respawn point next to the Forest. Data:
 `screen-only-phase1/chain-viridian-badge/`.
 
+### 18.1 A Viridian Center walk book
+
+24 test-helper walks (`viridian-demos/`, 12 from the Route 1 arrival square and 12 from the Mart door, each after
+0-49 random steps) from Viridian City into its Pokemon Center and up to the nurse, labelled as one two-map book
+with `pokemon_walk_labels.py 'viridian-demos/*.npz' viridian-pc-book.npz 41:3,3:north` (775 screens, 98 of 101
+squares reach the counter). From a save on the Viridian arrival square after Oak's errand
+(`states/viridian-after-oak.state`), goal "heal at Viridian City's Pokemon Center", target `respawn1`:
+
+| heal at the Viridian Center | runs | presses | Azure |
+|---|---|---|---|
+| advisor only | 0/4 (all walked south to Route 1 and Pallet) | - | $0.06-0.09 a run |
+| **with the Viridian book** | **4/4** | 82, 313, 627, 683 | $0.002-0.024 a run |
+
 ## Where this leaves things
 
 The explorer plus a cheap advisor gets through Pokemon's opening and to Viridian City from pixels alone, and lifts
