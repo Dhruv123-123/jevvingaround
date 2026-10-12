@@ -36,7 +36,8 @@ PRICES = {"gpt-5.6-luna": (0.22, 1.32)}
 # which part of anygame made the call, from the calling module
 PURPOSES = {"author": "authoring", "explore": "authoring", "learn": "learn loop", "diagnose": "learn loop", "goals": "goals",
             "tiletext": "tiletext", "fallback": "vision", "sensors": "llm sensor", "rater": "rater", "tasks": "tasks",
-            "demo": "demo", "cellbook": "screen-only perception", "screenonly_run": "screen-only perception"}
+            "demo": "demo", "cellbook": "screen-only perception", "screenonly_run": "screen-only perception",
+            "screen_agent": "screen-only agent"}
 _LEDGER_LOCK = threading.Lock()
 
 
@@ -50,6 +51,16 @@ def ledger_path() -> Path | None:
         return None
     shared = Path("/mnt/project-files/anygame")
     return shared / "azure-usage.jsonl" if shared.is_dir() else Path.home() / ".anygame" / "usage.jsonl"
+
+
+def append_line(path: Path, line: str) -> None:
+    """Append one line with a single O_APPEND write, so lines from processes writing the same ledger at once never
+    interleave (a buffered text write can split a line across two writes)."""
+    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+    try:
+        os.write(fd, (line.rstrip("\n") + "\n").encode())
+    finally:
+        os.close(fd)
 
 
 def price(model: str, usage: dict[str, Any]) -> float:
@@ -195,8 +206,7 @@ class Chat:
         try:
             with _LEDGER_LOCK:
                 path.parent.mkdir(parents=True, exist_ok=True)
-                with open(path, "a") as f:
-                    f.write(json.dumps(entry) + "\n")
+                append_line(path, json.dumps(entry))
         except OSError:
             pass                      # a full or read-only disk never stops a run
         return usd

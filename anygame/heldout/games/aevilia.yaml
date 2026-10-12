@@ -1,0 +1,14 @@
+# Aevilia (AevilDev team, 2017): a Game Boy Color RPG tech demo; intro tutorial, then the player's house and a town.
+# Apache-2.0 (github.com/ISSOtm/Aevilia-GB). wLoadedMap was found by RAM search (it read the intro map's id, 2, then
+# MAP_PLAYER_HOUSE_2F, 5, when the tutorial ended); map ids from constants/maps.asm. Startham's id is 0, the same as
+# before any map has loaded, so those milestones need the earlier one.
+# Aevilia is a development game (roadmap section 6): worked on openly, scored, but outside the held-out aggregate.
+id: aevilia
+kind: rpg
+rom: { url: https://hh3.gbdev.io/static/database-gb/entries/aevilia/aevilia.gbc, sha256: 67e784ed61846bc84bfe9f45b9da343371eec6b896ed1b945b64c0aec7aa735b, license: Apache-2.0 }
+milestones:
+  - { id: tutorial,  desc: "finished the intro tutorial, in the player's bedroom", when: { u8: 0xC3C4, eq: 5 } }
+  - { id: downstairs, desc: "went downstairs",                                   when: { u8: 0xC3C4, eq: 4 }, after: tutorial }
+  - { id: outside,   desc: "left the house into Startham",                       when: { u8: 0xC3C4, eq: 0 }, after: downstairs }
+  - { id: forest,    desc: "reached Startham forest",                            when: { u8: 0xC3C4, eq: 3 }, after: outside }
+  - { id: visit,     desc: "entered another house in Startham",                  when: { u8: 0xC3C4, in: [6, 7] }, after: outside }

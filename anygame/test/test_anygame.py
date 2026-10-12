@@ -351,6 +351,59 @@ def test_random_sensor_and_llm_answer_parsing(monkeypatch):
     assert open_sensor("none") is None
 
 
+
+def test_openai_decisions_sensor_wire_shape(monkeypatch):
+    """Jev questions go out as Decisions questions and the answers come back in Jev's shape."""
+    from anygame.sensors import open_sensor
+    from anygame.decisions import Decisions, default_sensor
+    qs = {"action": {"type": "choice", "instructions": "Which?", "criteria": {"left": "go left", "right": None}},
+          "hold": {"type": "noul", "instructions": "Hold?", "criteria": {True: "nothing threatens", False: "a threat"}},
+          "threat": {"type": "score", "instructions": "How bad?", "criteria": ["none", "some", "lots"]},
+          "pick": {"type": "choice", "instructions": "Which?", "criteria": {"a": None, "b": None}},
+          "only": {"type": "choice", "instructions": "Which?", "criteria": {"x": None}}}
+    sent = {}
+
+    class Resp:
+        status_code = 200
+        headers = {"openai-processing-ms": "12"}
+        text = ""
+        def json(self):
+            return {"model": "gpt-6-luna", "usage": {"input_tokens": 300}, "answers": [
+                {"type": "choice", "name": "action", "choice": "right", "confidence": 0.8,
+                 "probabilities": [{"value": "left", "probability": 0.1}, {"value": "right", "probability": 0.9}]},
+                {"type": "predicate", "name": "hold", "probability": 0.25},
+                {"type": "score", "name": "threat", "score": 1.4, "confidence": 0.6,
+                 "probabilities": [{"value": 0, "label": "none", "probability": 0.1}, {"value": 1, "label": "some", "probability": 0.4},
+                                   {"value": 2, "label": "lots", "probability": 0.5}]},
+                {"type": "refusal", "name": "pick"}]}
+
+    def post(url, json=None, **k):
+        sent["url"], sent["body"] = url, json
+        return Resp()
+
+    monkeypatch.delenv("ANYGAME_SENSOR", raising=False)
+    monkeypatch.delenv("ANYGAME_DECISIONS_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    assert default_sensor() == "jev"
+    monkeypatch.setenv("OPENAI_API_KEY", "x")
+    assert default_sensor() == "openai"
+    s = open_sensor("default")
+    assert isinstance(s, Decisions) and s.model == "gpt-6-luna"
+    monkeypatch.setattr(s.s, "post", post)
+    out = s.ask({"screen": {"a": 1}}, qs)
+    assert sent["url"] == "https://api.openai.com/v1/decisions"
+    wire = {q["name"]: q for q in sent["body"]["questions"]}
+    assert wire["action"]["choices"] == [{"value": "left", "description": "go left"}, {"value": "right"}]
+    assert wire["hold"]["type"] == "predicate" and "nothing threatens" in wire["hold"]["instructions"]
+    assert [l["label"] for l in wire["threat"]["levels"]] == ["none", "some", "lots"]
+    assert isinstance(sent["body"]["input"], str)
+    a = out["answers"]
+    assert a["action"] == {"type": "choice", "choice": "right", "probabilities": {"left": 0.1, "right": 0.9}, "confidence": 0.8}
+    assert a["hold"] == {"type": "noul", "noul": 0.25} and a["threat"]["score"] == 1.4
+    assert "pick" not in a and a["only"]["choice"] == "x" and "only" not in wire   # refused: left out; one option: never sent
+    assert out["input_tokens"] == 300 and abs(out["cost_usd"] - 300 * 0.10 / 1e6) < 1e-12
+    assert open_sensor("openai:other-model").model == "other-model"
+
 # ---------- authoring with tuning: the model is stubbed, the runtime is real ----------
 
 def test_author_tune_loop_plays_digests_and_keeps_a_passing_pack(monkeypatch, tmp_path):

@@ -3,6 +3,7 @@ the same packs measure judgment per dollar across models (`anygame bench`) and s
 a key (`random`).
 
   jev            TypeSafe Jev (anygame.jev.Jev)
+  openai         OpenAI's Decisions API, the same typed questions (anygame.decisions.Decisions)
   random         uniform choices, nouls at 0.5: the floor every model must beat
   top            the first option of every choice: where the compiler ranks options best first, this is "take the
                  compiler's top pick", the offline stand-in that says how much of a result is the ranking's
@@ -20,6 +21,12 @@ from typing import Any
 def open_sensor(spec: str | None, timeout: float | None = None):
     if spec in (None, "none"):
         return None
+    if spec == "default":
+        from .decisions import default_sensor
+        spec = default_sensor()
+    if spec in ("openai", "decisions") or spec.startswith("openai:"):
+        from .decisions import Decisions
+        return Decisions(model=spec[7:] if spec.startswith("openai:") else None, timeout=timeout)
     if spec == "jev":
         from .jev import Jev
         return Jev(timeout=timeout)
@@ -36,7 +43,7 @@ def open_sensor(spec: str | None, timeout: float | None = None):
     if spec.startswith("llm:"):
         # a chat model answers in seconds, not milliseconds: the pack's Jev timeout would only make it fall back to rules
         return LLMSensor(spec[4:], timeout=max(float(timeout or 0), float(os.environ.get("ANYGAME_LLM_TIMEOUT", "60"))))
-    raise SystemExit(f"unknown sensor '{spec}': jev | clm[:<base url>] | none | top | random | llm:<model>")
+    raise SystemExit(f"unknown sensor '{spec}': default | openai[:<model>] | jev | clm[:<base url>] | none | top | random | llm:<model>")
 
 
 class TopSensor:

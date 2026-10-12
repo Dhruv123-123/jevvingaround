@@ -480,7 +480,7 @@ def _better(a: dict[str, Any] | None, b: dict[str, Any], score_read: str | None)
 
 
 def author(device_url: str, game: str, out: Path, play: str | None = None, rounds: int = 3, model: str | None = None,
-           frames_n: int = 4, size: tuple[int, int] = (540, 560), play_ticks: int = 0, tune: int = 0, sensor: str = "jev",
+           frames_n: int = 4, size: tuple[int, int] = (540, 560), play_ticks: int = 0, tune: int = 0, sensor: str = "default",
            score_read: str | None = None, log=print, demo: Path | None = None, resume: bool = False) -> tuple[bool, Path]:
     """Write a pack for the game behind device_url. rounds: perception rounds until eval passes. tune: after that,
     play `play_ticks` ticks, hand the model a digest of the run, and let it revise the paragraph, questions and
