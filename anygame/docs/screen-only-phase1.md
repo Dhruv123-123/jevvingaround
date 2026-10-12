@@ -276,6 +276,30 @@ The sixth run went back and forth across the north gate between the Forest and t
 and woke up at home. The book is game-specific data (one dungeon's demos), not game-specific code: the same scripts
 make a book for any maze given a walk helper for that game. It does nothing on the held-out games (no book is given).
 
+## 16. The stages chained in one run (`scripts/screenonly_chain.py`)
+
+One agent, one run from the Forest save, a new goal in its notebook at each stage and no save loaded between stages:
+Forest to Pewter (walker on), heal, train Bulbasaur to level 13, beat Brock. Fights on. Three rounds of 4 seeds:
+
+| round | change | Forest to Pewter | heal | train to 13 | Brock |
+|---|---|---|---|---|---|
+| 1 | Forest, train, gym | 4/4 | - | 0/4 (levels 11-12 after 20,000 presses) | - |
+| 2 | + a heal stage | 2/4 | 1/2 | 0/1 (level 12) | - |
+| 3 | + walker kept on after the Forest, 26,000 training presses | 3/4 | 2/3 | 0/1 (level 12), one still running | - |
+
+So the learned walker holds up inside a longer run (9/12 through the Forest). The new blocker is training:
+
+- Once in Pewter the advisor walks into the gym hurt, loses the first trainer fight and wakes up at home in Pallet
+  Town. Every heal that "passed" was this blackout, not the nurse; one run went in and out of the Pokemon Center
+  six times without talking to her.
+- From Pallet it trains on Route 1 but spends much of the budget inside Pallet's houses, and reaches level 12, one
+  short. The training stage test (section 14) passed 3/4 from a level 11 save; the chain arrives at level 10.
+- Keeping the walker on after the Forest hurts: when the advisor goes south to Route 2's grass, the walker's
+  north-to-exit steps pull it into the Forest and out again, back and forth at the gate.
+
+About $0.45-0.65 of Azure per chained run that reaches training. Data: `screen-only-phase1/chain-forest-badge*/`
+(results and a save after each passed stage).
+
 ## Where this leaves things
 
 The explorer plus a cheap advisor gets through Pokemon's opening and to Viridian City from pixels alone, and lifts
