@@ -4,7 +4,7 @@ screenonly_skill.py).
 
     python scripts/screenonly_chain.py STATE SEED STAGES.json '{"fights": true}' [KEEP]
 
-STAGES.json is a list of {"goal", "target" (map id, "levelN", "healed", "respawnMAP" or "badge"), "presses", "advice" (calls allowed in this
+STAGES.json is a list of {"goal", "target" (map id, "levelN", "healed", "respawnMAP", "bagITEM", "nobagITEM" or "badge"), "presses", "advice" (calls allowed in this
 stage), "walker" (a walk book for this stage, optional; it only acts on screens near its demos)}.
 """
 from __future__ import annotations
@@ -22,6 +22,10 @@ ROM = "/mnt/project-files/roms/pokemon-red.gb"
 def done(mem, target: str) -> bool:
     if target == "healed":                      # first party member at full HP
         return mem[0xD16C] * 256 + mem[0xD16D] == mem[0xD18D] * 256 + mem[0xD18E]
+    if target.startswith("bag") or target.startswith("nobag"):     # item id in the bag, or gone from it
+        n = min(mem[0xD31D], 20)
+        held = int(target.lstrip("nobag")) in [mem[0xD31E + 2 * k] for k in range(n)]
+        return held if target.startswith("bag") else not held
     if target.startswith("respawn"):            # healed at a Pokemon Center, so a lost fight wakes up there
         return mem[0xD719] == int(target[7:])
     if target == "badge":

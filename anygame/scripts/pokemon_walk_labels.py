@@ -2,7 +2,8 @@
 from each square, the step on a shortest path to the exit squares (the northernmost ones seen, by default) is its
 label. Writes one book of (screen, best step) for anygame/walk_book.py. Grader-side RAM positions are used only here.
 
-    python scripts/pokemon_walk_labels.py 'DEMOS/*.npz' OUT.npz [exit: north|south|east|west, or X,Y:SIDE for one square and the step out of it]
+    python scripts/pokemon_walk_labels.py 'DEMOS/*.npz' OUT.npz [exit: north|south|east|west, [MAP:]X,Y:SIDE for one square and the step out of it, or MAP to
+    end on entering that map]; squares are (map, x, y), and a step through a door joins two maps
 """
 from __future__ import annotations
 import collections
@@ -18,23 +19,34 @@ def main() -> None:
     pattern, out = sys.argv[1], sys.argv[2]
     side = sys.argv[3] if len(sys.argv) > 3 else "north"
     shots, wheres = [], []
-    nxt: dict = collections.defaultdict(set)
+    nxt: dict = collections.defaultdict(set)         # square (map, x, y) -> {(step, next square)}
     for path in sorted(glob.glob(pattern)):
         d = np.load(path)
-        for s, a, w in zip(d["shots"], d["steps"], d["where"]):
-            _, x, y = (int(v) for v in w)
+        rows = list(zip(d["shots"], d["steps"], d["where"]))
+        for i, (s, a, w) in enumerate(rows):
+            m, x, y = (int(v) for v in w)
             dx, dy = D[int(a)]
-            nxt[(x, y)].add((int(a), (x + dx, y + dy)))
+            n = (m, x + dx, y + dy)
+            after = rows[i + 1][2] if i + 1 < len(rows) else d["end"] if "end" in d else None
+            if after is not None and int(after[0]) != m:       # a step through a door to another map
+                n = tuple(int(v) for v in after)
+            nxt[(m, x, y)].add((int(a), n))
             shots.append(s)
-            wheres.append((x, y))
+            wheres.append((m, x, y))
     cells = set(nxt) | {c for v in nxt.values() for _, c in v}
-    spot = None
-    if ":" in side:                     # one exit square, e.g. a door: 13,26:north
-        xy, side = side.split(":")
-        spot = tuple(int(v) for v in xy.split(","))
-    key = {"north": lambda c: c[1], "south": lambda c: -c[1], "west": lambda c: c[0], "east": lambda c: -c[0]}[side]
-    best = min(key(c) for c in cells)
-    goal = [spot] if spot else [c for c in cells if key(c) == best]
+    out_step = None
+    if side.isdigit():                  # entering a map ends the way: the squares with a step into it
+        goal = sorted({c for c, outs in nxt.items() for _, n in outs if n[0] == int(side)} | {c for c in cells if c[0] == int(side)})
+    elif ":" in side:                   # one exit square and the step out of it: 13,26:north or MAP:13,26:north
+        *where, side = side.split(":")
+        xy = tuple(int(v) for v in where[-1].split(","))
+        goal = [c for c in cells if c[1:] == xy and (len(where) == 1 or c[0] == int(where[0]))]
+        out_step = {"north": 0, "south": 1, "west": 2, "east": 3}[side]
+    else:
+        key = {"north": lambda c: c[2], "south": lambda c: -c[2], "west": lambda c: c[1], "east": lambda c: -c[1]}[side]
+        best = min(key(c) for c in cells)
+        goal = [c for c in cells if key(c) == best]
+        out_step = {"north": 0, "south": 1, "west": 2, "east": 3}[side]
     back: dict = collections.defaultdict(set)
     for c, outs in nxt.items():
         for _, n in outs:
@@ -47,15 +59,14 @@ def main() -> None:
             if p not in dist:
                 dist[p] = dist[c] + 1
                 todo.append(p)
-    out_step = {"north": 0, "south": 1, "west": 2, "east": 3}[side]
     keep_s, keep_a = [], []
     for s, w in zip(shots, wheres):
-        if w in goal:                   # on an exit square: step out through the exit
+        if w in dist and dist[w] == 0 and out_step is not None:   # on an exit square: step out through the exit
             keep_s.append(s)
             keep_a.append(out_step)
             continue
         opts = [(dist.get(n, 10 ** 9), a) for a, n in nxt.get(w, ())]
-        if opts and min(opts)[0] < 10 ** 9 and w in dist:
+        if opts and min(opts)[0] < 10 ** 9 and w in dist and dist[w] > 0:
             keep_s.append(s)
             keep_a.append(min(opts)[1])
     np.savez_compressed(out, shots=np.array(keep_s), steps=np.array(keep_a, dtype=np.uint8))
