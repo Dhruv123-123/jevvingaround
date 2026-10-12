@@ -250,6 +250,32 @@ So every stage of the first badge now works some of the time on its own except t
 parcel pickup 3/6, handover 3/10, Forest 0/6, training to level 13 3/4, Brock with that team 2/6. About $0.55 per
 20,000-press training run.
 
+## 15. A learned walker for Viridian Forest (`walker`, off by default)
+
+The Forest stage failed 0/14 because the advisor cannot read a path through trees. So the agent now gets a small
+learned walker, pixels in and one step out, trained on demos rather than on RAM at play time:
+
+- `scripts/pokemon_fixture_walk.py` (the RAM test helper) walked the Forest 40 times from random starting wiggles,
+  recording each screen and the step that moved the player (`FIXTURE_RECORD`); 39 walks made it, 26,931 screens.
+- `scripts/pokemon_walk_labels.py` joins the squares those walks saw into one graph and relabels every screen with
+  the step on a shortest path to the north exit (628 squares, longest way 154 steps), so the demos' detours drop out.
+- `anygame/walk_book.py` shrinks a frame to a 36x40 grey picture and answers with a weighted vote of the 5 nearest
+  demo screens, or nothing when no demo screen is close. `ScreenAgent(walker=book)` takes that step before its own
+  explorer and the advisor, and backs off for 8 presses after two learned steps that go nowhere.
+
+RAM is used only to make and label the demos, like the stage graders; the agent sees pixels only.
+
+Viridian Forest to Pewter City, fights on, 5,000 presses, 150 advice calls:
+
+| walker | reached Pewter | presses to Pewter | Azure per run |
+|---|---|---|---|
+| off (section 13/14) | 0/14 | - | about $0.10-1 |
+| **on** | **5/6** | 654, 1,122, 1,193, 2,433, 3,022 | $0.015-0.10 |
+
+The sixth run went back and forth across the north gate between the Forest and the gatehouse, then lost a fight
+and woke up at home. The book is game-specific data (one dungeon's demos), not game-specific code: the same scripts
+make a book for any maze given a walk helper for that game. It does nothing on the held-out games (no book is given).
+
 ## Where this leaves things
 
 The explorer plus a cheap advisor gets through Pokemon's opening and to Viridian City from pixels alone, and lifts
