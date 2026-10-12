@@ -2,10 +2,10 @@
 in its notebook at each, with no save loaded between stages. Pokemon Red only (grader-side RAM, as in
 screenonly_skill.py).
 
-    python scripts/screenonly_chain.py STATE SEED STAGES.json '{"fights": true}'
+    python scripts/screenonly_chain.py STATE SEED STAGES.json '{"fights": true}' [KEEP]
 
 STAGES.json is a list of {"goal", "target" (map id, "levelN", "healed" or "badge"), "presses", "advice" (calls allowed in this
-stage), "walker" (a walk book for this stage only, optional)}.
+stage), "walker" (a walk book for this stage, optional; it only acts on screens near its demos)}.
 """
 from __future__ import annotations
 import json
@@ -36,6 +36,7 @@ def main() -> None:
     from anygame.chat import Chat
     state, seed, stages = sys.argv[1], int(sys.argv[2]), json.load(open(sys.argv[3]))
     kw = json.loads(sys.argv[4]) if len(sys.argv) > 4 else {}
+    keep = sys.argv[5] if len(sys.argv) > 5 else None      # save a state after each stage passed, as KEEP-N.state
     work = tempfile.mkdtemp(prefix="sochain-")
     rom = os.path.join(work, "p.gb")
     shutil.copyfile(ROM, rom)
@@ -62,6 +63,9 @@ def main() -> None:
         print(json.dumps(out[-1]), file=sys.stderr, flush=True)
         if got is None:
             break
+        if keep:
+            with open(f"{keep}-{len(out)}.state", "wb") as f:
+                dev._pb.save_state(f)
     dev.close()
     shutil.rmtree(work, ignore_errors=True)
     print(json.dumps({"seed": seed, "stages": out, "passed": sum(s["reached"] is not None for s in out),
