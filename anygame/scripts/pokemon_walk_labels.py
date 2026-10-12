@@ -2,7 +2,7 @@
 from each square, the step on a shortest path to the exit squares (the northernmost ones seen, by default) is its
 label. Writes one book of (screen, best step) for anygame/walk_book.py. Grader-side RAM positions are used only here.
 
-    python scripts/pokemon_walk_labels.py 'DEMOS/*.npz' OUT.npz [exit: north|south|east|west]
+    python scripts/pokemon_walk_labels.py 'DEMOS/*.npz' OUT.npz [exit: north|south|east|west, or X,Y:SIDE for one square and the step out of it]
 """
 from __future__ import annotations
 import collections
@@ -28,9 +28,13 @@ def main() -> None:
             shots.append(s)
             wheres.append((x, y))
     cells = set(nxt) | {c for v in nxt.values() for _, c in v}
+    spot = None
+    if ":" in side:                     # one exit square, e.g. a door: 13,26:north
+        xy, side = side.split(":")
+        spot = tuple(int(v) for v in xy.split(","))
     key = {"north": lambda c: c[1], "south": lambda c: -c[1], "west": lambda c: c[0], "east": lambda c: -c[0]}[side]
     best = min(key(c) for c in cells)
-    goal = [c for c in cells if key(c) == best]
+    goal = [spot] if spot else [c for c in cells if key(c) == best]
     back: dict = collections.defaultdict(set)
     for c, outs in nxt.items():
         for _, n in outs:
