@@ -45,14 +45,17 @@ def main() -> None:
     assert chat.api in ("azure", "azure-models"), "the advisor runs on Azure only"
     a = ScreenAgent(dev, seed=seed, advisor=chat, **kw)
     mem = dev._pb.memory
-    out = []
+    out, said = [], []                          # each advice call with the map it was made on (grader-side)
     for st in stages:
         a.goal = st["goal"]
         a.walker = WalkBook(st["walker"]) if st.get("walker") else None
         a.max_advice = len(a.advice) + st.get("advice", 150)
         got, maps = None, []
         for i in range(st["presses"]):
+            n = len(a.advice)
             a.step()
+            for e in a.advice[n:]:
+                said.append({"map": mem[0xD35E], "stage": len(out), "goal": e.get("goal"), "why": e.get("why")})
             if not maps or maps[-1] != mem[0xD35E]:
                 maps.append(mem[0xD35E])
             if done(mem, st["target"]):
@@ -69,7 +72,7 @@ def main() -> None:
     dev.close()
     shutil.rmtree(work, ignore_errors=True)
     print(json.dumps({"seed": seed, "stages": out, "passed": sum(s["reached"] is not None for s in out),
-                      "badge": bool(mem[0xD356] & 1), "advice": len(a.advice), "usd": round(a.total_cost, 4)}))
+                      "badge": bool(mem[0xD356] & 1), "advice": len(a.advice), "said": said, "usd": round(a.total_cost, 4)}))
 
 
 if __name__ == "__main__":
