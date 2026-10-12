@@ -300,6 +300,25 @@ So the learned walker holds up inside a longer run (9/12 through the Forest). Th
 About $0.45-0.65 of Azure per chained run that reaches training. Data: `screen-only-phase1/chain-forest-badge*/`
 (results and a save after each passed stage).
 
+### 16.1 Why training drifts, and a save with the Pewter Center as the respawn point
+
+The advice log (each call with the map it was made on) shows the drift: when Bulbasaur is hurt the advisor sensibly
+rewrites its goal to "heal at the Pokemon Center", misreads the Forest gatehouse or Mom's house as one, and walks
+south; after a lost fight it wakes up in Pallet Town (no Center used yet) and trains slowly on Route 1.
+
+A fixture save (`states/pewter-center.state`) that has talked to the Pewter Center nurse once, so a lost fight
+wakes up in Pewter. Training then the gym in one run from it, fights on:
+
+| seed | level 13 | Brock |
+|---|---|---|
+| 1 | 9,517 presses | no (walked back into the Forest) |
+| 2 | 14,490 presses | **won, 6,583 presses later** |
+| 3 | 11,758 presses | no (in the Forest) |
+| 4 | no (level 12) | - |
+
+Training 3/4 and the first training-plus-badge in a single run, about $0.40-0.52 a run. Now in the chain from the
+Forest the agent has to visit the nurse itself (stage target `respawn2`).
+
 ## Where this leaves things
 
 The explorer plus a cheap advisor gets through Pokemon's opening and to Viridian City from pixels alone, and lifts
