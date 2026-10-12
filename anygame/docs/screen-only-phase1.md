@@ -372,6 +372,38 @@ Seed 16: Viridian Forest to the Boulder Badge in one run, about 24,800 presses, 
 badges from 12 full runs**; Forest 12/12, nurse 10/12, training 4/10, second heal 2/4, Brock 2/2. Training is still
 the weak stage inside the chain (2/5 here against 3/4 from the save in 17.1, small samples either way).
 
+## 18. Route walk books for the parcel errand, and the chain from Viridian City
+
+The walk-book labeller now keys squares on (map, x, y) and joins maps by the door steps seen in the demos, so one
+book can span a route across several maps and end on entering a map or on one square (commit f1241f5). Three route
+books from 12 test-helper walks each (`route-demos/a*`, `b*`, `c*`): Viridian to the Mart counter
+(`route-mart-book.npz`), the Mart to Oak in his lab (`route-oak-book.npz`), and Oak's lab north to Viridian Forest
+(`route-forest-book.npz`). The chain script gained `bagITEM` / `nobagITEM` targets (the parcel is item 70).
+
+The whole chain from the Viridian City save (`states/viridian.state`, level 10, nothing done yet), one agent, one
+run, fights on, seeds 21-26: Mart, Oak, north to the Forest with the route books, then the five Forest-to-badge
+stages of section 17.2. Two runs (seeds 24 and 26) were cut off during training when that session's container
+lost the shared folder, so their training result is unknown; the saves after each passed stage are kept.
+
+| stage | passed | presses |
+|---|---|---|
+| parcel from the Mart clerk | **6/6** | 58-80 |
+| parcel to Oak | **6/6** | 132-1,577 |
+| north to Viridian Forest | **6/6** | 494-1,735 |
+| Forest to Pewter | 3/6 | |
+| nurse at the Pewter Center | 2/3 | |
+| train to level 13 | 0 finished (2 cut off) | |
+
+The parcel errand, 0/10 as a chain before the route books (section 12), is now 6/6, about $0.005-0.05 a run.
+The Forest, 12/12 from the Forest save, fell to 3/6. The advice log shows why: once Bulbasaur is hurt the advisor
+rewrites its goal to "heal at the Viridian City Pokemon Center", takes the Forest gatehouse for it, and turns back
+south. One run reached the Forest with 4 HP and blacked out; two turned back south, lost a fight and blacked out.
+All three woke up at home in Pallet Town, because no Center had been used yet, and spent the rest of the stage in
+Pallet's houses and Route 1. The one nurse failure went in and out of the Pewter Center 15 times without reaching
+the counter. So the next stage to add is the one the advisor already asks for: a visit to the Viridian Center
+before the Forest, which heals and moves the respawn point next to the Forest. Data:
+`screen-only-phase1/chain-viridian-badge/`.
+
 ## Where this leaves things
 
 The explorer plus a cheap advisor gets through Pokemon's opening and to Viridian City from pixels alone, and lifts
