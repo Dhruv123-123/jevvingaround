@@ -128,7 +128,7 @@ def main() -> None:
             continue
         shot = pb.screen.ndarray[:, :, :3].copy() if record and mp in rec_maps else None
         press(pb, d, hold=8, after=12)
-        if shot is not None and m[MAP] == mp and (m[X], m[Y]) != (x, y) and not m[BATTLE]:
+        if shot is not None and not m[BATTLE] and (m[MAP] != mp or (m[X], m[Y]) != (x, y)):   # moved, or went through a door
             shots.append(shot)
             steps.append("udlr".index(d[0]))
             where.append((mp, x, y))
@@ -138,6 +138,11 @@ def main() -> None:
             press(pb, "b")
             if (m[MAP], m[X], m[Y]) == (mp, x, y):
                 blocked.add((mp, x, y, d))
+    end = os.environ.get("FIXTURE_RECORD_END")      # a last demo screen at the stop spot with this step (face the nurse)
+    if record and end and m[MAP] in rec_maps and m[MAP] == stop and (spot is None or (m[X], m[Y]) == spot):
+        shots.append(pb.screen.ndarray[:, :, :3].copy())
+        steps.append("udlr".index(end[0]))
+        where.append((m[MAP], m[X], m[Y]))
     print("map", m[MAP], "x", m[X], "y", m[Y], "presses", i, "leg", leg, "bag", [m[0xD31E + 2 * k] for k in range(min(m[0xD31D], 20))])
     pb.screen.image.save(out + ".png")
     if record and shots:

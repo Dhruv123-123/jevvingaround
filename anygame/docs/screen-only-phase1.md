@@ -319,6 +319,33 @@ wakes up in Pewter. Training then the gym in one run from it, fights on:
 Training 3/4 and the first training-plus-badge in a single run, about $0.40-0.52 a run. Now in the chain from the
 Forest the agent has to visit the nurse itself (stage target `respawn2`).
 
+## 17. A Pewter walk book, and the first run from Viridian Forest to the Boulder Badge
+
+The nurse visit failed 0/15 in the chain: the advisor took the Museum or the Gym for the Pokemon Center, said it had
+healed, and walked off, though the Center door is 17 steps from where the agent reaches Pewter. Same cure as the
+Forest: a walk book from 36 test-helper walks (town to the Center door, door to the counter), labelled with
+`pokemon_walk_labels.py ... 13,26:north` and `3,3:north`. The fixture walker now records the step through a door
+and can end on a facing step (`FIXTURE_RECORD_END=up`). From the Pewter arrival spot:
+
+| heal at the Pewter Center | runs | presses | Azure |
+|---|---|---|---|
+| advisor only (3 prompt and targets variants) | 0/12 | - | $0.08-0.09 a run |
+| **with the Pewter book** | **4/4** | 42, 78, 447, 1,464 | $0.02 a run |
+
+Then the whole chain from the Viridian Forest save, one agent, one run, fights on, Forest book for the Forest stage
+and Pewter book for the two heals, no walker while training or in the gym:
+
+| stage | passed |
+|---|---|
+| Forest to Pewter | 6/6 |
+| heal at the Center (respawn set to Pewter) | 5/6 |
+| train to level 13 (20,000 presses) | 2/5 (the rest end at level 12) |
+| heal again | 1/2 |
+| Brock | 1/1 |
+
+**Seed 2 went from Viridian Forest to the Boulder Badge in one run from pixels: 15,236 presses, $0.35 of Azure**
+(Forest 975, heal 973, training 8,822, heal 1,564, Brock 2,902). Training is now the weakest stage.
+
 ## Where this leaves things
 
 The explorer plus a cheap advisor gets through Pokemon's opening and to Viridian City from pixels alone, and lifts
