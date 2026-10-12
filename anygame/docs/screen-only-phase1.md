@@ -346,6 +346,18 @@ and Pewter book for the two heals, no walker while training or in the gym:
 **Seed 2 went from Viridian Forest to the Boulder Badge in one run from pixels: 15,236 presses, $0.35 of Azure**
 (Forest 975, heal 973, training 8,822, heal 1,564, Brock 2,902). Training is now the weakest stage.
 
+### 17.1 Training with the Forest book on
+
+The failed training runs spent most of their advice calls lost in the Forest maze (51: 280-330 of 550-630 calls);
+the run that passed trained mostly on gym trainers. With the Forest book on while training, a run that wanders
+into the Forest gets walked back out north towards Pewter and its Center. From a save just after the agent's own
+nurse visit (level 10), 20,000 presses, fights on:
+
+| Forest book while training | level 13 | presses | Azure per run |
+|---|---|---|---|
+| off | 1/4 | 17,133 | $0.45-0.57 |
+| **on** | **3/4** | 13,862, 14,746, 15,637 | $0.33-0.51 |
+
 ## Where this leaves things
 
 The explorer plus a cheap advisor gets through Pokemon's opening and to Viridian City from pixels alone, and lifts
