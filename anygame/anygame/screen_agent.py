@@ -179,7 +179,7 @@ class ScreenAgent:
                  place_weight: float = 1.0, place_cell: int = 0, settle: int = 3,
                  frontier: bool = True, advisor=None, stuck: int = 10, max_advice: int = 150,
                  advice_per_screen: int = 2, lean: float = 2.0, every: int = 50, effort: str = "low",
-                 grid: bool = False, targets: bool = False, fights: bool = False):
+                 grid: bool = False, targets: bool = False, fights: bool = False, walker: str | None = None):
         self.place_cell = place_cell
         self.settle = settle
         self.frontier = frontier
@@ -199,6 +199,13 @@ class ScreenAgent:
         # around what blocks it (it sees the player move or not), then plays the advice's remaining presses
         self.targets = targets
         self.fights = fights            # tell the advisor how to fight turn by turn instead of mashing A
+        # a learned walker (anygame/walk_book.py): demonstration screens and the step taken from each; it walks
+        # whenever the screen is one it knows, and backs off for a while when its step goes nowhere
+        self.walker = None
+        if walker:
+            from anygame.walk_book import WalkBook
+            self.walker = WalkBook(walker)
+        self.walk_rest, self.walk_fails = 0, 0
         self.grid = grid or targets                    # draw a step grid on the picture the advisor sees
         self.nav: dict[str, Any] | None = None
         self.asked: Counter = Counter()
@@ -216,6 +223,7 @@ class ScreenAgent:
         self.edges: dict[str, dict[str, Counter]] = defaultdict(lambda: defaultdict(Counter))   # node → button → next nodes
         self.yield_: dict[str, list[float]] = {b: [PRIOR[b], 1.0] for b in self.buttons}       # button → [sum, n]
         self.last: tuple[str, str] | None = None
+        self.last_how = ""
         # odometry (press-and-watch): the camera's place in the current room, from how the picture scrolled, plus the
         # player's place on screen when it is known; a room starts at every scene change and is named by its first
         # screen. New places are novelty too, so walking into unseen ground counts even where screens never repeat.
@@ -419,7 +427,21 @@ class ScreenAgent:
         if self.scene and self.queue:
             self.queue = []        # the advice was for another screen (a door, a fight broke in): ask again later
         b = None
-        if self.nav is not None:
+        if self.walker is not None and self.last is not None and self.last_how == "learned":
+            self.walk_fails = self.walk_fails + 1 if state == self.last[0] else 0
+            if self.walk_fails >= 2:
+                self.walk_rest, self.walk_fails = 8, 0
+        if self.walker is not None and not self.scene:
+            if self.walk_rest > 0:
+                self.walk_rest -= 1
+            else:
+                step, _ = self.walker.act(img)
+                if step is not None:
+                    b, how = step, "learned"
+                    self.queue, self.nav = [], None
+        if b is not None:
+            pass
+        elif self.nav is not None:
             n = self.nav
             if self.scene or place is None or self.cell_at is None or self.cell_at[0] != n["room"] or n["left"] <= 0:
                 n["entry"]["walk"] = "scene" if self.scene else "lost" if place is None else "gave up"
@@ -437,7 +459,7 @@ class ScreenAgent:
         else:
             b = self.choose(state)
         self.dev.press(b)
-        self.last = (state, b)
+        self.last, self.last_how = (state, b), how
         return {"action": b, "choice": {"node": node, "place": place, "states": len(self.visits), "how": how},
                 "cost_usd": self.total_cost}
 

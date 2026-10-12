@@ -8,6 +8,7 @@ run from wild battles. Saves the state on arrival.
     to stop on, or MAP@X,Y to stop on a spot; a leg ending in '!' faces up and talks on arrival, as with Oak)
 """
 from __future__ import annotations
+import os
 import random
 import shutil
 import sys
@@ -25,12 +26,14 @@ def press(pb, b, hold=6, after=20):
     pb.tick(after)
 
 
-def flee(pb):
+def flee(pb, heal: bool = False):
     """Get through a battle: try RUN (bottom right of the battle menu) from wild ones; trainers refuse, so then fight
     with the first move by mashing A."""
     for k in range(600):
         if not pb.memory[BATTLE]:
             return
+        if heal:                        # demos only: never lose a fight
+            pb.memory[0xD16C], pb.memory[0xD16D] = pb.memory[0xD18D], pb.memory[0xD18E]
         if pb.memory[BATTLE] == 1 and k % 4 == 0:
             press(pb, "down"); press(pb, "right"); press(pb, "a", after=60)
         press(pb, "a", after=40)
@@ -84,13 +87,21 @@ def main() -> None:
     with open(src, "rb") as f:
         pb.load_state(f)
     pb.tick(2)
-    rng = random.Random(0)
+    rng = random.Random(int(os.environ.get("FIXTURE_SEED", "0")))
+    record = os.environ.get("FIXTURE_RECORD")         # walk demos for a learned walker: (screen, step that moved)
+    rec_maps = {int(v) for v in os.environ.get("FIXTURE_RECORD_MAPS", "").split(",") if v}
+    shots, steps, where = [], [], []
+    heal = os.environ.get("FIXTURE_HEAL") == "1"     # demos only: never lose a fight
+    for _ in range(int(os.environ.get("FIXTURE_WANDER", "0"))):    # start somewhere off the best path
+        press(pb, rng.choice(list(DIRS)), hold=8, after=12)
+        if pb.memory[BATTLE]:
+            flee(pb, heal)
     blocked: set = set()
     doors: set = set()
     m = pb.memory
     for i in range(20000):
         if m[BATTLE]:
-            flee(pb)
+            flee(pb, heal)
             continue
         mp, x, y = m[MAP], m[X], m[Y]
         if i % 400 == 399:
@@ -109,13 +120,18 @@ def main() -> None:
                 press(pb, "a", after=30)
             leg = min(leg + 1, len(goals) - 1)
             continue
-        if g[0] != mp:      # wandered back onto an earlier map: head for that map's exit again
-            g = next((h for h in reversed(goals[:leg]) if h[0] == mp and not h[3]), (mp, None, None, False))
+        if g[0] != mp:      # wandered onto another map of the route: head for its spot again
+            g = next((h for h in reversed(goals) if h[0] == mp and not h[3]), (mp, None, None, False))
         d = route(mp, x, y, g[1:3], blocked | doors, rng)
         if d is None:
             blocked = {b for b in blocked if b[0] != mp}
             continue
+        shot = pb.screen.ndarray[:, :, :3].copy() if record and mp in rec_maps else None
         press(pb, d, hold=8, after=12)
+        if shot is not None and m[MAP] == mp and (m[X], m[Y]) != (x, y) and not m[BATTLE]:
+            shots.append(shot)
+            steps.append("udlr".index(d[0]))
+            where.append((mp, x, y))
         if m[MAP] != mp and m[MAP] != goals[leg][0] and not (leg + 1 < len(goals) and m[MAP] == goals[leg + 1][0]):
             doors.add((mp, x, y, d))    # a door off the route: never take it again
         if (m[MAP], m[X], m[Y]) == (mp, x, y) and not m[BATTLE]:
@@ -124,6 +140,11 @@ def main() -> None:
                 blocked.add((mp, x, y, d))
     print("map", m[MAP], "x", m[X], "y", m[Y], "presses", i, "leg", leg, "bag", [m[0xD31E + 2 * k] for k in range(min(m[0xD31D], 20))])
     pb.screen.image.save(out + ".png")
+    if record and shots:
+        import numpy as np
+        np.savez_compressed(record, shots=np.array(shots), steps=np.array(steps, dtype=np.uint8),
+                            where=np.array(where, dtype=np.int16))
+        print("recorded", len(shots), "steps to", record)
     if m[MAP] == stop and (spot is None or (m[X], m[Y]) == spot):
         for _ in range(60):
             pb.tick()
