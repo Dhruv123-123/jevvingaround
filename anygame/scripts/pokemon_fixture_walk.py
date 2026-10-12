@@ -148,7 +148,7 @@ def main() -> None:
     if record and shots:
         import numpy as np
         np.savez_compressed(record, shots=np.array(shots), steps=np.array(steps, dtype=np.uint8),
-                            where=np.array(where, dtype=np.int16))
+                            where=np.array(where, dtype=np.int16), end=np.array((m[MAP], m[X], m[Y]), dtype=np.int16))
         print("recorded", len(shots), "steps to", record)
     if m[MAP] == stop and (spot is None or (m[X], m[Y]) == spot):
         for _ in range(60):
