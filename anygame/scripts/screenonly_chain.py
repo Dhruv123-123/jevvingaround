@@ -4,7 +4,7 @@ screenonly_skill.py).
 
     python scripts/screenonly_chain.py STATE SEED STAGES.json '{"fights": true}'
 
-STAGES.json is a list of {"goal", "target" (map id, "levelN" or "badge"), "presses", "advice" (calls allowed in this
+STAGES.json is a list of {"goal", "target" (map id, "levelN", "healed" or "badge"), "presses", "advice" (calls allowed in this
 stage), "walker" (a walk book for this stage only, optional)}.
 """
 from __future__ import annotations
@@ -20,6 +20,8 @@ ROM = "/mnt/project-files/roms/pokemon-red.gb"
 
 
 def done(mem, target: str) -> bool:
+    if target == "healed":                      # first party member at full HP
+        return mem[0xD16C] * 256 + mem[0xD16D] == mem[0xD18D] * 256 + mem[0xD18E]
     if target == "badge":
         return bool(mem[0xD356] & 1)
     if target.startswith("level"):
