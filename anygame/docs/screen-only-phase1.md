@@ -555,6 +555,19 @@ the agent: 20,166-25,386 presses and $0.41-0.47 of Azure each.** Every stage up 
 6/6. The two failures are the heal after training: the agent ends training in the Forest grass, and the heal
 stage's walker (the Pewter books) has no screens there. Data: `screen-only-phase1/chain-viridian-grind/`.
 
+### 18.9 Healing after training with the Forest and Pewter books together
+
+Training now ends in the Forest grass, so the heal stage needs a way out of the Forest as well as the way into the
+Pewter Center. Its walker becomes the glob `[fp][oe]*-book.npz` (the Forest, Forest-exit and both Pewter books).
+From the two saves where the heal failed in 18.8 (level 13, in the Forest), 3 seeds each:
+
+| heal-stage walker | healed | presses | Azure |
+|---|---|---|---|
+| Pewter books | 3/6 (all three from one save) | 611-1,168 | $0.01-0.10 |
+| **Forest + Pewter books** | **6/6** | 121-431 | under $0.01 |
+
+Data: `screen-only-phase1/skill-heal-after-grind/`.
+
 ## Where this leaves things
 
 The explorer plus a cheap advisor gets through Pokemon's opening and to Viridian City from pixels alone, and lifts
