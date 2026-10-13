@@ -568,12 +568,28 @@ From the two saves where the heal failed in 18.8 (level 13, in the Forest), 3 se
 
 Data: `screen-only-phase1/skill-heal-after-grind/`.
 
+### 18.10 The full chain with every fix: 5 badges from 6 runs
+
+As 18.8 with the heal walker of 18.9, seeds 91-96, from `states/viridian.state`:
+
+| stage | passed |
+|---|---|
+| Mart, Oak, Viridian, Viridian Center, Forest, Pewter, Pewter Center | 6/6 each |
+| train to level 13 | 6/6 (7,655-17,176 presses) |
+| heal again | 6/6 |
+| Brock | **5/6** |
+
+**5 of 6 runs went from Viridian City to the Boulder Badge from pixels: 16,987-23,702 presses, $0.33-0.41 of
+Azure each.** Every stage but the gym passed 6/6; the one miss lost to Brock within its 8,000 presses. Data:
+`screen-only-phase1/chain-viridian-final/`.
+
 ## Where this leaves things
 
-The explorer plus a cheap advisor gets through Pokemon's opening and to Viridian City from pixels alone, and lifts
-the held-out median a little. What stops it now is long-horizon story knowledge (the parcel errand), and the
-held-out action games (Tobu, PostBot) where a slow advisor cannot steer. Each further idea above cost about
-$2 and 1-2 hours to measure on 8-16 seeds, and the last several moved nothing outside noise.
+From the Viridian City save (level 10, before Oak's parcel errand) the screen-only agent now wins the Boulder Badge
+in 5 of 6 runs for $0.33-0.41 of Azure each (18.10). The agent reads only pixels; what carries it is the
+explorer, a cheap advisor for goals and battles, and learned walk books recorded by a RAM test helper (off by
+default, so the held-out score of section 4 is unchanged). The parts not yet covered by books are power-on to
+Viridian City and the gym fight itself.
 
 ## Cost per game-hour
 
