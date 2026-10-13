@@ -417,6 +417,45 @@ squares reach the counter). From a save on the Viridian arrival square after Oak
 | advisor only | 0/4 (all walked south to Route 1 and Pallet) | - | $0.06-0.09 a run |
 | **with the Viridian book** | **4/4** | 82, 313, 627, 683 | $0.002-0.024 a run |
 
+### 18.2 The chain from Viridian with a Viridian Center stage (seeds 31-36)
+
+Stages as in 18 with three in place of "north to the Forest": north to Viridian City (route Forest book), the
+Viridian Center nurse (Viridian book, target `respawn1`), then into the Forest (route Forest book).
+
+| stage | passed |
+|---|---|
+| Mart, Oak, back to Viridian | 6/6 each |
+| nurse at the Viridian Center | 5/6 (2,115-2,778 presses; the advisor walks in and out of the Center before the book takes over) |
+| into Viridian Forest | 5/5 |
+| Forest to Pewter | 3/5 |
+| nurse at the Pewter Center | 3/3 |
+| train to level 13 | 0/3 (levels 11, 12, 12 after 20,000 presses; in and out of the Gym and the Museum) |
+
+About $0.69-0.79 a run that reaches training. The two Forest failures both got through the Forest to its north
+gatehouse, then bounced between the gatehouse and the Forest, or reached Route 2 and lost a fight with a few HP
+left; with the Viridian respawn they woke up in Viridian instead of Pallet, and the advisor set off for the
+Viridian Center again. Data: `screen-only-phase1/chain-viridian-heal/`.
+
+### 18.3 A walk book for the Forest's north gate and Route 2
+
+The Forest book ends at the Forest's north exit; the gatehouse (map 47) and the stretch of Route 2 to Pewter had
+no book, and that is where the hurt runs turned round. 20 test-helper walks from the gatehouse to Pewter
+(`forest-exit-demos/`, labelled with goal `2`, entering Pewter) make `forest-exit-book.npz`; the Forest stage's
+walker is now the glob `forest*-book.npz` (both books). Run from the 11 real Forest arrivals saved by the chains
+(18 and 18.2), same seeds:
+
+| Forest stage walker | to Pewter | presses (median) | HP on arrival | runs that bounced at the gate |
+|---|---|---|---|---|
+| Forest book | 9/11 | 2,113 | 1-28 (median 10) | 4 |
+| **Forest book + exit book** | **10/11** | 1,203 | 12-27 (median 23) | 2 |
+
+The pass rate barely moves (both failures in the old arm are blackouts, the one in the new arm a blackout before
+the gate), but the agent reaches Pewter in about half the presses and with twice the HP, which is what made the
+chained runs fail. Data: `screen-only-phase1/skill-forest-exit/`.
+
+The test helper that records demos now waits after a warp before reading the position (the map id changes a few
+frames before x and y), which had broken the joins between maps in multi-map books.
+
 ## Where this leaves things
 
 The explorer plus a cheap advisor gets through Pokemon's opening and to Viridian City from pixels alone, and lifts

@@ -128,6 +128,8 @@ def main() -> None:
             continue
         shot = pb.screen.ndarray[:, :, :3].copy() if record and mp in rec_maps else None
         press(pb, d, hold=8, after=12)
+        if m[MAP] != mp:
+            pb.tick(40)                 # after a warp the map id changes a few frames before x, y do
         if shot is not None and not m[BATTLE] and (m[MAP] != mp or (m[X], m[Y]) != (x, y)):   # moved, or went through a door
             shots.append(shot)
             steps.append("udlr".index(d[0]))
