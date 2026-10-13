@@ -610,6 +610,33 @@ $0.06-0.25 a run; they reach Viridian at level 5-6 (the Viridian save of 18 is l
 gained a `partyN` target, and a walker can take several books joined by `|`. Data:
 `screen-only-phase1/skill-poweron-viridian/`, `skill-poweron-lab/`.
 
+### 18.12 The full chain from power-on: the Forest at level 5-8
+
+The two power-on stages of 18.11 in front of the chain of 18.10, 6 seeds (`chain-poweron-badge/`):
+
+| stage | passed |
+|---|---|
+| starter, to Viridian, parcel, back to Oak, to Viridian, heal, into the Forest | 6/6 each |
+| through the Forest to Pewter | 2/6 |
+| heal in Pewter | 2/2 |
+| train to level 13 | 1/2 (one at level 11 when its 20,000 presses ran out) |
+| heal | 1/1 |
+| Brock | 0/1 (lost at level 14) |
+
+No badge, $0.19-0.64 a run. Every stage up to the Forest held at 6/6 from power-on, but the runs enter the
+Forest at level 5 where the Viridian save is level 10: they black out, wake in the Viridian City Pokemon Center,
+and the Forest books have no screens of Route 2 to walk them back, so the 5,000 presses run out. With the route
+Forest book added to the Forest walker (`forest*-book.npz|route-forest-book.npz`), a goal line saying where a
+blackout leaves you, and 15,000 presses, 8 runs from the four failed runs' Forest saves (`skill-forest-low/`):
+
+| | through the Forest | presses | level at Pewter | Azure |
+|---|---|---|---|---|
+| before (chain above) | 2/6 | 5,000 cap | | |
+| route book too, 15,000 presses | 7/8 | 846-7,833 | 7-8 | $0.02-0.09 |
+
+The blackouts become training: each trip back through the grass is more fights. The runs reach Pewter at level
+7-8, so the training stage gets 30,000 presses.
+
 ## Where this leaves things
 
 From the Viridian City save (level 10, before Oak's parcel errand) the screen-only agent now wins the Boulder Badge
