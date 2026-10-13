@@ -637,13 +637,36 @@ blackout leaves you, and 15,000 presses, 8 runs from the four failed runs' Fores
 The blackouts become training: each trip back through the grass is more fights. The runs reach Pewter at level
 7-8, so the training stage gets 30,000 presses.
 
+### 18.13 Power-on to the Boulder Badge: 2 of 6, then the nurse fix
+
+The chain of 18.12 with the Forest fix and 30,000 training presses, from power-on, 6 seeds
+(`chain-poweron-final/`):
+
+| seed | starter | to the Forest | Forest | train to 13 | heal | Brock | presses | Azure |
+|---|---|---|---|---|---|---|---|---|
+| 121 | yes | yes | 1,011 | 21,615 | yes | **badge** (level 15) | 28,543 | $0.46 |
+| 122 | yes | yes | 6,636 | 15,518 | no | | 27,786 | $0.55 |
+| 123 | yes | yes | 9,948 | 18,061 | no | | 33,406 | $0.62 |
+| 124 | yes | yes | 4,884 | 25,165 | yes | **badge** (level 15) | 39,082 | $0.70 |
+| 125 | yes | yes | 1,351 | 25,346 | no | | 37,551 | $0.82 |
+| 126 | no (8,000 presses) | | | | | | | $0.29 |
+
+The first Boulder Badges from power-on with no save: 2 of 6. Every run with a starter got through the Forest
+and trained to level 13. The three misses all walked in and out of the Pewter Pokemon Center: the walker
+presses A at a blocked step once per screen (18.6), and the chain kept that memory across stages, so the
+counter screen used for the first Pewter heal never got A again. The chain now forgets it when a stage starts.
+From those three runs' saves at the Forest exit, with the fix (`skill-heal-poweron/`): heal 2/2, Brock 2/2,
+one ran out of training presses at level 12. With the fix the runs that pick Bulbasaur would win the badge
+in about 4 of 5 (inferred from the stage rates, not run end to end). Screens of seed 121 at each stage:
+`screen-only-phase1/screenshots/poweron-to-badge.png`.
+
 ## Where this leaves things
 
-From the Viridian City save (level 10, before Oak's parcel errand) the screen-only agent now wins the Boulder Badge
-in 5 of 6 runs for $0.33-0.41 of Azure each (18.10). The agent reads only pixels; what carries it is the
-explorer, a cheap advisor for goals and battles, and learned walk books recorded by a RAM test helper (off by
-default, so the held-out score of section 4 is unchanged). The parts not yet covered by books are power-on to
-Viridian City and the gym fight itself.
+From power-on, with no save, the screen-only agent now wins the Boulder Badge (2 of 6 runs end to end, 28-39k
+presses, $0.46-0.70 of Azure each; about 4 of 5 runs with Bulbasaur once the nurse fix of 18.13 is in). From the
+Viridian City save it wins in 5 of 6 (18.10). The agent reads only pixels; what carries it is the explorer, a
+cheap advisor for goals and battles, and learned walk books recorded by a RAM test helper (off by default, so
+the held-out score of section 4 is unchanged). Weakest parts now: picking the starter (5/6), training presses.
 
 ## Cost per game-hour
 
