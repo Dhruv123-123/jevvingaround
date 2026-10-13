@@ -491,6 +491,47 @@ The loop is rare enough that 12 tries do not fail it outright, but it is gone: t
 against 1,965, and in a chain the slow ones are the ones that run out of their 3,000-press budget.
 Data: `screen-only-phase1/skill-nurse-press-a/` (`old-*` = before).
 
+### 18.6 The full chain from Viridian City with every book on (seeds 51-56)
+
+As 18.2, with the Forest-exit book in the Forest stage and 30,000 training presses (before the change in 18.5):
+
+| stage | passed |
+|---|---|
+| Mart, Oak, back to Viridian | 6/6 each |
+| nurse at the Viridian Center | 5/6 |
+| into the Forest | 5/5 |
+| Forest to Pewter | **5/5** |
+| nurse at the Pewter Center | 4/5 |
+| train to level 13 | 2/4 (the others end at levels 11 and 12, in and out of Pewter's Gym, Museum and houses) |
+| heal again | 2/2 |
+| Brock | 1/2 (one lost at level 14) |
+
+**Seed 56 went from Viridian City, before the parcel errand, to the Boulder Badge in one run from pixels:
+13,184 presses, $0.31 of Azure.** Both nurse failures were the in-and-out loop that 18.5 removes. Data:
+`screen-only-phase1/chain-viridian-full/`.
+
+### 18.7 A grinding walk book
+
+Training still fails by wandering Pewter's buildings. A test-helper random walk in the Forest with RAM (grader
+side) found where wild Pokemon appear: about one step in ten on squares (1, 21)-(2, 23) near the Forest's north
+exit. 24 test-helper walks from the Pewter Center (or the Forest's north gate) to square (1, 22)
+(`grind-demos/`), labelled with goal `51:1,22:north`, make `grind-forest-book.npz`: it walks the agent from the
+Center to that grass, steps north onto (1, 21), and the label there walks it back to (1, 22), so it paces in the
+grass (19 wild fights in 380 steps when played back with no agent). A lost fight wakes the agent in the Pewter
+Center healed, and the book walks it back. Goal "train in the grass of Viridian Forest", from the level 10 save
+of 17.1, 20,000 presses, 4 seeds:
+
+| training walker | level 13 | presses | Azure per run |
+|---|---|---|---|
+| Forest book (17.1) | 3/4 | 13,862-15,637 | $0.33-0.51 |
+| grinding book | 2/4 | 9,497, 13,064 | $0.15-0.29 |
+| **grinding book, A once per screen** | **4/4** | 9,612-13,839 | $0.15-0.24 |
+
+The middle row lost one run to a loop that 18.5 made possible: the book's path brushes a Forest trainer, the
+blocked step pressed A, the trainer repeated his line, and the book stepped into him again for the rest of the
+run. A blocked step now presses A only once per screen (commit 7abfab3); the same four seeds then all reach
+level 13. Data: `screen-only-phase1/skill-train-grind*/`.
+
 ## Where this leaves things
 
 The explorer plus a cheap advisor gets through Pokemon's opening and to Viridian City from pixels alone, and lifts
