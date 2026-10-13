@@ -446,7 +446,7 @@ walker is now the glob `forest*-book.npz` (both books). Run from the 11 real For
 
 | Forest stage walker | to Pewter | presses (median) | HP on arrival | runs that bounced at the gate |
 |---|---|---|---|---|
-| Forest book | 9/11 | 2,113 | 1-28 (median 11) | 4 |
+| Forest book | 9/11 | 2,113 | 1-28 (median 10) | 4 |
 | **Forest book + exit book** | **10/11** | 1,203 | 12-27 (median 23) | 2 |
 
 The pass rate barely moves (both failures in the old arm are blackouts, the one in the new arm a blackout before
