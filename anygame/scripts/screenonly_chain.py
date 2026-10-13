@@ -57,6 +57,7 @@ def main() -> None:
     for st in stages:
         a.goal = st["goal"]
         a.walker = WalkBook(st["walker"]) if st.get("walker") else None
+        a.walk_talked = set()                   # a new stage may need the same person again (the nurse after training)
         a.max_advice = len(a.advice) + st.get("advice", 150)
         got, maps = None, []
         for i in range(st["presses"]):
