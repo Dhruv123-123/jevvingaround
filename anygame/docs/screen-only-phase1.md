@@ -532,6 +532,42 @@ blocked step pressed A, the trainer repeated his line, and the book stepped into
 run. A blocked step now presses A only once per screen (commit 7abfab3); the same four seeds then all reach
 level 13. Data: `screen-only-phase1/skill-train-grind*/`.
 
+### 18.8 The full chain from Viridian City with the grinding book: 4 badges from 6 runs
+
+As 18.6 with the grinding book as the training walker (20,000 training presses) and the walker fixes of 18.5
+and 18.7. From `states/viridian.state` (level 10, before the parcel errand), one agent, one run, seeds 71-76:
+
+| stage | passed | presses |
+|---|---|---|
+| parcel from the Mart clerk | 6/6 | 59-84 |
+| parcel to Oak | 6/6 | 140-626 |
+| back to Viridian City | 6/6 | 299-817 |
+| nurse at the Viridian Center | 6/6 | 37-658 |
+| into Viridian Forest | 6/6 | 140-583 |
+| Forest to Pewter | 6/6 | 581-2,234 |
+| nurse at the Pewter Center | 6/6 | 43-394 |
+| train to level 13 | **6/6** | 9,507-19,779 |
+| heal again | 4/6 | 876-2,186 |
+| Brock | **4/4** | 1,583-6,989 |
+
+**4 of 6 runs went from Viridian City to the Boulder Badge, from pixels, with no map and no game-specific code in
+the agent: 20,166-25,386 presses and $0.41-0.47 of Azure each.** Every stage up to and including training passed
+6/6. The two failures are the heal after training: the agent ends training in the Forest grass, and the heal
+stage's walker (the Pewter books) has no screens there. Data: `screen-only-phase1/chain-viridian-grind/`.
+
+### 18.9 Healing after training with the Forest and Pewter books together
+
+Training now ends in the Forest grass, so the heal stage needs a way out of the Forest as well as the way into the
+Pewter Center. Its walker becomes the glob `[fp][oe]*-book.npz` (the Forest, Forest-exit and both Pewter books).
+From the two saves where the heal failed in 18.8 (level 13, in the Forest), 3 seeds each:
+
+| heal-stage walker | healed | presses | Azure |
+|---|---|---|---|
+| Pewter books | 3/6 (all three from one save) | 611-1,168 | $0.01-0.10 |
+| **Forest + Pewter books** | **6/6** | 121-431 | under $0.01 |
+
+Data: `screen-only-phase1/skill-heal-after-grind/`.
+
 ## Where this leaves things
 
 The explorer plus a cheap advisor gets through Pokemon's opening and to Viridian City from pixels alone, and lifts
