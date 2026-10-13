@@ -4,7 +4,7 @@ screenonly_skill.py).
 
     python scripts/screenonly_chain.py STATE SEED STAGES.json '{"fights": true}' [KEEP]
 
-STAGES.json is a list of {"goal", "target" (map id, "levelN", "healed", "respawnMAP", "bagITEM", "nobagITEM" or "badge"), "presses", "advice" (calls allowed in this
+STAGES.json is a list of {"goal", "target" (map id, "levelN", "healed", "respawnMAP", "bagITEM", "nobagITEM", "partyN" or "badge"), "presses", "advice" (calls allowed in this
 stage), "walker" (a walk book for this stage, optional; it only acts on screens near its demos)}.
 """
 from __future__ import annotations
@@ -30,6 +30,8 @@ def done(mem, target: str) -> bool:
         return mem[0xD719] == int(target[7:])
     if target == "badge":
         return bool(mem[0xD356] & 1)
+    if target.startswith("party"):              # this many Pokemon in the party (the starter is party1)
+        return mem[0xD163] >= int(target[5:])
     if target.startswith("level"):
         return mem[0xD18C] >= int(target[5:])
     return mem[0xD35E] == int(target)

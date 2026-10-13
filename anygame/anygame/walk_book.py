@@ -23,7 +23,7 @@ def thumb(img: np.ndarray, k: int = 4) -> np.ndarray:
 class WalkBook:
     def __init__(self, pattern: str, near: float = 6.0, k: int = 5):
         shots, steps = [], []
-        for path in sorted(glob.glob(pattern)):
+        for path in sorted(p for part in pattern.split("|") for p in glob.glob(part)):   # "a*.npz|b.npz": several books
             d = np.load(path)
             shots += [thumb(s) for s in d["shots"]]
             steps += list(d["steps"])
