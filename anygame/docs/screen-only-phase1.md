@@ -456,6 +456,22 @@ chained runs fail. Data: `screen-only-phase1/skill-forest-exit/`.
 The test helper that records demos now waits after a warp before reading the position (the map id changes a few
 frames before x and y), which had broken the joins between maps in multi-map books.
 
+### 18.4 Training in the Forest with a Pewter-to-Forest book (tried, dropped)
+
+With the respawn point in Pewter a lost fight costs nothing but money, so the idea was a training loop: a walk
+book from the Pewter Center counter to the Forest (24 test-helper walks, `train-demos/`, goal `51`), the goal
+"train in the grass of Viridian Forest", and blackouts sending it back to the Center healed. From the save after
+the agent's own nurse visit (level 10, as 17.1), 20,000 presses:
+
+| training walker | level 13 |
+|---|---|
+| Forest book (17.1) | 3/4 |
+| Pewter-to-Forest book | 1/4 (levels 11-12) |
+
+All four runs bounced between the Forest's north edge and its gatehouse for most of the budget: the book pushes
+the agent into the Forest, the explorer steps back out, and the first screens inside the north exit have little
+grass. Dropped; the Forest book stays the training walker. Data: `screen-only-phase1/skill-train-forestloop/`.
+
 ## Where this leaves things
 
 The explorer plus a cheap advisor gets through Pokemon's opening and to Viridian City from pixels alone, and lifts
