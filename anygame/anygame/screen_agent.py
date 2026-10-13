@@ -206,6 +206,7 @@ class ScreenAgent:
             from anygame.walk_book import WalkBook
             self.walker = WalkBook(walker)
         self.walk_rest, self.walk_fails = 0, 0
+        self.walk_talked: set = set()     # screens where a blocked step already pressed A
         self.grid = grid or targets                    # draw a step grid on the picture the advisor sees
         self.nav: dict[str, Any] | None = None
         self.asked: Counter = Counter()
@@ -432,8 +433,11 @@ class ScreenAgent:
             if self.walk_fails >= 2:
                 # the step is blocked: it has walked up to something (a counter, a person), so press A at it and
                 # through what it says before the explorer takes over (pressing B would answer "no")
+                # (once per screen: a person who only repeats a line would hold it there)
                 self.walk_rest, self.walk_fails = 8, 0
-                self.queue = ["a"] * 6
+                if state not in self.walk_talked:
+                    self.walk_talked.add(state)
+                    self.queue = ["a"] * 6
         if self.walker is not None and not self.scene:
             if self.walk_rest > 0:
                 self.walk_rest -= 1
