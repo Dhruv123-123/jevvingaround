@@ -583,6 +583,33 @@ As 18.8 with the heal walker of 18.9, seeds 91-96, from `states/viridian.state`:
 Azure each.** Every stage but the gym passed 6/6; the one miss lost to Brock within its 8,000 presses. Data:
 `screen-only-phase1/chain-viridian-final/`.
 
+### 18.11 From power-on: a lab book for the starter
+
+From power-on (no save), goal "start a new game, get your first Pokemon (choose Bulbasaur), then go north to
+Viridian City", 30,000 presses, 3 seeds each:
+
+| walker | reached Viridian | presses | picked Bulbasaur | Azure |
+|---|---|---|---|---|
+| none | 1/3 | 10,381 | 0/1 | $0.26-0.88 |
+| route Forest book | 3/3 | 2,747-3,717 | 1/3 (two took Charmander) | $0.07-0.11 |
+
+The explorer presses through the title, the naming screens and Oak's speech without help. The starter is a
+choice the screen alone does not settle, and the other two starters face Brock with no type advantage. A test
+helper now makes saves along the opening (`states/reds-room.state`, `lab-entry.state`, `lab-choose.state`),
+and 12 test-helper walks in Oak's lab to the square below the right-hand Poke Ball (`lab-demos/`, goal
+`40:8,4:north`) make `lab-bulbasaur-book.npz`: the book walks up to the ball, the blocked step presses A
+(18.5), and A again says yes. Stages "pick a starter" (target `party1`, lab book) then "to Viridian" (route
+Forest book), 4 seeds:
+
+| stage | passed | presses |
+|---|---|---|
+| starter | 4/4 (Bulbasaur 3/4) | 1,659-5,007 |
+| to Viridian City | 4/4 | 400-1,885 |
+
+$0.06-0.25 a run; they reach Viridian at level 5-6 (the Viridian save of 18 is level 10). The chain script
+gained a `partyN` target, and a walker can take several books joined by `|`. Data:
+`screen-only-phase1/skill-poweron-viridian/`, `skill-poweron-lab/`.
+
 ## Where this leaves things
 
 From the Viridian City save (level 10, before Oak's parcel errand) the screen-only agent now wins the Boulder Badge
