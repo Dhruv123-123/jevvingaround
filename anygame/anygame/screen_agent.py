@@ -430,7 +430,10 @@ class ScreenAgent:
         if self.walker is not None and self.last is not None and self.last_how == "learned":
             self.walk_fails = self.walk_fails + 1 if state == self.last[0] else 0
             if self.walk_fails >= 2:
+                # the step is blocked: it has walked up to something (a counter, a person), so press A at it and
+                # through what it says before the explorer takes over (pressing B would answer "no")
                 self.walk_rest, self.walk_fails = 8, 0
+                self.queue = ["a"] * 6
         if self.walker is not None and not self.scene:
             if self.walk_rest > 0:
                 self.walk_rest -= 1

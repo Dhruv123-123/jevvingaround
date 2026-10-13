@@ -456,6 +456,41 @@ chained runs fail. Data: `screen-only-phase1/skill-forest-exit/`.
 The test helper that records demos now waits after a warp before reading the position (the map id changes a few
 frames before x and y), which had broken the joins between maps in multi-map books.
 
+### 18.4 Training in the Forest with a Pewter-to-Forest book (tried, dropped)
+
+With the respawn point in Pewter a lost fight costs nothing but money, so the idea was a training loop: a walk
+book from the Pewter Center counter to the Forest (24 test-helper walks, `train-demos/`, goal `51`), the goal
+"train in the grass of Viridian Forest", and blackouts sending it back to the Center healed. From the save after
+the agent's own nurse visit (level 10, as 17.1), 20,000 presses:
+
+| training walker | level 13 |
+|---|---|
+| Forest book (17.1) | 3/4 |
+| Pewter-to-Forest book | 1/4 (levels 11-12) |
+
+All four runs bounced between the Forest's north edge and its gatehouse for most of the budget: the book pushes
+the agent into the Forest, the explorer steps back out, and the first screens inside the north exit have little
+grass. Dropped; the Forest book stays the training walker. Data: `screen-only-phase1/skill-train-forestloop/`.
+
+### 18.5 Pressing A when a walked step is blocked
+
+Every nurse failure in the chains had the same shape (the advice and walker trace from a failing save shows it):
+the Pewter or Viridian book walks the agent up to the counter and keeps stepping up into it; after two blocked
+steps the walker rests and the explorer takes over, and its first A opens the nurse's dialogue but a later B or
+down answers "no" to healing, so the agent walks out and the book walks it back in. Now a blocked learned step
+queues six A presses (talk to what you walked up to and read through it) before the explorer gets a turn
+(commit b940834; walker only, so off by default). From the three saves whose nurse visit failed in a chain, 4
+seeds each:
+
+| nurse visit | passed | presses |
+|---|---|---|
+| before | 12/12 | 35-1,965 (4 runs over 600) |
+| **A when blocked** | **12/12** | 35-102 |
+
+The loop is rare enough that 12 tries do not fail it outright, but it is gone: the slowest visit is 102 presses
+against 1,965, and in a chain the slow ones are the ones that run out of their 3,000-press budget.
+Data: `screen-only-phase1/skill-nurse-press-a/` (`old-*` = before).
+
 ## Where this leaves things
 
 The explorer plus a cheap advisor gets through Pokemon's opening and to Viridian City from pixels alone, and lifts
