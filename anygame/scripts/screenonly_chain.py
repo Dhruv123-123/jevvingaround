@@ -5,7 +5,8 @@ screenonly_skill.py).
     python scripts/screenonly_chain.py STATE SEED STAGES.json '{"fights": true}' [KEEP]
 
 STAGES.json is a list of {"goal", "target" (map id, "levelN", "healed", "respawnMAP", "bagITEM", "nobagITEM", "partyN" or "badge"), "presses", "advice" (calls allowed in this
-stage), "walker" (a walk book for this stage, optional; it only acts on screens near its demos)}.
+stage), "walker" (a walk book for this stage, optional; it only acts on screens near its demos), "fresh" (true: a new agent
+for this stage, with no memory of the run so far)}.
 """
 from __future__ import annotations
 import json
@@ -53,11 +54,15 @@ def main() -> None:
     assert chat.api in ("azure", "azure-models"), "the advisor runs on Azure only"
     a = ScreenAgent(dev, seed=seed, advisor=chat, **kw)
     mem = dev._pb.memory
-    out, said = [], []                          # each advice call with the map it was made on (grader-side)
+    out, said, before = [], [], 0.0             # each advice call with the map it was made on (grader-side)
     for st in stages:
+        if st.get("fresh"):                     # start this stage with a new agent: no memory of the run so far
+            before += a.total_cost
+            a = ScreenAgent(dev, seed=seed, advisor=chat, **kw)
         a.goal = st["goal"]
         a.walker = WalkBook(st["walker"]) if st.get("walker") else None
         a.walk_talked = set()                   # a new stage may need the same person again (the nurse after training)
+        a.walk_rest = 0
         a.max_advice = len(a.advice) + st.get("advice", 150)
         got, maps = None, []
         for i in range(st["presses"]):
@@ -71,7 +76,7 @@ def main() -> None:
                 got = i
                 break
         out.append({"target": st["target"], "reached": got, "maps": maps[:30], "level": mem[0xD18C],
-                    "hp": mem[0xD16C] * 256 + mem[0xD16D], "usd": round(a.total_cost, 4)})
+                    "hp": mem[0xD16C] * 256 + mem[0xD16D], "usd": round(before + a.total_cost, 4)})
         print(json.dumps(out[-1]), file=sys.stderr, flush=True)
         if got is None:
             break
@@ -81,7 +86,7 @@ def main() -> None:
     dev.close()
     shutil.rmtree(work, ignore_errors=True)
     print(json.dumps({"seed": seed, "stages": out, "passed": sum(s["reached"] is not None for s in out),
-                      "badge": bool(mem[0xD356] & 1), "advice": len(a.advice), "said": said, "usd": round(a.total_cost, 4)}))
+                      "badge": bool(mem[0xD356] & 1), "advice": len(a.advice), "said": said, "usd": round(before + a.total_cost, 4)}))
 
 
 if __name__ == "__main__":

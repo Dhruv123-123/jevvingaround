@@ -700,13 +700,32 @@ Level 14 bought nothing over 18.14's 8/10, and costs more presses; training goes
   labelled toward the Mart (map 42), so a run that drifts south during the parcel stage has a way back north.
   From the lost run's save it ties the old Mart book (3/3 each); the drift is rare.
 
+### 18.16 A fresh agent for the last stages
+
+Round 4 (`chain-poweron-v4/`, 10 seeds): 18.14's stages with the gym book in the Brock stage and the Route 1-Mart
+book in the parcel stage. **6/10 badges.** Three of the four misses walked in and out of a door late in the run
+(two at the gym, one at the Pewter Pokemon Center); one began the Brock stage still in the Forest (training ended
+at full HP there, so the heal stage passed at once) where the gym book sees nothing.
+
+From the two gym-door runs' saves the same stage with a new agent wins **12/12** (6 plain, 6 with the walker
+resting after a door: no difference, dropped; `skill-gym-settle/`). What hurts is what the agent remembers from
+30,000 presses of the run (places seen, its notebook), not the gym. The chain script gained a per-stage
+`"fresh": true` (a new agent for that stage, cost carried over).
+
+Round 5 (`chain-poweron-v5/`, 10 seeds): fresh agents for the Pewter heal and Brock stages, and the Forest books
+beside the gym book in the Brock stage. **8/10 badges** (24-43k presses, $0.42-0.74 each); Brock 8/8 once reached
+(round 4: 6/9). Both misses walked in and out of the Pewter Pokemon Center door; rerun from one of those saves the
+stage passes 3/3 (34-1,199 presses), so it is chance within a 3,000-press stage, not a missing skill.
+
+Over rounds 2-5 (18.14-18.16): 29 badges in 40 runs from power-on.
+
 ## Where this leaves things
 
 From power-on, with no save, the screen-only agent now wins the Boulder Badge in 8 of 10 runs (24-42k presses,
 about $0.41-0.64 of Azure each; 18.14). From the
 Viridian City save it wins in 5 of 6 (18.10). The agent reads only pixels; what carries it is the explorer, a
 cheap advisor for goals and battles, and learned walk books recorded by a RAM test helper (off by default, so
-the held-out score of section 4 is unchanged). Weakest parts now: the house loop in Pallet Town (1/10), Brock at level 13 (1/10).
+the held-out score of section 4 is unchanged). Weakest part now: walking in and out of the Pewter Pokemon Center door (2/10 in round 5).
 
 ## Cost per game-hour
 
