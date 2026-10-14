@@ -660,13 +660,32 @@ one ran out of training presses at level 12. With the fix the runs that pick Bul
 in about 4 of 5 (inferred from the stage rates, not run end to end). Screens of seed 121 at each stage:
 `screen-only-phase1/screenshots/poweron-to-badge.png`.
 
+### 18.14 Power-on to the Boulder Badge: 8 of 10
+
+Every fix so far (the nurse fix of 18.13, the Forest walker of 18.12) plus two changes, 10 seeds from power-on
+(`chain-poweron-v2/`):
+
+- The one starter miss of 18.13 walked up and down the stairs of the player's house. 16 test-helper walks from
+  the player's room out to Pallet Town (`house-demos/`, goal: enter map 0) make `house-book.npz`, used with the
+  lab book in the starter stage (15,000 presses).
+- Training gets 40,000 presses (one run of 18.13 stopped at level 12).
+
+| result | runs |
+|---|---|
+| **Boulder Badge** | **8/10** (24-42k presses, about $0.41-0.64 of Azure each) |
+| lost in the parcel stage (walked back from Viridian to Pallet and up and down the house stairs) | 1 |
+| lost to Brock at level 13 | 1 |
+
+Starter 10/10 (Bulbasaur 10/10). Three runs were cut off by a container restart and finished from their last
+stage save. The parcel-stage miss is the house loop again, so the house book belongs in the Pallet stages too.
+
 ## Where this leaves things
 
-From power-on, with no save, the screen-only agent now wins the Boulder Badge (2 of 6 runs end to end, 28-39k
-presses, $0.46-0.70 of Azure each; about 4 of 5 runs with Bulbasaur once the nurse fix of 18.13 is in). From the
+From power-on, with no save, the screen-only agent now wins the Boulder Badge in 8 of 10 runs (24-42k presses,
+about $0.41-0.64 of Azure each; 18.14). From the
 Viridian City save it wins in 5 of 6 (18.10). The agent reads only pixels; what carries it is the explorer, a
 cheap advisor for goals and battles, and learned walk books recorded by a RAM test helper (off by default, so
-the held-out score of section 4 is unchanged). Weakest parts now: picking the starter (5/6), training presses.
+the held-out score of section 4 is unchanged). Weakest parts now: the house loop in Pallet Town (1/10), Brock at level 13 (1/10).
 
 ## Cost per game-hour
 
