@@ -679,6 +679,27 @@ Every fix so far (the nurse fix of 18.13, the Forest walker of 18.12) plus two c
 Starter 10/10 (Bulbasaur 10/10). Three runs were cut off by a container restart and finished from their last
 stage save. The parcel-stage miss is the house loop again, so the house book belongs in the Pallet stages too.
 
+### 18.15 Training to level 14, and a walk book to the gym
+
+Two changes on 18.14, 10 more seeds from power-on (`chain-poweron-v3/`): the house book also in the two parcel
+stages, and training to level 14 (50,000 presses) instead of 13.
+
+| result | runs |
+|---|---|
+| **Boulder Badge** | **7/10** (34-48k presses, $0.49-0.68 each, level 15-16) |
+| left Viridian southward in the parcel stage, out of presses | 1 |
+| never found the gym after healing (wandered to Route 2; to the Museum) | 2 |
+
+Level 14 bought nothing over 18.14's 8/10, and costs more presses; training goes back to 13. Over the 20 runs of
+18.14 and 18.15: 15 badges. Two new walk books for the misses:
+
+- `gym-book.npz`: 16 test-helper walks from the Pewter Pokemon Center to the gym door (Pewter 16,17, `gym-demos/`).
+  From the two lost runs' saves after healing (`skill-gym-book/`), 3 seeds each: **badge 5/6** (1,031-3,939
+  presses, $0.03-0.22) where the advisor alone got 0/2.
+- `route-mart2-book.npz`: the Pallet-Route 1-Viridian demos (`route-demos/c*`) and the Viridian-Mart demos (`a*`)
+  labelled toward the Mart (map 42), so a run that drifts south during the parcel stage has a way back north.
+  From the lost run's save it ties the old Mart book (3/3 each); the drift is rare.
+
 ## Where this leaves things
 
 From power-on, with no save, the screen-only agent now wins the Boulder Badge in 8 of 10 runs (24-42k presses,
