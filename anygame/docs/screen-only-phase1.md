@@ -719,13 +719,26 @@ stage passes 3/3 (34-1,199 presses), so it is chance within a 3,000-press stage,
 
 Over rounds 2-5 (18.14-18.16): 29 badges in 40 runs from power-on.
 
+### 18.17 Fresh agents for both Pewter heals: 9 of 10
+
+Round 6 (`chain-poweron-v6/`, 10 seeds): round 5 with fresh agents for the heal after training too, and 8,000
+presses (was 3,000) for both Pewter heal stages.
+
+| result | runs |
+|---|---|
+| **Boulder Badge** | **9/10** (31-44k presses, $0.54-0.74 of Azure each, level 15) |
+| out of presses in Viridian Forest at level 5 | 1 |
+
+Every run that got through the Forest won the badge: both Pewter heals 9/9, Brock 9/9. Over rounds 2-6: 38
+badges in 50 runs from power-on. The one miss is the Forest at level 5 (18.12).
+
 ## Where this leaves things
 
-From power-on, with no save, the screen-only agent now wins the Boulder Badge in 8 of 10 runs (24-42k presses,
-about $0.41-0.64 of Azure each; 18.14). From the
+From power-on, with no save, the screen-only agent now wins the Boulder Badge in 9 of 10 runs (31-44k presses,
+$0.54-0.74 of Azure each; 18.17). From the
 Viridian City save it wins in 5 of 6 (18.10). The agent reads only pixels; what carries it is the explorer, a
 cheap advisor for goals and battles, and learned walk books recorded by a RAM test helper (off by default, so
-the held-out score of section 4 is unchanged). Weakest part now: walking in and out of the Pewter Pokemon Center door (2/10 in round 5).
+the held-out score of section 4 is unchanged). Weakest part now: Viridian Forest at level 5 (1/10 in round 6).
 
 ## Cost per game-hour
 
