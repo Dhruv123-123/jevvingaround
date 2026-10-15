@@ -732,13 +732,27 @@ presses (was 3,000) for both Pewter heal stages.
 Every run that got through the Forest won the badge: both Pewter heals 9/9, Brock 9/9. Over rounds 2-6: 38
 badges in 50 runs from power-on. The one miss is the Forest at level 5 (18.12).
 
+### 18.18 More presses for the Forest at level 5: 9 of 10 again
+
+The round-6 miss ran out of its 15,000 presses in Viridian Forest at level 5. From the same entry saves, 30,000
+presses got through 4 of 4. Round 7 (`chain-poweron-v7/`, seeds 241-250) is round 6 with the Forest stage at
+30,000 presses.
+
+| result | runs |
+|---|---|
+| **Boulder Badge** | **9/10** (21-48k presses, $0.44-0.88 of Azure each, level 15) |
+| lost after training: blacked out, woke in Pallet, never found a Center | 1 |
+
+Viridian Forest 10/10 this time. Over rounds 2-7: 47 badges in 60 runs from power-on. The miss is now the heal
+after training, when a blackout sends the run back to Pallet Town where no heal book applies.
+
 ## Where this leaves things
 
-From power-on, with no save, the screen-only agent now wins the Boulder Badge in 9 of 10 runs (31-44k presses,
-$0.54-0.74 of Azure each; 18.17). From the
+From power-on, with no save, the screen-only agent now wins the Boulder Badge in 9 of 10 runs, twice in a row (21-48k presses,
+$0.44-0.88 of Azure each; 18.17, 18.18). From the
 Viridian City save it wins in 5 of 6 (18.10). The agent reads only pixels; what carries it is the explorer, a
 cheap advisor for goals and battles, and learned walk books recorded by a RAM test helper (off by default, so
-the held-out score of section 4 is unchanged). Weakest part now: Viridian Forest at level 5 (1/10 in round 6).
+the held-out score of section 4 is unchanged). Weakest part now: a blackout late in the run that wakes the agent in Pallet Town (1/10 in round 7).
 
 ## Cost per game-hour
 
