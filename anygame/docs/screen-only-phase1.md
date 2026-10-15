@@ -764,13 +764,29 @@ The heal after training went 9 of 9, in at most 894 presses (round 7: up to 2,60
 2-8: 56 badges in 70 runs from power-on. The slowest stage is now training to level 13: 10-36k presses, and one
 run ran out.
 
+### 18.20 Training up to 60,000 presses
+
+The round-8 miss was still at level 12 when training ran out of its 40,000 presses. From that run's save,
+training with up to 60,000 presses reached level 13 in 5 of 5 runs (23-30k presses), and all 5 won the badge.
+Round 9 (`chain-poweron-v9/`, seeds 301-310) is round 8 with training up to 60,000 presses.
+
+| result | runs |
+|---|---|
+| **Boulder Badge** | **9/10** (30-55k presses, $0.50-0.96 of Azure each, level 13-15) |
+| Viridian Center: walked in and out for 3,000 presses without healing | 1 |
+
+Training took 19-40k presses. One run needed 40,496, so it would have failed under the old 40,000 limit. The
+miss does not come back from its save: a fresh agent healed there in 6 of 6 runs, in 41-405 presses (letting the
+walker press through the nurse's dialogue three times instead of once made no difference). Over rounds 2-9: 65
+badges in 80 runs from power-on.
+
 ## Where this leaves things
 
-From power-on, with no save, the screen-only agent now wins the Boulder Badge in 9 of 10 runs, three rounds in a row (21-50k presses,
-$0.44-0.88 of Azure each; 18.17-18.19). From the
+From power-on, with no save, the screen-only agent now wins the Boulder Badge in 9 of 10 runs, four rounds in a row (21-55k presses,
+$0.44-0.96 of Azure each; 18.17-18.20). From the
 Viridian City save it wins in 5 of 6 (18.10). The agent reads only pixels; what carries it is the explorer, a
 cheap advisor for goals and battles, and learned walk books recorded by a RAM test helper (off by default, so
-the held-out score of section 4 is unchanged). Weakest part now: training to level 13 in the Forest grass, which can run past 40,000 presses (1/10 in round 8).
+the held-out score of section 4 is unchanged). Weakest part now: a door loop at the Viridian Center early in the run (1/10 in round 9), which a fresh agent does not repeat.
 
 ## Cost per game-hour
 
