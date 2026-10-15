@@ -7,6 +7,9 @@ screenonly_skill.py).
 STAGES.json is a list of {"goal", "target" (map id, "levelN", "healed", "respawnMAP", "bagITEM", "nobagITEM", "partyN" or "badge"), "presses", "advice" (calls allowed in this
 stage), "walker" (a walk book for this stage, optional; it only acts on screens near its demos), "fresh" (true: a new agent
 for this stage, with no memory of the run so far)}.
+
+With {"decider": "openai"} or {"decider": "jev"} in the settings, the agent is anygame/typed_screen.py's: the Azure
+model names each new screen once and the typed decider picks what to do.
 """
 from __future__ import annotations
 import json
@@ -40,7 +43,7 @@ def done(mem, target: str) -> bool:
 
 def main() -> None:
     from anygame.device.pyboy import PyBoyDevice
-    from anygame.screen_agent import ScreenAgent
+    from anygame.typed_screen import LabelCache, screen_agent
     from anygame.walk_book import WalkBook
     from anygame.chat import Chat
     state, seed, stages = sys.argv[1], int(sys.argv[2]), json.load(open(sys.argv[3]))
@@ -52,13 +55,19 @@ def main() -> None:
     dev = PyBoyDevice(f"pyboy://{rom}?clock=game&step=4&hold=6&after=16&boot={120 + 17 * seed}&state={state}")
     chat = Chat(timeout=90)
     assert chat.api in ("azure", "azure-models"), "the advisor runs on Azure only"
-    a = ScreenAgent(dev, seed=seed, advisor=chat, **kw)
+    # '{"decider": "openai"}' (or "jev"): the chat model only names screens, once per new screen, and the typed
+    # decider makes every choice; the names are kept across fresh agents (it is perception, not memory of the run)
+    labels = LabelCache()
+    a = screen_agent(dev, seed=seed, advisor=chat, labels=labels, **kw)
+    typed = []
     mem = dev._pb.memory
     out, said, before = [], [], 0.0             # each advice call with the map it was made on (grader-side)
     for st in stages:
         if st.get("fresh"):                     # start this stage with a new agent: no memory of the run so far
             before += a.total_cost
-            a = ScreenAgent(dev, seed=seed, advisor=chat, **kw)
+            if hasattr(a, "summary"):
+                typed.append(a.summary())
+            a = screen_agent(dev, seed=seed, advisor=chat, labels=labels, **kw)
         a.goal = st["goal"]
         a.walker = WalkBook(st["walker"]) if st.get("walker") else None
         a.walk_talked = set()                   # a new stage may need the same person again (the nurse after training)
@@ -69,7 +78,8 @@ def main() -> None:
             n = len(a.advice)
             a.step()
             for e in a.advice[n:]:
-                said.append({"map": mem[0xD35E], "stage": len(out), "goal": e.get("goal"), "why": e.get("why")})
+                said.append({"map": mem[0xD35E], "stage": len(out), "goal": e.get("goal"), "why": e.get("why"),
+                             **({"pick": e.get("pick"), "label": e.get("label")} if "pick" in e or "label" in e else {})})
             if not maps or maps[-1] != mem[0xD35E]:
                 maps.append(mem[0xD35E])
             if done(mem, st["target"]):
@@ -83,10 +93,12 @@ def main() -> None:
         if keep:
             with open(f"{keep}-{len(out)}.state", "wb") as f:
                 dev._pb.save_state(f)
+    if hasattr(a, "summary"):
+        typed.append(a.summary())
     dev.close()
     shutil.rmtree(work, ignore_errors=True)
     print(json.dumps({"seed": seed, "stages": out, "passed": sum(s["reached"] is not None for s in out),
-                      "badge": bool(mem[0xD356] & 1), "advice": len(a.advice), "said": said, "usd": round(before + a.total_cost, 4)}))
+                      "badge": bool(mem[0xD356] & 1), "advice": len(a.advice), "typed": typed, "said": said, "usd": round(before + a.total_cost, 4)}))
 
 
 if __name__ == "__main__":
