@@ -418,6 +418,7 @@ class ScreenAgent:
         if not self.recent or self.nodes(self.recent[-1]) != node:
             self.recent = (self.recent + [img])[-3:]
         how = "explore"
+        self.here = state
         self.since_ask += 1
         if not self.queue and self.nav is None and self.advisor is not None and len(self.advice) < self.max_advice and (
                 (self.since_new >= self.stuck and self.asked[node] < self.advice_per_screen)

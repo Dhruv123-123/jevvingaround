@@ -244,15 +244,20 @@ def run_one(suite: dict[str, Any], gid: str, decider: str, seed: int, out: Path,
         if agent_kind.startswith("screen"):
             # the screen-only agent: frames in, presses out, its own screen graph; no pack reads, no decider.
             # screen+advice: the chat model (Azure only) is asked what to do when exploring stops finding anything new
-            from anygame.screen_agent import ScreenAgent
+            from anygame.typed_screen import screen_agent
             advisor = None
-            if agent_kind == "screen+advice":
+            if agent_kind in ("screen+advice", "screen+typed"):
                 from anygame.chat import Chat
                 advisor = Chat(timeout=90)
                 if advisor.api not in ("azure", "azure-models"):
                     raise SystemExit("the advisor runs on Azure only (ANYGAME_LLM_API=azure)")
             # ANYGAME_SCREEN_KW: ScreenAgent settings as JSON, for trying a variant on the suite
-            agent = ScreenAgent(device, seed=seed, advisor=advisor, **json.loads(os.environ.get("ANYGAME_SCREEN_KW") or "{}"))
+            # screen+typed: the chat model only names new screens; the typed decider (ANYGAME_SCREEN_DECIDER, default
+            # openai; or jev) picks every move
+            skw = json.loads(os.environ.get("ANYGAME_SCREEN_KW") or "{}")
+            if agent_kind == "screen+typed":
+                skw.setdefault("decider", os.environ.get("ANYGAME_SCREEN_DECIDER", "openai"))
+            agent = screen_agent(device, seed=seed, advisor=advisor, **skw)
         else:
             agent = Agent(pack, device, sensor, None, background=False)
         meter = _ExploreMeter()
@@ -315,7 +320,7 @@ def run_one(suite: dict[str, Any], gid: str, decider: str, seed: int, out: Path,
                    decider_calls=calls, cost_usd=round(agent.total_cost, 6), sensor_errors=agent.errors,
                    goal_writer=(gb.report() if gb is not None and gb.chat is not None else None),
                    azure=azure_spend(azure_log), **meter.close(),
-                   advice=getattr(agent, "advice", None),
+                   advice=getattr(agent, "advice", None), typed=agent.summary() if hasattr(agent, "summary") else None,
                    distinct_screens=len(screens), unchanged_screen_rate=round(noop / max(1, steps), 3),
                    stalled_before=(nxt or {}).get("desc"),
                    frames_since_progress=device.frames - (last["frame"] if last else 0))
@@ -337,7 +342,7 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--scale", type=float, default=1.0, help="multiply the frame/press/time/call budget (a quick check: 0.1)")
     ap.add_argument("--books", help="keep a glyph book per game in this folder across runs (reported as <agent>+book); "
                                     "default: every run starts with none")
-    ap.add_argument("--agent", choices=("pack", "screen", "screen+advice"), default="pack",
+    ap.add_argument("--agent", choices=("pack", "screen", "screen+advice", "screen+typed"), default="pack",
                     help="pack: the pack agent with --decider; screen: the screen-only agent (anygame/screen_agent.py)")
     ap.add_argument("--no-fetch", action="store_true", help="never download a ROM; use only what is in the cache")
     a = ap.parse_args(argv)
