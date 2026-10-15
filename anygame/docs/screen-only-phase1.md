@@ -746,13 +746,31 @@ presses got through 4 of 4. Round 7 (`chain-poweron-v7/`, seeds 241-250) is roun
 Viridian Forest 10/10 this time. Over rounds 2-7: 47 badges in 60 runs from power-on. The miss is now the heal
 after training, when a blackout sends the run back to Pallet Town where no heal book applies.
 
+### 18.19 Heal books for a run that wakes up in Pallet Town
+
+The round-7 miss blacked out after training and woke up in Pallet Town. The heal walker (Forest and Pewter
+books) had never seen Pallet or Route 1. From that run's save, adding the Viridian Center and Route 1 books to
+the heal walker (and Route 1 to the gym walker) healed in 4 of 4 runs in 216-795 presses, and all 4 then won
+the badge. The old walkers healed in 2 of 2 but took 3,261-5,537 presses, against a budget of 8,000.
+
+Round 8 (`chain-poweron-v8/`, seeds 261-270) is round 7 with those walkers.
+
+| result | runs |
+|---|---|
+| **Boulder Badge** | **9/10** (27-50k presses, $0.44-0.81 of Azure each, level 14-15) |
+| out of presses while training (level 12 after 40,000) | 1 |
+
+The heal after training went 9 of 9, in at most 894 presses (round 7: up to 2,608, and one miss). Over rounds
+2-8: 56 badges in 70 runs from power-on. The slowest stage is now training to level 13: 10-36k presses, and one
+run ran out.
+
 ## Where this leaves things
 
-From power-on, with no save, the screen-only agent now wins the Boulder Badge in 9 of 10 runs, twice in a row (21-48k presses,
-$0.44-0.88 of Azure each; 18.17, 18.18). From the
+From power-on, with no save, the screen-only agent now wins the Boulder Badge in 9 of 10 runs, three rounds in a row (21-50k presses,
+$0.44-0.88 of Azure each; 18.17-18.19). From the
 Viridian City save it wins in 5 of 6 (18.10). The agent reads only pixels; what carries it is the explorer, a
 cheap advisor for goals and battles, and learned walk books recorded by a RAM test helper (off by default, so
-the held-out score of section 4 is unchanged). Weakest part now: a blackout late in the run that wakes the agent in Pallet Town (1/10 in round 7).
+the held-out score of section 4 is unchanged). Weakest part now: training to level 13 in the Forest grass, which can run past 40,000 presses (1/10 in round 8).
 
 ## Cost per game-hour
 
