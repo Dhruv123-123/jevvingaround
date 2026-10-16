@@ -795,13 +795,25 @@ stage with a fresh agent, as section 18.16 found helps late in a run. The whole 
 including work lost to the restarts. The Viridian heal took 46-341 presses in the runs that logged it. Over
 rounds 2-10: 75 badges in 90 runs from power-on.
 
+### 18.22 The same setup again, with no restarts: 10 of 10
+
+Round 11 (`chain-poweron-v11/`, seeds 341-350) repeats round 10's stage list, and this time no container
+restart interrupted it.
+
+| result | runs |
+|---|---|
+| **Boulder Badge** | **10/10** (21-49k presses, $0.40-0.94 of Azure each, $6.29 for the round, level 14-15) |
+
+That makes two rounds in a row with no miss, the second without any resumed runs. Over rounds 2-11: 85 badges in
+100 runs from power-on, and 20 of 20 in the last two rounds.
+
 ## Where this leaves things
 
-From power-on, with no save, the screen-only agent now wins the Boulder Badge in 9 or 10 of 10 runs, five rounds in a row (21-55k presses,
-$0.44-0.96 of Azure each; 18.17-18.21), and 10 of 10 in round 10. From the
+From power-on, with no save, the screen-only agent now wins the Boulder Badge in 10 of 10 runs, two rounds in a row (21-49k presses,
+$0.40-0.94 of Azure each; 18.21, 18.22), after four rounds of 9 of 10 (18.17-18.20). From the
 Viridian City save it wins in 5 of 6 (18.10). The agent reads only pixels; what carries it is the explorer, a
 cheap advisor for goals and battles, and learned walk books recorded by a RAM test helper (off by default, so
-the held-out score of section 4 is unchanged). Round 10 had no miss; the next step is a round with no restarts to confirm it, then the second gym.
+the held-out score of section 4 is unchanged). Next: the second gym (Mt. Moon and Cerulean City).
 
 ## Cost per game-hour
 
