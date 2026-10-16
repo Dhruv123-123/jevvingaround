@@ -780,13 +780,28 @@ miss does not come back from its save: a fresh agent healed there in 6 of 6 runs
 walker press through the nurse's dialogue three times instead of once made no difference). Over rounds 2-9: 65
 badges in 80 runs from power-on.
 
+### 18.21 A fresh agent at the Viridian nurse: 10 of 10
+
+Round 10 (`chain-poweron-v10/`, seeds 321-330) is round 9 with a fresh agent for the Viridian Center heal, the
+stage where the round-9 miss looped at the door.
+
+| result | runs |
+|---|---|
+| **Boulder Badge** | **10/10** (level 15) |
+
+This is the first round with no miss. One caveat: the container restarted twice during the round, so 9 of the 10
+runs were resumed from the save after their last passed stage (the `-r`/`-q` files). A resumed run starts that
+stage with a fresh agent, as section 18.16 found helps late in a run. The whole round cost about $8.6 of Azure,
+including work lost to the restarts. The Viridian heal took 46-341 presses in the runs that logged it. Over
+rounds 2-10: 75 badges in 90 runs from power-on.
+
 ## Where this leaves things
 
-From power-on, with no save, the screen-only agent now wins the Boulder Badge in 9 of 10 runs, four rounds in a row (21-55k presses,
-$0.44-0.96 of Azure each; 18.17-18.20). From the
+From power-on, with no save, the screen-only agent now wins the Boulder Badge in 9 or 10 of 10 runs, five rounds in a row (21-55k presses,
+$0.44-0.96 of Azure each; 18.17-18.21), and 10 of 10 in round 10. From the
 Viridian City save it wins in 5 of 6 (18.10). The agent reads only pixels; what carries it is the explorer, a
 cheap advisor for goals and battles, and learned walk books recorded by a RAM test helper (off by default, so
-the held-out score of section 4 is unchanged). Weakest part now: a door loop at the Viridian Center early in the run (1/10 in round 9), which a fresh agent does not repeat.
+the held-out score of section 4 is unchanged). Round 10 had no miss; the next step is a round with no restarts to confirm it, then the second gym.
 
 ## Cost per game-hour
 
