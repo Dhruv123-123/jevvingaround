@@ -253,10 +253,10 @@ def run_one(suite: dict[str, Any], gid: str, decider: str, seed: int, out: Path,
                     raise SystemExit("the advisor runs on Azure only (ANYGAME_LLM_API=azure)")
             # ANYGAME_SCREEN_KW: ScreenAgent settings as JSON, for trying a variant on the suite
             # screen+typed: the chat model only names new screens; the typed decider (ANYGAME_SCREEN_DECIDER, default
-            # openai; or jev) picks every move
+            # jev; or openai) picks every move
             skw = json.loads(os.environ.get("ANYGAME_SCREEN_KW") or "{}")
             if agent_kind == "screen+typed":
-                skw.setdefault("decider", os.environ.get("ANYGAME_SCREEN_DECIDER", "openai"))
+                skw.setdefault("decider", os.environ.get("ANYGAME_SCREEN_DECIDER", "jev"))
             agent = screen_agent(device, seed=seed, advisor=advisor, **skw)
         else:
             agent = Agent(pack, device, sensor, None, background=False)

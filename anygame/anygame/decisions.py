@@ -116,6 +116,7 @@ class Decisions:
 
 
 def default_sensor() -> str:
-    """`ANYGAME_SENSOR` if set; else OpenAI Decisions when an OpenAI key is present; else Jev."""
-    return os.environ.get("ANYGAME_SENSOR") or ("openai" if (os.environ.get("OPENAI_API_KEY") or os.environ.get("ANYGAME_DECISIONS_KEY")) else "jev")
+    """`ANYGAME_SENSOR` if set, else Jev. OpenAI Decisions only when asked for (ANYGAME_SENSOR=openai or --sensor openai),
+    even with an OpenAI key in the environment (Dhruv, Oct 16: bring Jev back)."""
+    return os.environ.get("ANYGAME_SENSOR") or "jev"
 

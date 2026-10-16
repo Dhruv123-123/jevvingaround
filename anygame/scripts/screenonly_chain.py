@@ -8,8 +8,9 @@ STAGES.json is a list of {"goal", "target" (map id, "levelN", "healed", "respawn
 stage), "walker" (a walk book for this stage, optional; it only acts on screens near its demos), "fresh" (true: a new agent
 for this stage, with no memory of the run so far)}.
 
-With {"decider": "openai"} or {"decider": "jev"} in the settings, the agent is anygame/typed_screen.py's: the Azure
-model names each new screen once and the typed decider picks what to do.
+The agent is anygame/typed_screen.py's: the Azure model names each new screen once and the typed decider picks what to
+do. Jev decides by default; {"decider": "openai"} picks OpenAI Decisions, {"decider": "none"} the old vision-advisor
+agent (the Azure model is asked what to press). The run stops before the first press if the decider does not answer.
 """
 from __future__ import annotations
 import json
@@ -48,6 +49,7 @@ def main() -> None:
     from anygame.chat import Chat
     state, seed, stages = sys.argv[1], int(sys.argv[2]), json.load(open(sys.argv[3]))
     kw = json.loads(sys.argv[4]) if len(sys.argv) > 4 else {}
+    kw.setdefault("decider", "jev")
     keep = sys.argv[5] if len(sys.argv) > 5 else None      # save a state after each stage passed, as KEEP-N.state
     work = tempfile.mkdtemp(prefix="sochain-")
     rom = os.path.join(work, "p.gb")
@@ -59,6 +61,10 @@ def main() -> None:
     # decider makes every choice; the names are kept across fresh agents (it is perception, not memory of the run)
     labels = LabelCache()
     a = screen_agent(dev, seed=seed, advisor=chat, labels=labels, **kw)
+    if hasattr(a, "decider"):
+        # a decider that cannot answer (no credit, no key) would leave the explorer alone: say so and stop instead
+        a.decider.ask("A test question before the run.", {"ok": {"type": "choice", "instructions": "Pick yes.",
+                                                                 "criteria": {"yes": "yes", "no": "no"}}})
     typed = []
     mem = dev._pb.memory
     out, said, before = [], [], 0.0             # each advice call with the map it was made on (grader-side)

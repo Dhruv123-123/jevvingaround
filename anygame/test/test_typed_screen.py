@@ -25,7 +25,8 @@ class FakeDecider:
 
     def ask(self, state, questions):
         self.states.append((state, questions))
-        return {"answers": {"do": {"choice": "o1", "confidence": 0.9}, "heading": {"choice": "right"}}, "cost_usd": 1e-5}
+        return {"answers": {"do": {"choice": "o1", "confidence": 0.9}, "heading": {"choice": "right"}}, "cost_usd": 1e-5,
+                "latency_ms": 100 + len(self.states)}
 
 
 def test_parse_label_keeps_presses_and_kind():
@@ -58,3 +59,4 @@ def test_agent_labels_once_and_plays_the_decider_pick():
     state, qs = dec.states[-1]
     assert "o1" in qs["do"]["criteria"] and "walk_up" in qs["do"]["criteria"] and "explore" in qs["do"]["criteria"]
     assert a.advice[-1]["pick"] == "o1" and a.summary()["decide_calls"] == len(dec.states)
+    assert 100 < a.summary()["decide_ms_p50"] <= a.summary()["decide_ms_p90"], "decision latency is reported"
