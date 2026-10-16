@@ -13,7 +13,8 @@ Here the two jobs are split:
   choices turned out. It answers two typed questions: which option to take (the label's actions, a walk each way,
   or "explore") and which way the goal lies (the explorer leans that way, as with the advisor's heading).
 
-No RAM, no per-game code: the same agent runs the held-out games. Pick the decider with decider="openai" or "jev".
+No RAM, no per-game code: the same agent runs the held-out games. Jev decides by default; decider="openai" picks
+OpenAI Decisions.
 """
 from __future__ import annotations
 import json
@@ -130,6 +131,7 @@ class TypedScreenAgent(ScreenAgent):
         self.generic_goal = generic_goal
         self.trail: list[str] = []            # the last few distinct screens' labels, as short text
         self.label_cost, self.decide_cost, self.label_calls, self.decide_calls = 0.0, 0.0, 0, 0
+        self.decide_ms: list[int] = []        # each decision's round trip, as the decider reports it
         if self.advisor is None:
             # with no namer, the decider still has the graph; nothing is ever sent to it
             self.advisor = _NoNamer()
@@ -154,6 +156,8 @@ class TypedScreenAgent(ScreenAgent):
         try:
             r = self.decider.ask(state, qs)
             self.decide_calls += 1
+            if r.get("latency_ms") is not None:
+                self.decide_ms.append(int(r["latency_ms"]))
             usd = float(r.get("cost_usd") or 0.0)
             self.decide_cost += usd
             self.total_cost += usd
@@ -246,8 +250,12 @@ class TypedScreenAgent(ScreenAgent):
         return state, opts
 
     def summary(self) -> dict[str, Any]:
+        ms = sorted(self.decide_ms)
+        q = (lambda f: ms[min(len(ms) - 1, int(f * len(ms)))] if ms else None)
         return {"label_calls": self.label_calls, "label_usd": round(self.label_cost, 4), "decide_calls": self.decide_calls,
-                "decide_usd": round(self.decide_cost, 5), "cache": dict(self.labels.hits), "labels": len(self.labels.labels)}
+                "decide_usd": round(self.decide_cost, 5), "decide_ms_p50": q(0.5), "decide_ms_p90": q(0.9),
+                "decide_errors": self.errors, "decider": getattr(self.decider, "model", None),
+                "cache": dict(self.labels.hits), "labels": len(self.labels.labels)}
 
 
 class _NoNamer:
@@ -255,9 +263,10 @@ class _NoNamer:
 
 
 def screen_agent(device, seed: int = 0, advisor=None, decider: str | None = None, labels: LabelCache | None = None, **kw):
-    """ScreenAgent, or with `decider` ("openai", "openai:<model>", "jev") the typed-decider agent with `advisor` as its
-    namer. Any decider other than Jev runs off OpenRouter, by the project's rule."""
-    if not decider:
+    """ScreenAgent, or with `decider` ("jev", "openai", "openai:<model>") the typed-decider agent with `advisor` as its
+    namer. Any decider other than Jev runs off OpenRouter, by the project's rule. decider "none" (or empty) is the
+    vision-advisor agent."""
+    if not decider or decider == "none":
         return ScreenAgent(device, seed=seed, advisor=advisor, **kw)
     from .sensors import open_sensor
     return TypedScreenAgent(device, open_sensor(decider, timeout=20), namer=advisor, labels=labels, seed=seed, **kw)

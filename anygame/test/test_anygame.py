@@ -386,6 +386,8 @@ def test_openai_decisions_sensor_wire_shape(monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     assert default_sensor() == "jev"
     monkeypatch.setenv("OPENAI_API_KEY", "x")
+    assert default_sensor() == "jev", "Jev is the default decider; OpenAI only when asked for"
+    monkeypatch.setenv("ANYGAME_SENSOR", "openai")
     assert default_sensor() == "openai"
     s = open_sensor("default")
     assert isinstance(s, Decisions) and s.model == "gpt-6-luna"

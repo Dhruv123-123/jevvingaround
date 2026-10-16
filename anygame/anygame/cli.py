@@ -907,7 +907,7 @@ def main(argv=None):
     p = argparse.ArgumentParser(prog="anygame", description="One paragraph, any game.")
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("packs").set_defaults(fn=cmd_packs)
-    pl = sub.add_parser("play"); pl.add_argument("pack"); pl.add_argument("--device", default=os.environ.get("DEVICE", "adb")); pl.add_argument("--sensor", default="default", help="default (openai if OPENAI_API_KEY is set, else jev) | openai[:<model>] | jev | none | random[:seed] | llm:<model>"); pl.add_argument("--saves", default=None, help="a directory: a save state at each graded milestone (emulator devices)")
+    pl = sub.add_parser("play"); pl.add_argument("pack"); pl.add_argument("--device", default=os.environ.get("DEVICE", "adb")); pl.add_argument("--sensor", default="default", help="default (jev, or ANYGAME_SENSOR) | openai[:<model>] | jev | none | random[:seed] | llm:<model>"); pl.add_argument("--saves", default=None, help="a directory: a save state at each graded milestone (emulator devices)")
     pl.add_argument("--audit", type=int, default=0, help="Jev audit: play Jev's pick and the top-ranked pick this many decisions forward from a save state when they differ")
     pl.add_argument("--audit-max", dest="audit_max", type=int, default=None, help="at most this many audits played out")
     pl.add_argument("--checkpoint", default=None, help="a directory: the run's state (emulator, world, memory, goals) saved there")
