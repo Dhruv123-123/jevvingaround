@@ -14,7 +14,8 @@ agent, e.g. a fight book only for the caves), "redo" (optional {"map": M, "from"
 a lost fight wakes up at the last Pokemon Center, sends the run back to stage K, at most N times from this stage)}.
 
 With {"decider": "openai"} or {"decider": "jev"} in the settings, the agent is anygame/typed_screen.py's: the Azure
-model names each new screen once and the typed decider picks what to do.
+model names each new screen once and the typed decider picks what to do. Add "framewise": true for
+anygame/framewise.py's agent (both models on threads of their own; a stage's "presses" still counts presses).
 """
 from __future__ import annotations
 import json
@@ -76,6 +77,8 @@ def main() -> None:
             before += a.total_cost
             if hasattr(a, "summary"):
                 typed.append(a.summary())
+            if hasattr(a, "close"):
+                a.close()
             a = screen_agent(dev, seed=seed, advisor=chat, labels=labels, **{**kw, **st.get("with", {})})
         a.goal = st["goal"]
         a.walker = WalkBook(st["walker"]) if st.get("walker") else None
@@ -85,7 +88,7 @@ def main() -> None:
         got, maps = None, []
         for i in range(st["presses"]):
             n = len(a.advice)
-            a.step()
+            a.step_press() if hasattr(a, "step_press") else a.step()
             for e in a.advice[n:]:
                 said.append({"map": mem[0xD35E], "stage": len(out), "goal": e.get("goal"), "why": e.get("why"),
                              **({"pick": e.get("pick"), "label": e.get("label")} if "pick" in e or "label" in e else {})})
@@ -118,6 +121,8 @@ def main() -> None:
                 dev._pb.save_state(f)
     if hasattr(a, "summary"):
         typed.append(a.summary())
+    if hasattr(a, "close"):
+        a.close()
     dev.close()
     shutil.rmtree(work, ignore_errors=True)
     print(json.dumps({"seed": seed, "stages": out, "passed": sum(s["reached"] not in (None, "redo") for s in out), "redos": sum(redos.values()),
