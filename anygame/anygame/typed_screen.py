@@ -105,7 +105,8 @@ def parse_label(text: str) -> dict[str, Any]:
     kind = str(d.get("kind") or "other").lower().strip()
     return {"kind": kind if kind in ("title", "menu", "dialogue", "battle", "map", "other") else "other",
             "where": str(d.get("where") or "")[:80], "text": str(d.get("text") or "")[:200],
-            "see": [str(s)[:80] for s in (d.get("see") or [])][:8], "options": opts}
+            "see": [str(s)[:80] for s in (d.get("see") or [])][:8], "options": opts,
+            **({"subgoal": str(d["subgoal"])[:120]} if d.get("subgoal") else {})}
 
 
 def _short(presses: list[str]) -> str:
