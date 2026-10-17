@@ -176,12 +176,13 @@ def parse_heading(text: str) -> str | None:
 
 class ScreenAgent:
     def __init__(self, device, seed: int = 0, buttons=BUTTONS, epsilon: float = 0.1, bonus: float = 0.5,
-                 place_weight: float = 1.0, place_cell: int = 0, settle: int = 3,
+                 place_weight: float = 1.0, place_cell: int = 0, settle: int = 3, walk_wait: int = 0,
                  frontier: bool = True, advisor=None, stuck: int = 10, max_advice: int = 150,
                  advice_per_screen: int = 2, lean: float = 2.0, every: int = 50, effort: str = "low",
                  grid: bool = False, targets: bool = False, fights: bool = False, walker: str | None = None):
         self.place_cell = place_cell
         self.settle = settle
+        self.walk_wait = walk_wait
         self.frontier = frontier
         # the advisor (a chat model, Azure): asked only when exploring has stopped finding new states for `stuck`
         # presses, at most `advice_per_screen` times per screen and `max_advice` times in all; its presses are played
@@ -444,6 +445,13 @@ class ScreenAgent:
                 self.walk_rest -= 1
             else:
                 step, _ = self.walker.act(img)
+                # just walked through a door: the new room may still be fading in, so look a little longer before
+                # the explorer takes over (it would step straight back out)
+                for _ in range(self.walk_wait if step is None and self.last_how == "learned" else 0):
+                    img = native(self.dev.frame())
+                    step, _ = self.walker.act(img)
+                    if step is not None:
+                        break
                 if step is not None:
                     b, how = step, "learned"
                     self.queue, self.nav = [], None
