@@ -6,8 +6,8 @@ screenonly_skill.py).
 
 STAGES.json is a list of {"goal", "target" (map id, "levelN", "healed", "respawnMAP", "bagITEM", "nobagITEM", "partyN", "badge" or "badgeN"), "presses", "advice" (calls allowed in this
 stage), "walker" (a walk book for this stage, optional; it only acts on screens near its demos), "fresh" (true: a new agent
-for this stage, with no memory of the run so far), "redo" (optional {"map": M, "from": K, "times": N}: landing on map M, as
-a lost fight wakes up at the last Pokemon Center, sends the run back to stage K, at most N times in the run)}.
+for this stage, with no memory of the run so far), "redo" (optional {"map": M, "from": K, "times": N}: landing on map M (or any map in a list), as
+a lost fight wakes up at the last Pokemon Center, sends the run back to stage K, at most N times from this stage)}.
 
 With {"decider": "openai"} or {"decider": "jev"} in the settings, the agent is anygame/typed_screen.py's: the Azure
 model names each new screen once and the typed decider picks what to do.
@@ -64,7 +64,7 @@ def main() -> None:
     mem = dev._pb.memory
     out, said, before = [], [], 0.0             # each advice call with the map it was made on (grader-side)
     trace = open(os.environ["CHAIN_TRACE"], "w", buffering=1) if os.environ.get("CHAIN_TRACE") else None
-    k, redos = 0, 0
+    k, redos = 0, {}                            # redos taken from each stage
     while k < len(stages):
         st = stages[k]
         k += 1
@@ -98,8 +98,9 @@ def main() -> None:
                 got = i
                 break
             redo = st.get("redo")
-            if redo and moved and i and mem[0xD35E] == redo["map"] and redos < redo.get("times", 3):
-                got, redos, k = "redo", redos + 1, redo["from"]
+            if redo and moved and i and mem[0xD35E] in (redo["map"] if isinstance(redo["map"], list) else [redo["map"]]) \
+                    and redos.get(k, 0) < redo.get("times", 3):
+                got, redos[k], k = "redo", redos.get(k, 0) + 1, redo["from"]
                 break
         out.append({"target": st["target"], "reached": got, "maps": maps[:30], "level": mem[0xD18C],
                     "hp": mem[0xD16C] * 256 + mem[0xD16D], "usd": round(before + a.total_cost, 4)})
@@ -115,7 +116,7 @@ def main() -> None:
         typed.append(a.summary())
     dev.close()
     shutil.rmtree(work, ignore_errors=True)
-    print(json.dumps({"seed": seed, "stages": out, "passed": sum(s["reached"] not in (None, "redo") for s in out), "redos": redos,
+    print(json.dumps({"seed": seed, "stages": out, "passed": sum(s["reached"] not in (None, "redo") for s in out), "redos": sum(redos.values()),
                       "badge": bool(mem[0xD356] & 1), "badges": bin(mem[0xD356]).count("1"), "advice": len(a.advice), "typed": typed, "said": said, "usd": round(before + a.total_cost, 4)}))
 
 
