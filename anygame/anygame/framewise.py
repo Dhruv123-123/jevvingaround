@@ -321,6 +321,15 @@ class FramewiseAgent(TypedScreenAgent):
         self.n[how] += 1
         return self._out(press, node, how, t0)
 
+    def step_press(self, max_frames: int = 400) -> dict[str, Any]:
+        """Step frames until a press is made (or `max_frames` pass): one press per call, for loops counted in presses."""
+        r: dict[str, Any] = {}
+        for _ in range(max_frames):
+            r = self.step()
+            if r["action"] is not None:
+                break
+        return r
+
     def _out(self, press: str | None, node: str, how: str, t0: float) -> dict[str, Any]:
         self.step_ms.append((time.perf_counter() - t0) * 1000)
         self.total_cost = self.cost()

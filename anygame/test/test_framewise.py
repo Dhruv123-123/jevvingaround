@@ -110,3 +110,15 @@ def test_stub_decider_follows_the_subgoal_after_its_latency():
     r = s.ask({"screen": {"subgoal": "leave by the door"}},
               {"do": {"type": "choice", "criteria": {"o1": "talk to mom (a)", "o2": "leave by the door (up*3)"}}})
     assert r["answers"]["do"]["choice"] == "o2" and time.perf_counter() - t0 >= 0.03 and r["cost_usd"] == 0.0
+
+
+def test_screen_agent_builds_the_framewise_agent_and_step_press_presses_once():
+    from anygame.framewise import FramewiseAgent
+    from anygame.typed_screen import screen_agent
+    from test_screen_agent import GridGame
+    g = GridGame()
+    a = screen_agent(g, seed=1, advisor=SlowNamer(0.0), decider="stub:1", framewise=True)
+    assert isinstance(a, FramewiseAgent)
+    before = a.n["presses"]
+    assert a.step_press()["action"] is not None and a.n["presses"] == before + 1
+    a.close()

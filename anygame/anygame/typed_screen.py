@@ -258,10 +258,15 @@ class _NoNamer:
     cost = 0.0
 
 
-def screen_agent(device, seed: int = 0, advisor=None, decider: str | None = None, labels: LabelCache | None = None, **kw):
-    """ScreenAgent, or with `decider` ("openai", "openai:<model>", "jev") the typed-decider agent with `advisor` as its
-    namer. Any decider other than Jev runs off OpenRouter, by the project's rule."""
+def screen_agent(device, seed: int = 0, advisor=None, decider: str | None = None, labels: LabelCache | None = None,
+                 framewise: bool = False, **kw):
+    """ScreenAgent, or with `decider` ("openai", "openai:<model>", "jev", "stub:<ms>") the typed-decider agent with
+    `advisor` as its namer; with framewise=True, framewise.py's agent, where neither model ever holds up the frame
+    loop. Any decider other than Jev runs off OpenRouter, by the project's rule."""
     if not decider:
         return ScreenAgent(device, seed=seed, advisor=advisor, **kw)
     from .sensors import open_sensor
+    if framewise:
+        from .framewise import FramewiseAgent
+        return FramewiseAgent(device, open_sensor(decider, timeout=20), namer=advisor, labels=labels, seed=seed, **kw)
     return TypedScreenAgent(device, open_sensor(decider, timeout=20), namer=advisor, labels=labels, seed=seed, **kw)
