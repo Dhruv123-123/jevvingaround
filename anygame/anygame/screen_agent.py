@@ -216,6 +216,7 @@ class ScreenAgent:
         if fight_book:
             from anygame.walk_book import FightBook
             self.fight_book = FightBook(fight_book)
+        self.fight_seen: Counter = Counter()
         # a learned walker (anygame/walk_book.py): demonstration screens and the step taken from each; it walks
         # whenever the screen is one it knows, and backs off for a while when its step goes nowhere
         self.walker = None
@@ -437,7 +438,16 @@ class ScreenAgent:
         how = "explore"
         self.here = state
         self.since_ask += 1
-        fought = self.fight_book.act(img)[0] if self.fight_book is not None else None
+        fought = None
+        if self.fight_book is not None:
+            # a screen the book keeps coming back to (an attack with no uses left, say) is left to the advisor and
+            # the explorer; the count starts again once the player is seen on the map
+            if place is not None:
+                self.fight_seen.clear()
+            elif self.fight_seen[node] < 10:
+                fought = self.fight_book.act(img)[0]
+                if fought is not None:
+                    self.fight_seen[node] += 1
         if fought is None and not self.queue and self.nav is None and self.advisor is not None and len(self.advice) < self.max_advice and (
                 (self.since_new >= self.stuck and self.asked[node] < self.advice_per_screen)
                 or (self.ask_away and self.watch is not None and place is None and not self.scene and self.prev_img is not None)
