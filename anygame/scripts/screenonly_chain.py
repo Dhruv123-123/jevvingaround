@@ -63,6 +63,7 @@ def main() -> None:
     typed = []
     mem = dev._pb.memory
     out, said, before = [], [], 0.0             # each advice call with the map it was made on (grader-side)
+    trace = open(os.environ["CHAIN_TRACE"], "w", buffering=1) if os.environ.get("CHAIN_TRACE") else None
     k, redos = 0, 0
     while k < len(stages):
         st = stages[k]
@@ -84,6 +85,9 @@ def main() -> None:
             for e in a.advice[n:]:
                 said.append({"map": mem[0xD35E], "stage": len(out), "goal": e.get("goal"), "why": e.get("why"),
                              **({"pick": e.get("pick"), "label": e.get("label")} if "pick" in e or "label" in e else {})})
+            if trace and i % 25 == 0:          # CHAIN_TRACE=path: where the run is every 25 presses (grader-side)
+                trace.write(json.dumps([len(out), i, mem[0xD35E], mem[0xD362], mem[0xD361], mem[0xD057],
+                                        mem[0xD16C] * 256 + mem[0xD16D], mem[0xD18C], a.last_how]) + "\n")
             moved = not maps or maps[-1] != mem[0xD35E]
             if moved:
                 maps.append(mem[0xD35E])

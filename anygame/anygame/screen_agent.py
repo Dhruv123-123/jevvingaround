@@ -185,7 +185,7 @@ class ScreenAgent:
                  frontier: bool = True, advisor=None, stuck: int = 10, max_advice: int = 150,
                  advice_per_screen: int = 2, lean: float = 2.0, every: int = 50, effort: str = "low",
                  grid: bool = False, targets: bool = False, fights: bool = False, walker: str | None = None,
-                 flee: bool = False):
+                 flee: bool = False, ask_away: bool = False):
         self.place_cell = place_cell
         self.settle = settle
         self.walk_wait = walk_wait
@@ -207,6 +207,9 @@ class ScreenAgent:
         self.targets = targets
         self.fights = fights            # tell the advisor how to fight turn by turn instead of mashing A
         self.flee = flee                # and to run from chance encounters on the way somewhere
+        # ask on every screen where the player is not to be seen (a fight, a menu) once the last advice is played,
+        # instead of pressing at random there until exploring goes stale
+        self.ask_away = ask_away
         # a learned walker (anygame/walk_book.py): demonstration screens and the step taken from each; it walks
         # whenever the screen is one it knows, and backs off for a while when its step goes nowhere
         self.walker = None
@@ -430,6 +433,7 @@ class ScreenAgent:
         self.since_ask += 1
         if not self.queue and self.nav is None and self.advisor is not None and len(self.advice) < self.max_advice and (
                 (self.since_new >= self.stuck and self.asked[node] < self.advice_per_screen)
+                or (self.ask_away and self.watch is not None and place is None and not self.scene and self.prev_img is not None)
                 or (self.lean and place is not None and self.since_ask >= self.every)):
             self._ask(img, node)
         if self.advice and "states_at" in self.advice[-1] and "new" not in self.advice[-1] and not self.queue:
