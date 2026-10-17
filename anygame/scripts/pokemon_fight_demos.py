@@ -61,6 +61,11 @@ def rule(m) -> str:
     return "a"                                         # any other menu (learn a new attack?): yes, in its first slot
 
 
+def fight_screen(shot: np.ndarray) -> bool:
+    """The fight's bottom box is drawn: its top border is the dark line across row 98."""
+    return shot[98, 8:152, :3].mean() < 40
+
+
 def main() -> None:
     state, out, fights = sys.argv[1], sys.argv[2], int(sys.argv[3])
     up, down = (int(v) for v in (sys.argv[4] if len(sys.argv) > 4 else "4,3").split(","))
@@ -74,8 +79,10 @@ def main() -> None:
     while done < fights and k < 20000:
         if m[0xD057]:
             b = rule(m)
-            shots.append(pb.screen.ndarray[:, :, :3].copy())
-            steps.append(STEPS.index(b))
+            shot = pb.screen.ndarray[:, :, :3].copy()
+            if fight_screen(shot):         # not the map frames before the fight is drawn
+                shots.append(shot)
+                steps.append(STEPS.index(b))
             press(pb, b, after=40)
             if not m[0xD057]:
                 done += 1
