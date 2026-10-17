@@ -4,13 +4,18 @@ screenonly_skill.py).
 
     python scripts/screenonly_chain.py STATE SEED STAGES.json '{"fights": true}' [KEEP]
 
+A run cut off part-way resumes with CHAIN_FROM=K and STATE = its KEEP save after stage K-1 (redo indices stay
+those of the whole list).
+
 STAGES.json is a list of {"goal", "target" (map id, "levelN", "healed", "respawnMAP", "bagITEM", "nobagITEM", "partyN", "badge" or "badgeN"), "presses", "advice" (calls allowed in this
 stage), "walker" (a walk book for this stage, optional; it only acts on screens near its demos), "fresh" (true: a new agent
-for this stage, with no memory of the run so far), "redo" (optional {"map": M, "from": K, "times": N}: landing on map M (or any map in a list), as
+for this stage, with no memory of the run so far), "with" (optional settings merged into the run's for this stage's fresh
+agent, e.g. a fight book only for the caves), "redo" (optional {"map": M, "from": K, "times": N}: landing on map M (or any map in a list), as
 a lost fight wakes up at the last Pokemon Center, sends the run back to stage K, at most N times from this stage)}.
 
 With {"decider": "openai"} or {"decider": "jev"} in the settings, the agent is anygame/typed_screen.py's: the Azure
-model names each new screen once and the typed decider picks what to do.
+model names each new screen once and the typed decider picks what to do. Add "framewise": true for
+anygame/framewise.py's agent (both models on threads of their own; a stage's "presses" still counts presses).
 """
 from __future__ import annotations
 import json
@@ -64,7 +69,7 @@ def main() -> None:
     mem = dev._pb.memory
     out, said, before = [], [], 0.0             # each advice call with the map it was made on (grader-side)
     trace = open(os.environ["CHAIN_TRACE"], "w", buffering=1) if os.environ.get("CHAIN_TRACE") else None
-    k, redos = 0, {}                            # redos taken from each stage
+    k, redos = int(os.environ.get("CHAIN_FROM", 0)), {}    # CHAIN_FROM=K: resume at stage K from a KEEP save
     while k < len(stages):
         st = stages[k]
         k += 1
@@ -72,7 +77,9 @@ def main() -> None:
             before += a.total_cost
             if hasattr(a, "summary"):
                 typed.append(a.summary())
-            a = screen_agent(dev, seed=seed, advisor=chat, labels=labels, **kw)
+            if hasattr(a, "close"):
+                a.close()
+            a = screen_agent(dev, seed=seed, advisor=chat, labels=labels, **{**kw, **st.get("with", {})})
         a.goal = st["goal"]
         a.walker = WalkBook(st["walker"]) if st.get("walker") else None
         a.walk_talked = set()                   # a new stage may need the same person again (the nurse after training)
@@ -81,7 +88,7 @@ def main() -> None:
         got, maps = None, []
         for i in range(st["presses"]):
             n = len(a.advice)
-            a.step()
+            a.step_press() if hasattr(a, "step_press") else a.step()
             for e in a.advice[n:]:
                 said.append({"map": mem[0xD35E], "stage": len(out), "goal": e.get("goal"), "why": e.get("why"),
                              **({"pick": e.get("pick"), "label": e.get("label")} if "pick" in e or "label" in e else {})})
@@ -116,6 +123,8 @@ def main() -> None:
                 json.dump({"stage": k - 1, **out[-1], "redos": sum(redos.values())}, f)
     if hasattr(a, "summary"):
         typed.append(a.summary())
+    if hasattr(a, "close"):
+        a.close()
     dev.close()
     shutil.rmtree(work, ignore_errors=True)
     print(json.dumps({"seed": seed, "stages": out, "passed": sum(s["reached"] not in (None, "redo") for s in out), "redos": sum(redos.values()),

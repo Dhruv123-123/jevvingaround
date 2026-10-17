@@ -1,0 +1,62 @@
+# Framewise: Jev plays every frame, the vision model works behind it
+
+Oct 17, 2026. Code: `anygame/framewise.py`. Bench: `scripts/framewise_bench.py`. Data: `/mnt/project-files/anygame/framewise/`.
+
+## What changed
+
+The typed agent (`typed_screen.py`, Oct 15) stops and waits whenever it asks a model. The vision model names a new
+screen (about 4 s on Azure), then the decider picks (Jev about 400 ms). On a real-time game, the game runs on
+while the agent is frozen.
+
+The framewise agent splits this into two lanes that never wait on each other:
+
+| Lane | Who | When | Writes |
+|---|---|---|---|
+| Slow | Azure vision model, own thread | each screen hash with no label yet, newest first; stale ones dropped | label + subgoal to the blackboard |
+| Fast | Jev (or any typed decider), own thread | each (label, goal) with no memoised answer; prefetched the moment a label lands | a press macro in the memo |
+| Frame loop | no model | every frame | plays the macro, re-plans on surprise, else explores |
+
+* **Memo.** Answers are keyed by (screen label, goal). A screen seen before costs no call. An answer that finds
+  nothing new twice is forgotten and asked again, with what happened in the decider's state.
+* **Macros.** An answer is one of the label's options, up to 12 presses, so one ~400 ms call covers many frames.
+  The rest of a macro is dropped when the screen becomes something it was not for: a different label after a scene
+  change or a change of kind, such as a fight or a text box. A map that scrolls under the same label keeps it.
+* **Patience.** On a labelled screen with no answer yet, the loop holds for at most `patience_ms` (600), then the
+  explorer presses. On an unlabelled screen it explores while the slow lane works.
+* **Cache folder.** With `cache=DIR`, labels (`labels.npz`) and the memo (`memo.json`) outlive the run, so a second
+  run calls models only for what is new.
+
+Use it with `screen_agent(..., decider="jev", framewise=True)`, `heldout --agent screen+framewise`, or the chain
+setting `{"decider": "jev", "framewise": true}`.
+
+## First measurement (stubbed decider)
+
+Jev has no OpenRouter credit (402 since Oct 16), so the decider is `stub:400`: it waits 400 ms, like Jev's p50, and
+picks the option that shares the most words with the vision model's subgoal. **It is not a model.** These numbers
+show the loop's behaviour, not the quality of play. Labels are the real Azure model.
+
+Setup: Viridian City save, goal "go into the Poke Mart", 180 s on a 60 fps wall clock (the game never runs ahead of
+real time), 2 seeds.
+
+| | typed | framewise |
+|---|---|---|
+| time blocked in a model call | 62 s, 64 s of 180 | 0 s, 0 s |
+| slowest frame step | (the model call) | 21 ms, 16 ms |
+| presses | 441, 453 | 491, 491 |
+| labels written | 10, 12 | 27, 22 |
+| decider answers | 19, 17 | 34, 37 |
+| presses played from Jev's macros | not separated | 100, 175 (20%, 36%) |
+| memo hits (no call) | none | 28, 56 |
+| places stood on (RAM, grader only) | 57, 99 | 94, 88 |
+| Azure spend | $0.008 | $0.018–0.023 |
+
+Readout: the frame loop never waits, and in the same three minutes both models get about twice as much work done,
+because neither sits idle while the other runs. Neither run reached the Mart: the stub cannot judge, so progress has
+to be measured with Jev itself.
+
+## Next
+
+1. With Jev credit: 10 power-on badge runs with `{"decider": "jev", "framewise": true}` against the Oct 15 typed
+   numbers (8/10 at $0.33), plus Jev's share of presses and the memo hit rate. The cap is $3.
+2. Cheap pixel reads into the fast lane's state, such as the menu cursor row and HP bar fill, so menus and fights
+   can be decided without a new label.

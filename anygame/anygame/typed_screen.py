@@ -83,6 +83,18 @@ class LabelCache:
             return best, "scroll"
         return None, "new"
 
+    def save(self, path: str) -> None:
+        """Codes and labels to `path` (.npz): a later run starts with every screen this one named."""
+        codes = np.stack(self.codes) if self.codes else np.zeros((0, 18, 20), np.uint8)
+        np.savez_compressed(path, codes=codes, labels=np.array(json.dumps(self.labels)))
+
+    def load(self, path: str) -> int:
+        d = np.load(path)
+        for b, lab in zip(d["codes"], json.loads(str(d["labels"]))):
+            if b.tobytes() not in self.exact:
+                self.add(b, lab)
+        return len(self.labels)
+
     def add(self, b: np.ndarray, label: dict[str, Any]) -> int:
         self.codes.append(b.copy())
         self.labels.append(label)
@@ -105,7 +117,8 @@ def parse_label(text: str) -> dict[str, Any]:
     kind = str(d.get("kind") or "other").lower().strip()
     return {"kind": kind if kind in ("title", "menu", "dialogue", "battle", "map", "other") else "other",
             "where": str(d.get("where") or "")[:80], "text": str(d.get("text") or "")[:200],
-            "see": [str(s)[:80] for s in (d.get("see") or [])][:8], "options": opts}
+            "see": [str(s)[:80] for s in (d.get("see") or [])][:8], "options": opts,
+            **({"subgoal": str(d["subgoal"])[:120]} if d.get("subgoal") else {})}
 
 
 def _short(presses: list[str]) -> str:
@@ -142,15 +155,7 @@ class TypedScreenAgent(ScreenAgent):
         entry: dict[str, Any] = {"node": node, "states_at": len(self.visits)}
         label = self._label(img, entry)
         state, opts = self._state(label, node, stale)
-        qs = {
-            "do": {"type": "choice", "instructions": "Which option makes the most progress toward the goal from this "
-                   "screen? Prefer an option that leads somewhere new or that the screen's text asks for; avoid options "
-                   "that led nowhere before.", "criteria": {k: v["desc"] for k, v in opts.items()}},
-            "heading": {"type": "choice", "instructions": "On a map screen, which screen direction does the goal lie in "
-                        "from here? 'none' in menus, fights and text, or when it is in no particular direction.",
-                        "criteria": {"up": "toward the top of the screen", "down": "toward the bottom", "left": "toward the "
-                                     "left", "right": "toward the right", "none": "no particular direction"}},
-        }
+        qs = self._questions(opts)
         try:
             r = self.decider.ask(state, qs)
             self.decide_calls += 1
@@ -170,6 +175,17 @@ class TypedScreenAgent(ScreenAgent):
             self.errors += 1
             entry["error"] = str(e)[:200]
         self.advice.append(entry)
+
+    def _questions(self, opts: dict[str, dict[str, Any]]) -> dict[str, Any]:
+        return {
+            "do": {"type": "choice", "instructions": "Which option makes the most progress toward the goal from this "
+                   "screen? Prefer an option that leads somewhere new or that the screen's text asks for; avoid options "
+                   "that led nowhere before.", "criteria": {k: v["desc"] for k, v in opts.items()}},
+            "heading": {"type": "choice", "instructions": "On a map screen, which screen direction does the goal lie in "
+                        "from here? 'none' in menus, fights and text, or when it is in no particular direction.",
+                        "criteria": {"up": "toward the top of the screen", "down": "toward the bottom", "left": "toward the "
+                                     "left", "right": "toward the right", "none": "no particular direction"}},
+        }
 
     def _label(self, img: np.ndarray, entry: dict[str, Any]) -> dict[str, Any]:
         b = blocks(img)
@@ -237,7 +253,7 @@ class TypedScreenAgent(ScreenAgent):
             self.trail = (self.trail + [here])[-6:]
         state = {
             "goal": self.goal or self.generic_goal,
-            "screen": {k: label[k] for k in ("kind", "where", "text", "see") if label.get(k)} or "unlabelled",
+            "screen": {k: label[k] for k in ("kind", "where", "text", "see", "subgoal") if label.get(k)} or "unlabelled",
             "recent screens, oldest first": self.trail[:-1],
             "progress": {"presses without finding a new place": stale,
                          "screens seen": len(self.nodes.ids), "times on this screen": self.visits.get(node, 0)},
@@ -254,10 +270,15 @@ class _NoNamer:
     cost = 0.0
 
 
-def screen_agent(device, seed: int = 0, advisor=None, decider: str | None = None, labels: LabelCache | None = None, **kw):
-    """ScreenAgent, or with `decider` ("openai", "openai:<model>", "jev") the typed-decider agent with `advisor` as its
-    namer. Any decider other than Jev runs off OpenRouter, by the project's rule."""
+def screen_agent(device, seed: int = 0, advisor=None, decider: str | None = None, labels: LabelCache | None = None,
+                 framewise: bool = False, **kw):
+    """ScreenAgent, or with `decider` ("openai", "openai:<model>", "jev", "stub:<ms>") the typed-decider agent with
+    `advisor` as its namer; with framewise=True, framewise.py's agent, where neither model ever holds up the frame
+    loop. Any decider other than Jev runs off OpenRouter, by the project's rule."""
     if not decider:
         return ScreenAgent(device, seed=seed, advisor=advisor, **kw)
     from .sensors import open_sensor
+    if framewise:
+        from .framewise import FramewiseAgent
+        return FramewiseAgent(device, open_sensor(decider, timeout=20), namer=advisor, labels=labels, seed=seed, **kw)
     return TypedScreenAgent(device, open_sensor(decider, timeout=20), namer=advisor, labels=labels, seed=seed, **kw)
