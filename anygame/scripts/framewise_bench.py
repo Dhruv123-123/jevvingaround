@@ -53,6 +53,11 @@ def main() -> None:
         if took > 0.1:                      # a step that took longer than six frames was waiting on a model
             blocked += took
         steps += 1
+        # a press runs its frames at once; hold the loop so the game never runs ahead of real time (60 fps)
+        ahead = (dev.frames - f0) / 60 - (time.perf_counter() - t0)
+        if ahead > 0:
+            time.sleep(ahead)
+            dev._last = time.perf_counter()     # the press's own frames covered that time
         cells.add((mem[0xD35E], mem[0xD362], mem[0xD361]))
         if not maps or maps[-1] != mem[0xD35E]:
             maps.append(mem[0xD35E])

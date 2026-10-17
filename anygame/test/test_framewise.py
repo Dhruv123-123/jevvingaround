@@ -122,3 +122,20 @@ def test_screen_agent_builds_the_framewise_agent_and_step_press_presses_once():
     before = a.n["presses"]
     assert a.step_press()["action"] is not None and a.n["presses"] == before + 1
     a.close()
+
+
+def test_cache_folder_carries_labels_and_answers_to_the_next_run(tmp_path):
+    from anygame.framewise import FramewiseAgent
+    from test_screen_agent import GridGame
+    a = FramewiseAgent(GridGame(), SlowDecider(0.0), namer=SlowNamer(0.0), seed=1, cache=str(tmp_path), reuse=100)
+    for _ in range(300):
+        a.step()
+    a.close()
+    assert a.summary()["labels"] >= 1 and a.fast.memo
+    namer, dec = SlowNamer(0.0), SlowDecider(0.0)
+    b = FramewiseAgent(GridGame(), dec, namer=namer, seed=2, cache=str(tmp_path))
+    assert len(b.labels.labels) == len(a.labels.labels) and len(b.fast.memo) == len(a.fast.memo)
+    for _ in range(100):
+        b.step()
+    b.close()
+    assert namer.calls == 0 and b.n["memo"] >= 1, "a known screen is played from the memo with no model call"

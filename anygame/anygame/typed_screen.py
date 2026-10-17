@@ -83,6 +83,18 @@ class LabelCache:
             return best, "scroll"
         return None, "new"
 
+    def save(self, path: str) -> None:
+        """Codes and labels to `path` (.npz): a later run starts with every screen this one named."""
+        codes = np.stack(self.codes) if self.codes else np.zeros((0, 18, 20), np.uint8)
+        np.savez_compressed(path, codes=codes, labels=np.array(json.dumps(self.labels)))
+
+    def load(self, path: str) -> int:
+        d = np.load(path)
+        for b, lab in zip(d["codes"], json.loads(str(d["labels"]))):
+            if b.tobytes() not in self.exact:
+                self.add(b, lab)
+        return len(self.labels)
+
     def add(self, b: np.ndarray, label: dict[str, Any]) -> int:
         self.codes.append(b.copy())
         self.labels.append(label)

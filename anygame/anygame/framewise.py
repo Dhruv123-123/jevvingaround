@@ -18,6 +18,8 @@ the decider picks (Jev, ~400 ms). Here the game never waits.
   at once (prefetch), so the answer is often in the memo before the player is back to need it.
 """
 from __future__ import annotations
+import json
+import os
 import threading
 import time
 from collections import Counter, deque
@@ -224,6 +226,20 @@ class FastLane:
         with self.cv:
             return not self.q and self.busy is None
 
+    def save(self, path: str) -> None:
+        with self.cv:
+            rows = [[k[0], k[1], e] for k, e in self.memo.items()]
+        with open(path, "w") as f:
+            json.dump(rows, f)
+
+    def load(self, path: str) -> int:
+        with open(path) as f:
+            rows = json.load(f)
+        with self.cv:
+            for j, goal, e in rows:
+                self.memo.setdefault((j, goal), {**e, "uses": 0})
+            return len(self.memo)
+
     def close(self) -> None:
         with self.cv:
             self.stop = True
@@ -240,12 +256,22 @@ class FramewiseAgent(TypedScreenAgent):
 
     def __init__(self, device, decider, namer=None, labels: LabelCache | None = None, patience_ms: float = 600,
                  reuse: int = 2, asks_per_screen: int = 3, settle: int = 2, max_settle: int = 8, prefetch: bool = True,
-                 hold_idle: bool | None = None, **kw):
+                 hold_idle: bool | None = None, cache: str | None = None, **kw):
         namer = namer if namer is not None else kw.pop("advisor", None)
         super().__init__(device, decider, namer=None, labels=labels, settle=settle, **kw)
         self.board = Blackboard(self.labels)
         self.slow = SlowLane(namer, self.board, effort=self.effort, on_label=self._landed) if namer is not None else None
         self.fast = FastLane(decider)
+        # cache: a folder where labels (labels.npz) and the decision memo (memo.json) outlive the run. A later run
+        # starts with every screen named and every answer it kept: the slow lane and the decider are only for what is new
+        self.cache = cache
+        if cache:
+            os.makedirs(cache, exist_ok=True)
+            lp, mp = os.path.join(cache, "labels.npz"), os.path.join(cache, "memo.json")
+            if os.path.exists(lp) and not self.labels.labels:
+                self.labels.load(lp)
+            if os.path.exists(mp) and len(self.labels.labels):
+                self.fast.load(mp)
         self.patience_ms, self.reuse, self.asks_per_screen, self.prefetch = patience_ms, reuse, asks_per_screen, prefetch
         self.max_settle = max_settle
         # on a game clock (the emulator waits for us) a held frame re-reads the screen; on a wall clock the game runs on
@@ -440,3 +466,7 @@ class FramewiseAgent(TypedScreenAgent):
         if self.slow is not None:
             self.slow.close()
         self.fast.close()
+        if self.cache:
+            with self.board.lock:
+                self.labels.save(os.path.join(self.cache, "labels.npz"))
+            self.fast.save(os.path.join(self.cache, "memo.json"))
