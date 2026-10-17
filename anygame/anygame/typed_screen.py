@@ -143,15 +143,7 @@ class TypedScreenAgent(ScreenAgent):
         entry: dict[str, Any] = {"node": node, "states_at": len(self.visits)}
         label = self._label(img, entry)
         state, opts = self._state(label, node, stale)
-        qs = {
-            "do": {"type": "choice", "instructions": "Which option makes the most progress toward the goal from this "
-                   "screen? Prefer an option that leads somewhere new or that the screen's text asks for; avoid options "
-                   "that led nowhere before.", "criteria": {k: v["desc"] for k, v in opts.items()}},
-            "heading": {"type": "choice", "instructions": "On a map screen, which screen direction does the goal lie in "
-                        "from here? 'none' in menus, fights and text, or when it is in no particular direction.",
-                        "criteria": {"up": "toward the top of the screen", "down": "toward the bottom", "left": "toward the "
-                                     "left", "right": "toward the right", "none": "no particular direction"}},
-        }
+        qs = self._questions(opts)
         try:
             r = self.decider.ask(state, qs)
             self.decide_calls += 1
@@ -171,6 +163,17 @@ class TypedScreenAgent(ScreenAgent):
             self.errors += 1
             entry["error"] = str(e)[:200]
         self.advice.append(entry)
+
+    def _questions(self, opts: dict[str, dict[str, Any]]) -> dict[str, Any]:
+        return {
+            "do": {"type": "choice", "instructions": "Which option makes the most progress toward the goal from this "
+                   "screen? Prefer an option that leads somewhere new or that the screen's text asks for; avoid options "
+                   "that led nowhere before.", "criteria": {k: v["desc"] for k, v in opts.items()}},
+            "heading": {"type": "choice", "instructions": "On a map screen, which screen direction does the goal lie in "
+                        "from here? 'none' in menus, fights and text, or when it is in no particular direction.",
+                        "criteria": {"up": "toward the top of the screen", "down": "toward the bottom", "left": "toward the "
+                                     "left", "right": "toward the right", "none": "no particular direction"}},
+        }
 
     def _label(self, img: np.ndarray, entry: dict[str, Any]) -> dict[str, Any]:
         b = blocks(img)

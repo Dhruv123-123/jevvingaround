@@ -55,3 +55,49 @@ def test_slow_lane_names_the_newest_screen_first_and_drops_old_ones():
     assert board.find(blocks(imgs[-1]))[1] == "exact", "the screen on show is named"
     assert lane.dropped >= 4 and namer.calls <= 4
     lane.close()
+
+
+class SlowDecider:
+    """A decider that takes `delay` seconds, like Jev (~0.4 s): always the first option."""
+
+    def __init__(self, delay=0.05):
+        self.delay, self.calls = delay, 0
+
+    def ask(self, state, questions):
+        time.sleep(self.delay)
+        self.calls += 1
+        return {"answers": {"do": {"choice": "o1", "confidence": 0.9}, "heading": {"choice": "right"}}, "cost_usd": 1e-5}
+
+
+def test_frame_loop_never_waits_on_either_model():
+    from anygame.framewise import FramewiseAgent
+    from test_screen_agent import GridGame
+    g = GridGame()
+    namer, dec = SlowNamer(0.2), SlowDecider(0.2)
+    a = FramewiseAgent(g, dec, namer=namer, seed=1, patience_ms=50)
+    t0 = time.perf_counter()
+    for _ in range(400):
+        a.step()
+    took = time.perf_counter() - t0
+    s = a.summary()
+    a.close()
+    assert s["step_ms_max"] < 100, "no step waits on a model call"
+    assert namer.calls >= 1 and s["labels"] >= 1
+    assert s["presses"] > 100 and took < 10
+
+
+def test_memo_replays_an_answer_without_a_call_and_forgets_one_that_leads_nowhere():
+    from anygame.framewise import FramewiseAgent
+    from test_screen_agent import GridGame
+    g = GridGame()
+    namer, dec = SlowNamer(0.0), SlowDecider(0.0)
+    a = FramewiseAgent(g, dec, namer=namer, seed=1, patience_ms=500, reuse=2, asks_per_screen=2)
+    for _ in range(600):
+        a.step()
+        if a.fast.idle() and a.slow.idle():
+            pass
+    s = a.summary()
+    a.close()
+    assert s["memo_hits"] > s["decide_calls"], "repeat screens replay the memo"
+    assert s["decide_calls"] <= 2 * max(1, s["labels"]), "at most asks_per_screen calls per screen and goal"
+    assert any(e.get("memo_use", 0) >= 1 for e in a.advice)

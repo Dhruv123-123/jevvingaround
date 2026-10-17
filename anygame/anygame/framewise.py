@@ -8,12 +8,23 @@ the decider picks (Jev, ~400 ms). Here the game never waits.
   needs, and writes each label to the blackboard. One call per new screen, as before; nothing waits for it.
 - Blackboard: the labels (LabelCache, keyed by 8x8 block codes) and the subgoal each label carries, shared by both
   lanes under one lock.
+- Fast lane: the typed decider (Jev) on a thread of its own, behind a memo keyed by (screen label, goal). A screen
+  it has decided before costs no call: its answer is replayed. Answers are short press macros (the label's options,
+  up to 12 presses), so one ~400 ms call covers many frames.
+- The frame loop reads every frame. It plays the current macro, and drops the rest of it the moment the screen turns
+  into something the macro was not for (another label, a scene change). On a labelled screen with no answer yet it
+  asks the fast lane and holds for at most `patience` ms before the explorer presses instead; on an unlabelled one
+  it hands the screen to the slow lane and explores. When a label lands, the fast lane is asked about that screen
+  at once (prefetch), so the answer is often in the memo before the player is back to need it.
 """
 from __future__ import annotations
 import threading
 import time
-from collections import deque
+from collections import Counter, deque
 from typing import Any, Callable
+
+from .screen_agent import blocks, native
+from .typed_screen import DIRS, TypedScreenAgent
 
 import numpy as np
 
@@ -133,3 +144,290 @@ class SlowLane:
         with self.cv:
             self.stop = True
             self.cv.notify_all()
+
+
+class FastLane:
+    """The decider on its own thread. `ask` never blocks: it queues a question (newest first; prefetches give way to
+    the screen on show) unless that key is answered or asked already. Answers land in `memo`."""
+
+    def __init__(self, decider, depth: int = 2):
+        self.decider, self.depth = decider, depth
+        self.memo: dict[tuple, dict[str, Any]] = {}
+        self.q: deque = deque()
+        self.asked: set[tuple] = set()
+        self.cv = threading.Condition()
+        self.stop = False
+        self.busy: tuple | None = None
+        self.calls, self.errors, self.dropped, self.cost = 0, 0, 0, 0.0
+        self.ms: list[int] = []
+        self.t = threading.Thread(target=self._run, daemon=True, name="fast-lane")
+        self.t.start()
+
+    def ask(self, key: tuple, state: dict[str, Any], opts: dict[str, dict[str, Any]], qs: dict[str, Any]) -> bool:
+        with self.cv:
+            if key in self.memo or key in self.asked:
+                return False
+            self.q.append((key, state, opts, qs))
+            self.asked.add(key)
+            while len(self.q) > self.depth:
+                old = self.q.popleft()
+                self.asked.discard(old[0])
+                self.dropped += 1
+            self.cv.notify()
+        return True
+
+    def pending(self, key: tuple) -> bool:
+        with self.cv:
+            return key in self.asked
+
+    def get(self, key: tuple) -> dict[str, Any] | None:
+        with self.cv:
+            return self.memo.get(key)
+
+    def forget(self, key: tuple) -> None:
+        with self.cv:
+            self.memo.pop(key, None)
+
+    def _run(self) -> None:
+        while True:
+            with self.cv:
+                while not self.q and not self.stop:
+                    self.cv.wait()
+                if self.stop:
+                    return
+                key, state, opts, qs = self.q.pop()
+                self.busy = key
+            ans = None
+            t0 = time.perf_counter()
+            try:
+                r = self.decider.ask(state, qs)
+                self.calls += 1
+                self.cost += float(r.get("cost_usd") or 0.0)
+                a = r["answers"]
+                pick = (a.get("do") or {}).get("choice")
+                o = opts.get(pick) or opts["explore"]
+                h = (a.get("heading") or {}).get("choice")
+                ans = {"pick": pick if pick in opts else "explore", "presses": list(o["presses"]), "why": o["desc"][:200],
+                       "heading": h if h in DIRS else None, "conf": (a.get("do") or {}).get("confidence"),
+                       "uses": 0, "misses": 0}
+            except Exception:  # noqa: BLE001 - a failed call: the frame loop explores and may ask again
+                self.errors += 1
+            finally:
+                self.ms.append(int((time.perf_counter() - t0) * 1000))
+                with self.cv:
+                    if ans is not None:
+                        self.memo[key] = ans
+                    self.asked.discard(key)
+                    self.busy = None
+
+    def idle(self) -> bool:
+        with self.cv:
+            return not self.q and self.busy is None
+
+    def close(self) -> None:
+        with self.cv:
+            self.stop = True
+            self.cv.notify_all()
+
+
+def _pct(xs: list[int | float], p: float) -> float | None:
+    return float(np.percentile(xs, p)) if xs else None
+
+
+class FramewiseAgent(TypedScreenAgent):
+    """The screen agent run frame by frame: every step() reads one frame and presses at most once (a macro's next
+    press, a memoised answer, or the explorer's), and never waits on a model."""
+
+    def __init__(self, device, decider, namer=None, labels: LabelCache | None = None, patience_ms: float = 600,
+                 reuse: int = 2, asks_per_screen: int = 3, settle: int = 2, max_settle: int = 8, prefetch: bool = True,
+                 hold_idle: bool | None = None, **kw):
+        namer = namer if namer is not None else kw.pop("advisor", None)
+        super().__init__(device, decider, namer=None, labels=labels, settle=settle, **kw)
+        self.board = Blackboard(self.labels)
+        self.slow = SlowLane(namer, self.board, effort=self.effort, on_label=self._landed) if namer is not None else None
+        self.fast = FastLane(decider)
+        self.patience_ms, self.reuse, self.asks_per_screen, self.prefetch = patience_ms, reuse, asks_per_screen, prefetch
+        self.max_settle = max_settle
+        # on a game clock (the emulator waits for us) a held frame re-reads the screen; on a wall clock the game runs on
+        if hold_idle is None:
+            hold_idle = getattr(device, "clock", "game") == "game" and hasattr(device, "screen")
+        self.hold_idle = hold_idle
+        self.landed: deque = deque()
+        self.macro: list[str] = []
+        self.macro_at: dict[str, Any] | None = None   # the label, key and state count the macro started from
+        self.asks: Counter = Counter()
+        self.prev_node: str | None = None
+        self.still, self.since_press = 0, 0
+        self.judged = True
+        self.state_now: str | None = None
+        self.wait_from: float | None = None
+        self.seen: tuple[bytes, int, int | None, str] | None = None
+        self.n = Counter()
+        self.wanted: dict[str, int] = {}
+        self.rewant = 240
+        self.step_ms: list[float] = []
+
+    def _landed(self, j: int, label: dict[str, Any]) -> None:
+        self.landed.append(j)                              # on the slow lane's thread: the frame loop takes it from here
+
+    def goal_now(self) -> str:
+        return self.goal or self.generic_goal
+
+    def _find(self, b: np.ndarray) -> tuple[int | None, str]:
+        raw = b.tobytes()
+        if self.seen is not None and self.seen[0] == raw and self.seen[1] == self.board.version:
+            return self.seen[2], self.seen[3]
+        j, how = self.board.find(b)
+        self.seen = (raw, self.board.version, j, how)
+        return j, how
+
+    def _read(self) -> np.ndarray:
+        if self.hold_idle and self.wait_from is not None:
+            time.sleep(0.002)                              # the game waits for the fast lane; so does this loop, briefly
+            return native(self.dev.screen())
+        return native(self.dev.frame())
+
+    def step(self) -> dict[str, Any]:
+        img = self._read()
+        t0 = time.perf_counter()
+        self.n["frames"] += 1
+        node = self.nodes(img)
+        self.still = self.still + 1 if node == self.prev_node else 0
+        self.prev_node = node
+        self.since_press += 1
+        b = blocks(img)
+        j, _ = self._find(b)
+        while self.landed and self.prefetch:
+            self._prefetch(self.landed.popleft())
+        # a press is judged once its screen has stopped changing (a fade, a scroll), as ScreenAgent's settle does
+        if not self.judged:
+            if self.still < self.settle and self.since_press < self.max_settle:
+                return self._out(None, node, "settle", t0)
+            self._judge(img, node)
+        # an unlabelled screen goes to the slow lane once (again after `rewant` frames, in case it was dropped)
+        if j is None and self.slow is not None and self.still >= self.settle \
+                and self.n["frames"] - self.wanted.get(node, -10 ** 9) >= self.rewant:
+            self.wanted[node] = self.n["frames"]
+            if self.slow.want(b, img, self.recent[:-1], self.goal_now()):
+                self.n["named"] += 1
+        state = self.state_now or node
+        press, how = self._act(img, node, state, j)
+        if press is None:
+            return self._out(None, node, how, t0)
+        self.dev.press(press)
+        self.last, self.last_how = (state, press), how
+        self.judged, self.since_press, self.still = False, 0, 0
+        self.n["presses"] += 1
+        self.n[how] += 1
+        return self._out(press, node, how, t0)
+
+    def _out(self, press: str | None, node: str, how: str, t0: float) -> dict[str, Any]:
+        self.step_ms.append((time.perf_counter() - t0) * 1000)
+        self.total_cost = self.cost()
+        if press is None:
+            self.n["idle"] += 1
+            self.n["idle_" + how] += 1
+        return {"action": press, "choice": {"node": node, "how": how, "states": len(self.visits)}, "cost_usd": self.cost()}
+
+    def cost(self) -> float:
+        return (self.slow.cost if self.slow else 0.0) + self.fast.cost
+
+    def _judge(self, img: np.ndarray, node: str) -> None:
+        """The screen graph's bookkeeping for the last press, as ScreenAgent.step does it."""
+        self.judged = True
+        place = self._where(img, node)
+        state = place if place is not None else node
+        if self.last is not None:
+            prev, btn = self.last
+            gain = 0.0 if state == prev else self.novelty(state)
+            self.edges[prev][btn][state] += 1
+            eff = self.effect[self._kind(prev)][btn]
+            eff[0] += 1
+            eff[1] += state != prev
+            y = self.yield_[btn]
+            y[0] += gain
+            y[1] += 1
+        self.since_new = 0 if self.visits[state] == 0 else self.since_new + 1
+        self.visits[state] += 1
+        if not self.recent or self.nodes(self.recent[-1]) != node:
+            self.recent = (self.recent + [img])[-3:]
+        self.here = self.state_now = state
+
+    def _act(self, img: np.ndarray, node: str, state: str, j: int | None) -> tuple[str | None, str]:
+        label = self.board.label(j)
+        m = self.macro_at
+        if self.macro and m is not None and j != m["j"]:
+            # the screen became something the macro was not for: another label, or no label, after a scene change or
+            # a change of kind (a fight broke in, a text box opened); a map that scrolled under the same label is fine
+            if self.scene or j is None or label.get("kind") != m["kind"]:
+                self.macro = []
+                self.n["replans"] += 1
+        if self.macro:
+            return self.macro.pop(0), "macro"
+        if m is not None:
+            self._settle_macro()
+        if j is None:
+            return self.choose(state), "explore"
+        key = (j, self.goal_now())
+        e = self.fast.get(key)
+        if e is not None:
+            self.wait_from = None
+            if e["pick"] == "explore" or not e["presses"]:
+                return self.choose(state), "explore"
+            e["uses"] += 1
+            self.n["memo"] += 1
+            self.macro = list(e["presses"])
+            self.macro_at = {"j": j, "kind": label.get("kind"), "key": key, "states_at": len(self.visits), "entry": e}
+            self.heading = e["heading"] if label.get("kind") in ("map", None) else None
+            return self.macro.pop(0), "macro"
+        if self.asks[key] < self.asks_per_screen and not self.fast.pending(key):
+            st, opts = self._state(label, node, self.since_new)
+            if self.fast.ask(key, st, opts, self._questions(opts)):
+                self.asks[key] += 1
+                self.n["asks"] += 1
+                self.wait_from = time.perf_counter()
+        if self.fast.pending(key) and self.wait_from is not None \
+                and (time.perf_counter() - self.wait_from) * 1000 < self.patience_ms:
+            return None, "wait"
+        self.wait_from = None
+        return self.choose(state), "explore"
+
+    def _settle_macro(self) -> None:
+        """A macro just ended: did it find anything new? One that keeps finding nothing is forgotten, so the decider
+        is asked again (with what happened in its state) or, after `asks_per_screen` asks, the explorer takes over."""
+        m, self.macro_at = self.macro_at, None
+        e = m["entry"]
+        new = len(self.visits) > m["states_at"]
+        if not new:
+            e["misses"] += 1
+            if e["misses"] >= self.reuse:
+                self.fast.forget(m["key"])
+        self.advice.append({"pick": e["pick"], "why": e["why"], "new": new, "presses": e["presses"],
+                            "heading": e["heading"], "memo_use": e["uses"]})
+
+    def _prefetch(self, j: int) -> None:
+        key = (j, self.goal_now())
+        if self.fast.get(key) is None and not self.fast.pending(key) and self.asks[key] < self.asks_per_screen:
+            label = self.board.label(j)
+            st, opts = self._state(label, self.prev_node or "", self.since_new)
+            if self.fast.ask(key, st, opts, self._questions(opts)):
+                self.asks[key] += 1
+                self.n["prefetch"] += 1
+
+    def summary(self) -> dict[str, Any]:
+        s = self.slow
+        return {"frames": self.n["frames"], "presses": self.n["presses"], "idle": self.n["idle"], "idle_settle": self.n["idle_settle"],
+                "idle_wait": self.n["idle_wait"],
+                "macro_presses": self.n["macro"], "explore_presses": self.n["explore"], "memo_hits": self.n["memo"],
+                "asks": self.n["asks"], "prefetch": self.n["prefetch"], "replans": self.n["replans"],
+                "decide_calls": self.fast.calls, "decide_usd": round(self.fast.cost, 5), "decide_errors": self.fast.errors,
+                "decide_ms_p50": _pct(self.fast.ms, 50), "decide_dropped": self.fast.dropped,
+                "label_calls": s.calls if s else 0, "label_usd": round(s.cost, 4) if s else 0.0,
+                "label_ms_p50": _pct(s.ms, 50) if s else None, "label_dropped": s.dropped if s else 0,
+                "labels": len(self.labels.labels), "step_ms_p50": _pct(self.step_ms, 50),
+                "step_ms_p99": _pct(self.step_ms, 99), "step_ms_max": max(self.step_ms) if self.step_ms else None}
+
+    def close(self) -> None:
+        if self.slow is not None:
+            self.slow.close()
+        self.fast.close()
