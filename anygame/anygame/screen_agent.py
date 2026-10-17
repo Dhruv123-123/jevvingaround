@@ -163,6 +163,11 @@ suits the matchup (one the foe is weak to, or one that drains or weakens a stron
 say which attack and why. Watch both health bars. When yours is low, heal with an item or switch; when a fight keeps
 being lost, first train on easier foes nearby and heal at the healing place, then come back."""
 
+FLEE = """
+On a long journey (a cave, a long road) a wild foe that jumps out is not worth the health and attack uses it costs:
+run from it (the run or escape choice) and keep going, unless the goal is to train. Fights that cannot be run from
+(a trainer, a boss) are fought as above."""
+
 
 def parse_heading(text: str) -> str | None:
     import json
@@ -179,7 +184,8 @@ class ScreenAgent:
                  place_weight: float = 1.0, place_cell: int = 0, settle: int = 3, walk_wait: int = 0,
                  frontier: bool = True, advisor=None, stuck: int = 10, max_advice: int = 150,
                  advice_per_screen: int = 2, lean: float = 2.0, every: int = 50, effort: str = "low",
-                 grid: bool = False, targets: bool = False, fights: bool = False, walker: str | None = None):
+                 grid: bool = False, targets: bool = False, fights: bool = False, walker: str | None = None,
+                 flee: bool = False, ask_away: bool = False):
         self.place_cell = place_cell
         self.settle = settle
         self.walk_wait = walk_wait
@@ -200,6 +206,10 @@ class ScreenAgent:
         # around what blocks it (it sees the player move or not), then plays the advice's remaining presses
         self.targets = targets
         self.fights = fights            # tell the advisor how to fight turn by turn instead of mashing A
+        self.flee = flee                # and to run from chance encounters on the way somewhere
+        # ask on every screen where the player is not to be seen (a fight, a menu) once the last advice is played,
+        # instead of pressing at random there until exploring goes stale
+        self.ask_away = ask_away
         # a learned walker (anygame/walk_book.py): demonstration screens and the step taken from each; it walks
         # whenever the screen is one it knows, and backs off for a while when its step goes nowhere
         self.walker = None
@@ -423,6 +433,7 @@ class ScreenAgent:
         self.since_ask += 1
         if not self.queue and self.nav is None and self.advisor is not None and len(self.advice) < self.max_advice and (
                 (self.since_new >= self.stuck and self.asked[node] < self.advice_per_screen)
+                or (self.ask_away and self.watch is not None and place is None and not self.scene and self.prev_img is not None)
                 or (self.lean and place is not None and self.since_ask >= self.every)):
             self._ask(img, node)
         if self.advice and "states_at" in self.advice[-1] and "new" not in self.advice[-1] and not self.queue:
@@ -445,9 +456,9 @@ class ScreenAgent:
                 self.walk_rest -= 1
             else:
                 step, _ = self.walker.act(img)
-                # just walked through a door: the new room may still be fading in, so look a little longer before
-                # the explorer takes over (it would step straight back out)
-                for _ in range(self.walk_wait if step is None and self.last_how == "learned" else 0):
+                # just walked through a door (or just started, as a door ends a stage): the new room may still be
+                # fading in, so look a little longer before the explorer takes over (it would step straight back out)
+                for _ in range(self.walk_wait if step is None and (self.last is None or self.last_how == "learned") else 0):
                     img = native(self.dev.frame())
                     step, _ = self.walker.act(img)
                     if step is not None:
@@ -508,7 +519,7 @@ class ScreenAgent:
                                     f"{(box[1] + box[3] // 2) // grid}." if box else "")
                                  + " Count squares on it to say how many presses a walk takes.")
         parts.append({"type": "image_url", "image_url": {"url": _png(img, grid=grid), "detail": "high"}})
-        msgs = [{"role": "system", "content": ADVICE + (TARGETS if self.targets else "") + (FIGHTS if self.fights else "")},
+        msgs = [{"role": "system", "content": ADVICE + (TARGETS if self.targets else "") + (FIGHTS if self.fights else "") + (FLEE if self.flee else "")},
                 {"role": "user", "content": parts}]
         entry: dict[str, Any] = {"node": node, "states_at": len(self.visits)}
         try:
