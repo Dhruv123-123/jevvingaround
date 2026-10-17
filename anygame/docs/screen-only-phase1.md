@@ -860,9 +860,9 @@ after a blackout:
 
 | stage | result |
 |---|---|
-| train to level 25 | 2 of 5 within about 12,000 presses (the rest wandered onto Route 3) |
-| heal, cave, deepest floor | 2 of 2 |
-| **to Cerulean City** | **1 of 2** (level 29, three retries, $1.28 of Azure from the Mt. Moon Center) |
+| train to level 25 | 3 of 5 within about 12,000 presses (the rest wandered onto Route 3) |
+| heal, cave, deepest floor | 3 of 3 |
+| **to Cerulean City** | **2 of 5** (levels 27 and 29, $1.61 and $1.28 of Azure from the Mt. Moon Center; the third run's log was lost) |
 
 From that Cerulean save, with walk books for the Cerulean Pokemon Center and the gym (`misty-demos/`, test-helper
 walks): heal, then beat Misty.
@@ -872,7 +872,7 @@ walks): heal, then beat Misty.
 | **Cascade Badge** | **3/3** (710-2,827 presses, $0.07-0.15 of Azure, level 30) |
 
 So the second badge is now won screen-only in pieces: Pewter to the Mt. Moon Center 5/5 (18.23), the Center to
-Cerulean 1 of 5, Cerulean to the badge 3/3. The weak link is Mt. Moon: training wanders off, and the deepest floor
+Cerulean 2 of 5, Cerulean to the badge 3/3. The weak link is Mt. Moon: training wanders off, and the deepest floor
 still drains a lone Ivysaur. Data: `screen-only-phase1/skill-cerulean17/`, `skill-misty1/`, `fight-demos/`.
 
 ## Where this leaves things
