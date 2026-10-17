@@ -10,7 +10,7 @@ import glob
 
 import numpy as np
 
-STEPS = ("up", "down", "left", "right")
+STEPS = ("up", "down", "left", "right", "a", "b")
 
 
 def thumb(img: np.ndarray, k: int = 4) -> np.ndarray:
@@ -48,3 +48,40 @@ class WalkBook:
             if d[i] <= self.near:
                 votes[self.y[i]] += 1.0 / (1.0 + d[i])
         return STEPS[int(votes.argmax())], float(d[idx[0]])
+
+
+def fight_view(img: np.ndarray) -> np.ndarray:
+    """A fight screen for the fight book: the bottom box (messages, menus and the menu cursor) at half size, and the
+    rest (the foe, the health bars) at a quarter."""
+    g = img[:, :, :3].astype(np.float32).mean(axis=2)
+    h, w = (g.shape[0] // 4) * 4, (g.shape[1] // 4) * 4
+    cut = (h * 2 // 3) // 4 * 4
+    box = g[cut:h, :w].reshape((h - cut) // 2, 2, w // 2, 2).mean(axis=(1, 3)).ravel()
+    top = g[:cut, :w].reshape(cut // 4, 4, w // 4, 4).mean(axis=(1, 3)).ravel()
+    return np.concatenate([box, top])
+
+
+class FightBook:
+    """Fight screens from demonstration fights and the press made on each (anygame scripts/pokemon_fight_demos.py for
+    Pokemon); a new screen gets the press of the nearest one, when one is near. Menus differ from each other only by
+    a small cursor, so it takes the single nearest screen rather than a vote."""
+
+    def __init__(self, pattern: str, near: float = 4.0):
+        views, steps = [], []
+        for path in sorted(p for part in pattern.split("|") for p in glob.glob(part)):
+            d = np.load(path)
+            views += [fight_view(s) for s in d["shots"]]
+            steps += list(d["steps"])
+        self.x = np.array(views, dtype=np.float32)
+        self.y = np.array(steps, dtype=np.int64)
+        self.near = near
+
+    def __len__(self) -> int:
+        return len(self.y)
+
+    def act(self, img: np.ndarray) -> tuple[str | None, float]:
+        if not len(self.y):
+            return None, float("inf")
+        d = np.abs(self.x - fight_view(img)).mean(axis=1)
+        i = int(np.argmin(d))
+        return (STEPS[self.y[i]] if d[i] <= self.near else None), float(d[i])
