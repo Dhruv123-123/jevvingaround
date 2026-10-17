@@ -49,7 +49,7 @@ def main() -> None:
     from anygame.chat import Chat
     state, seed, stages = sys.argv[1], int(sys.argv[2]), json.load(open(sys.argv[3]))
     kw = json.loads(sys.argv[4]) if len(sys.argv) > 4 else {}
-    keep = sys.argv[5] if len(sys.argv) > 5 else None      # save a state after each stage passed, as KEEP-N.state
+    keep = sys.argv[5] if len(sys.argv) > 5 else None      # save a state after each stage passed, as KEEP-N.state (and KEEP-N.json)
     work = tempfile.mkdtemp(prefix="sochain-")
     rom = os.path.join(work, "p.gb")
     shutil.copyfile(ROM, rom)
@@ -112,6 +112,8 @@ def main() -> None:
         if keep:
             with open(f"{keep}-{len(out)}.state", "wb") as f:
                 dev._pb.save_state(f)
+            with open(f"{keep}-{len(out)}.json", "w") as f:   # what the save is, if the run is killed before its log lands
+                json.dump({"stage": k - 1, **out[-1], "redos": sum(redos.values())}, f)
     if hasattr(a, "summary"):
         typed.append(a.summary())
     dev.close()
