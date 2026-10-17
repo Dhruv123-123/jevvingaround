@@ -841,13 +841,47 @@ took over 140 presses, because the advisor misreads the battle menu's cursor and
 Next: a learned battle book (battle screens and the right press, recorded by the test helper, like the walk
 books), so fights are quick and use the strong move. Data: `screen-only-phase1/skill-cerulean*/`.
 
+### 18.24 A learned fight book, and the Cascade Badge
+
+The fix for 18.23's fights is the same move that fixed walking: demonstrations. `scripts/pokemon_fight_demos.py`
+(a RAM test helper) paces just inside Mt. Moon and plays each wild fight by a rule: FIGHT, then the attack that
+hurts this foe most (power, same-type bonus, type match-up, uses left), A through every message, yes to any other
+menu. 69 fights give 3,137 (screen, press) pairs. `FightBook` (anygame/walk_book.py) answers a new fight screen
+with the press of the single nearest demo screen, looking at the bottom box (messages, menus, the cursor) at half
+size and the rest at a quarter, and stays quiet when nothing is near (4 grey levels a pixel). On fights from a save
+the demos never saw: 259 of 300 presses as the rule would play them, 0 different, 41 left to the advisor. The agent's
+opt-in `fight_book` plays every fight screen it knows before the advisor or the walker; a screen it has pressed ten
+times in one fight goes to the advisor. Two fixes on the way: demo frames from before the fight's box is drawn
+(still the map, labelled A) made the book press A in the cave; they are no longer recorded.
+
+From the Mt. Moon Pokemon Center (the 18.23 saves), stages: train to level 25 in the cave's mouth (a pacing walk
+book plus the fight book), heal, into the cave, down to the deepest floor, out to Cerulean, with up to three retries
+after a blackout:
+
+| stage | result |
+|---|---|
+| train to level 25 | 2 of 5 within about 12,000 presses (the rest wandered onto Route 3) |
+| heal, cave, deepest floor | 2 of 2 |
+| **to Cerulean City** | **1 of 2** (level 29, three retries, $1.28 of Azure from the Mt. Moon Center) |
+
+From that Cerulean save, with walk books for the Cerulean Pokemon Center and the gym (`misty-demos/`, test-helper
+walks): heal, then beat Misty.
+
+| result | runs |
+|---|---|
+| **Cascade Badge** | **3/3** (710-2,827 presses, $0.07-0.15 of Azure, level 30) |
+
+So the second badge is now won screen-only in pieces: Pewter to the Mt. Moon Center 5/5 (18.23), the Center to
+Cerulean 1 of 5, Cerulean to the badge 3/3. The weak link is Mt. Moon: training wanders off, and the deepest floor
+still drains a lone Ivysaur. Data: `screen-only-phase1/skill-cerulean17/`, `skill-misty1/`, `fight-demos/`.
+
 ## Where this leaves things
 
 From power-on, with no save, the screen-only agent now wins the Boulder Badge in 10 of 10 runs, two rounds in a row (21-49k presses,
 $0.40-0.94 of Azure each; 18.21, 18.22), after four rounds of 9 of 10 (18.17-18.20). From the
 Viridian City save it wins in 5 of 6 (18.10). The agent reads only pixels; what carries it is the explorer, a
 cheap advisor for goals and battles, and learned walk books recorded by a RAM test helper (off by default, so
-the held-out score of section 4 is unchanged). Toward the second gym, runs get as far as Mt. Moon's deepest floor (18.23).
+the held-out score of section 4 is unchanged). The second badge has been won screen-only in pieces, from the Mt. Moon Center (18.24); Mt. Moon is the weak link.
 
 ## Cost per game-hour
 

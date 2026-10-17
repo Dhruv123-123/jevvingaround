@@ -88,6 +88,9 @@ def main() -> None:
             if trace and i % 25 == 0:          # CHAIN_TRACE=path: where the run is every 25 presses (grader-side)
                 trace.write(json.dumps([len(out), i, mem[0xD35E], mem[0xD362], mem[0xD361], mem[0xD057],
                                         mem[0xD16C] * 256 + mem[0xD16D], mem[0xD18C], a.last_how]) + "\n")
+                if i % 500 == 0:               # and the screen now and then, to see what a stuck run is looking at
+                    from PIL import Image
+                    Image.fromarray(dev._pb.screen.ndarray[:, :, :3]).save(os.environ["CHAIN_TRACE"] + ".png")
             moved = not maps or maps[-1] != mem[0xD35E]
             if moved:
                 maps.append(mem[0xD35E])

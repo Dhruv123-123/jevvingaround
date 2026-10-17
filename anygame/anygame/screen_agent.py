@@ -185,7 +185,7 @@ class ScreenAgent:
                  frontier: bool = True, advisor=None, stuck: int = 10, max_advice: int = 150,
                  advice_per_screen: int = 2, lean: float = 2.0, every: int = 50, effort: str = "low",
                  grid: bool = False, targets: bool = False, fights: bool = False, walker: str | None = None,
-                 flee: bool = False, ask_away: bool = False):
+                 flee: bool = False, ask_away: bool = False, fight_book: str | None = None):
         self.place_cell = place_cell
         self.settle = settle
         self.walk_wait = walk_wait
@@ -210,6 +210,13 @@ class ScreenAgent:
         # ask on every screen where the player is not to be seen (a fight, a menu) once the last advice is played,
         # instead of pressing at random there until exploring goes stale
         self.ask_away = ask_away
+        # a learned fight book (anygame/walk_book.py FightBook): fight screens and the press made on each; it plays
+        # every screen it knows, before the advisor or the walker is asked
+        self.fight_book = None
+        if fight_book:
+            from anygame.walk_book import FightBook
+            self.fight_book = FightBook(fight_book)
+        self.fight_seen: Counter = Counter()
         # a learned walker (anygame/walk_book.py): demonstration screens and the step taken from each; it walks
         # whenever the screen is one it knows, and backs off for a while when its step goes nowhere
         self.walker = None
@@ -431,7 +438,17 @@ class ScreenAgent:
         how = "explore"
         self.here = state
         self.since_ask += 1
-        if not self.queue and self.nav is None and self.advisor is not None and len(self.advice) < self.max_advice and (
+        fought = None
+        if self.fight_book is not None:
+            # a screen the book keeps coming back to (an attack with no uses left, say) is left to the advisor and
+            # the explorer; the count starts again once the player is seen on the map
+            if place is not None:
+                self.fight_seen.clear()
+            elif self.fight_seen[node] < 10:
+                fought = self.fight_book.act(img)[0]
+                if fought is not None:
+                    self.fight_seen[node] += 1
+        if fought is None and not self.queue and self.nav is None and self.advisor is not None and len(self.advice) < self.max_advice and (
                 (self.since_new >= self.stuck and self.asked[node] < self.advice_per_screen)
                 or (self.ask_away and self.watch is not None and place is None and not self.scene and self.prev_img is not None)
                 or (self.lean and place is not None and self.since_ask >= self.every)):
@@ -441,6 +458,9 @@ class ScreenAgent:
         if self.scene and self.queue:
             self.queue = []        # the advice was for another screen (a door, a fight broke in): ask again later
         b = None
+        if fought is not None:
+            b, how = fought, "fight"
+            self.queue, self.nav = [], None
         if self.walker is not None and self.last is not None and self.last_how == "learned":
             self.walk_fails = self.walk_fails + 1 if state == self.last[0] else 0
             if self.walk_fails >= 2:
@@ -451,7 +471,7 @@ class ScreenAgent:
                 if state not in self.walk_talked:
                     self.walk_talked.add(state)
                     self.queue = ["a"] * 6
-        if self.walker is not None and not self.scene:
+        if self.walker is not None and not self.scene and b is None:
             if self.walk_rest > 0:
                 self.walk_rest -= 1
             else:
