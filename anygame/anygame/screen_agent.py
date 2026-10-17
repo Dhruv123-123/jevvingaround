@@ -452,9 +452,9 @@ class ScreenAgent:
                 self.walk_rest -= 1
             else:
                 step, _ = self.walker.act(img)
-                # just walked through a door: the new room may still be fading in, so look a little longer before
-                # the explorer takes over (it would step straight back out)
-                for _ in range(self.walk_wait if step is None and self.last_how == "learned" else 0):
+                # just walked through a door (or just started, as a door ends a stage): the new room may still be
+                # fading in, so look a little longer before the explorer takes over (it would step straight back out)
+                for _ in range(self.walk_wait if step is None and (self.last is None or self.last_how == "learned") else 0):
                     img = native(self.dev.frame())
                     step, _ = self.walker.act(img)
                     if step is not None:
