@@ -101,3 +101,12 @@ def test_memo_replays_an_answer_without_a_call_and_forgets_one_that_leads_nowher
     assert s["memo_hits"] > s["decide_calls"], "repeat screens replay the memo"
     assert s["decide_calls"] <= 2 * max(1, s["labels"]), "at most asks_per_screen calls per screen and goal"
     assert any(e.get("memo_use", 0) >= 1 for e in a.advice)
+
+
+def test_stub_decider_follows_the_subgoal_after_its_latency():
+    from anygame.sensors import open_sensor
+    s = open_sensor("stub:30")
+    t0 = time.perf_counter()
+    r = s.ask({"screen": {"subgoal": "leave by the door"}},
+              {"do": {"type": "choice", "criteria": {"o1": "talk to mom (a)", "o2": "leave by the door (up*3)"}}})
+    assert r["answers"]["do"]["choice"] == "o2" and time.perf_counter() - t0 >= 0.03 and r["cost_usd"] == 0.0

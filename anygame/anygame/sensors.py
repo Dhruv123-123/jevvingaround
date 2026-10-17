@@ -38,12 +38,14 @@ def open_sensor(spec: str | None, timeout: float | None = None):
         return Jev(api_key=os.environ.get("CLM_API_KEY", "local"), base_url=base, model=os.environ.get("CLM_MODEL", "clm-latest"), timeout=timeout)
     if spec == "top":
         return TopSensor()
+    if spec == "stub" or spec.startswith("stub:"):
+        return StubSensor(float(spec.split(":", 1)[1]) if ":" in spec else 400.0)
     if spec == "random" or spec.startswith("random:"):
         return RandomSensor(int(spec.split(":", 1)[1]) if ":" in spec else 0)
     if spec.startswith("llm:"):
         # a chat model answers in seconds, not milliseconds: the pack's Jev timeout would only make it fall back to rules
         return LLMSensor(spec[4:], timeout=max(float(timeout or 0), float(os.environ.get("ANYGAME_LLM_TIMEOUT", "60"))))
-    raise SystemExit(f"unknown sensor '{spec}': default | openai[:<model>] | jev | clm[:<base url>] | none | top | random | llm:<model>")
+    raise SystemExit(f"unknown sensor '{spec}': default | openai[:<model>] | jev | clm[:<base url>] | none | top | random | stub[:<ms>] | llm:<model>")
 
 
 class TopSensor:
@@ -61,6 +63,35 @@ class TopSensor:
             else:
                 answers[k] = {"type": "score", "score": 0}
         return {"answers": answers, "latency_ms": 0, "input_tokens": 0, "cost_usd": 0.0, "model": "top"}
+
+
+class StubSensor:
+    """A stand-in for Jev while it has no credit: answers after `ms` milliseconds (Jev's p50 is ~400), picking the
+    choice whose description shares the most words with the screen's subgoal (the vision model's, on the blackboard),
+    else the first. Not a model: it measures the loop, not judgment. Costs nothing."""
+
+    def __init__(self, ms: float = 400.0):
+        self.ms, self.model = ms, f"stub:{int(ms)}"
+
+    def ask(self, state, questions: dict) -> dict:
+        time.sleep(self.ms / 1000)
+        screen = state.get("screen") if isinstance(state, dict) else None
+        want = set(re.findall(r"[a-z]+", str((screen or {}).get("subgoal", "") if isinstance(screen, dict) else "").lower()))
+        want -= {"the", "a", "to", "of", "and", "on", "in", "at", "go", "from"}
+        answers = {}
+        for k, q in questions.items():
+            if q["type"] == "choice":
+                crit = list(q["criteria"])
+                score = {c: len(want & set(re.findall(r"[a-z]+", f"{c} {q['criteria'][c]}".lower()))) for c in crit}
+                pick = max(crit, key=lambda c: (score[c], -crit.index(c)))
+                if k == "heading" and not score[pick]:
+                    pick = "none" if "none" in crit else pick
+                answers[k] = {"type": "choice", "choice": pick, "probabilities": {c: (1.0 if c == pick else 0.0) for c in crit}, "confidence": 0.5}
+            elif q["type"] == "noul":
+                answers[k] = {"type": "noul", "noul": 0.5}
+            else:
+                answers[k] = {"type": "score", "score": 0}
+        return {"answers": answers, "latency_ms": int(self.ms), "input_tokens": 0, "cost_usd": 0.0, "model": self.model}
 
 
 class RandomSensor:

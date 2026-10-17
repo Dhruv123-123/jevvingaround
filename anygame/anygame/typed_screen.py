@@ -241,7 +241,7 @@ class TypedScreenAgent(ScreenAgent):
             self.trail = (self.trail + [here])[-6:]
         state = {
             "goal": self.goal or self.generic_goal,
-            "screen": {k: label[k] for k in ("kind", "where", "text", "see") if label.get(k)} or "unlabelled",
+            "screen": {k: label[k] for k in ("kind", "where", "text", "see", "subgoal") if label.get(k)} or "unlabelled",
             "recent screens, oldest first": self.trail[:-1],
             "progress": {"presses without finding a new place": stale,
                          "screens seen": len(self.nodes.ids), "times on this screen": self.visits.get(node, 0)},
