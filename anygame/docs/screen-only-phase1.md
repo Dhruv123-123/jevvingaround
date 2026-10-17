@@ -807,13 +807,47 @@ restart interrupted it.
 That makes two rounds in a row with no miss, the second without any resumed runs. Over rounds 2-11: 85 badges in
 100 runs from power-on, and 20 of 20 in the last two rounds.
 
+### 18.23 Toward the second badge: Mt. Moon
+
+Stages from the badge saves of 18.22 to Cerulean City, each with its own walk book recorded by the RAM test
+helper (which now gets through trainer fights and Mt. Moon's fossil room):
+
+| stage | walker | result |
+|---|---|---|
+| heal at the Pewter Center | Pewter books + Center book | 5/5 |
+| Route 3 to the Mt. Moon Center (`respawn15`) | `moonpc` | 5/5 |
+| into the cave (`59`) | `moon-g`, `moon-a` | 5/5 |
+| down to the deepest floor (`61`) | `moon-g`, `moon-b` | 2-4 of 5 per test |
+| deepest floor to Cerulean (`3`) | `moon-b/c/d` | **0 of 13** |
+
+What was found and fixed on the way (all off by default, so held-out runs are unchanged):
+
+- **Door fades.** After a door the new room fades in for about 48 frames, the walk book does not know the faded
+  screen, and the explorer stepped straight back out. `walk_wait` looks a little longer first, including on a
+  fresh agent's first look, since a stage ends on the door that changes the map.
+- **Goal words.** "Go down the ladders" was read as "walk south", which is out of the cave. The goal now says to
+  find the ladders and stay in the cave.
+- **Blackouts.** A lost fight wakes the player at the Center outside, where the last stage's books cannot walk
+  back in. A stage can now send the run back to an earlier stage when it lands on a map (`redo`).
+- **Fights.** Runs spent about 1,000 advice calls fighting every wild Zubat. Advice to run from chance encounters
+  (`flee`) worked as asked but did not help (1 of 3 vs 2 of 3 to the deepest floor). Traces (`CHAIN_TRACE`)
+  showed fights between advice calls were played by the explorer pressing at random; `ask_away` asks on every
+  fight screen instead.
+
+Where it stands: runs reach the deepest floor at level 20-22, often at full health, and lose to the fossil
+trainer's poison-type team with a single Ivysaur. A training stage (a walk book that paces just inside the cave
+for wild fights) did not raise the level in an hour: with every fight screen sent to the advisor, one wild Zubat
+took over 140 presses, because the advisor misreads the battle menu's cursor and keeps choosing the wrong move.
+Next: a learned battle book (battle screens and the right press, recorded by the test helper, like the walk
+books), so fights are quick and use the strong move. Data: `screen-only-phase1/skill-cerulean*/`.
+
 ## Where this leaves things
 
 From power-on, with no save, the screen-only agent now wins the Boulder Badge in 10 of 10 runs, two rounds in a row (21-49k presses,
 $0.40-0.94 of Azure each; 18.21, 18.22), after four rounds of 9 of 10 (18.17-18.20). From the
 Viridian City save it wins in 5 of 6 (18.10). The agent reads only pixels; what carries it is the explorer, a
 cheap advisor for goals and battles, and learned walk books recorded by a RAM test helper (off by default, so
-the held-out score of section 4 is unchanged). Next: the second gym (Mt. Moon and Cerulean City).
+the held-out score of section 4 is unchanged). Toward the second gym, runs get as far as Mt. Moon's deepest floor (18.23).
 
 ## Cost per game-hour
 
