@@ -4,7 +4,7 @@ screenonly_skill.py).
 
     python scripts/screenonly_chain.py STATE SEED STAGES.json '{"fights": true}' [KEEP]
 
-STAGES.json is a list of {"goal", "target" (map id, "levelN", "healed", "respawnMAP", "bagITEM", "nobagITEM", "partyN" or "badge"), "presses", "advice" (calls allowed in this
+STAGES.json is a list of {"goal", "target" (map id, "levelN", "healed", "respawnMAP", "bagITEM", "nobagITEM", "partyN", "badge" or "badgeN"), "presses", "advice" (calls allowed in this
 stage), "walker" (a walk book for this stage, optional; it only acts on screens near its demos), "fresh" (true: a new agent
 for this stage, with no memory of the run so far)}.
 
@@ -32,8 +32,8 @@ def done(mem, target: str) -> bool:
         return held if target.startswith("bag") else not held
     if target.startswith("respawn"):            # healed at a Pokemon Center, so a lost fight wakes up there
         return mem[0xD719] == int(target[7:])
-    if target == "badge":
-        return bool(mem[0xD356] & 1)
+    if target.startswith("badge"):              # badgeN: the Nth badge (plain "badge" is the first)
+        return bool(mem[0xD356] >> (int(target[5:] or 1) - 1) & 1)
     if target.startswith("party"):              # this many Pokemon in the party (the starter is party1)
         return mem[0xD163] >= int(target[5:])
     if target.startswith("level"):
@@ -98,7 +98,7 @@ def main() -> None:
     dev.close()
     shutil.rmtree(work, ignore_errors=True)
     print(json.dumps({"seed": seed, "stages": out, "passed": sum(s["reached"] is not None for s in out),
-                      "badge": bool(mem[0xD356] & 1), "advice": len(a.advice), "typed": typed, "said": said, "usd": round(before + a.total_cost, 4)}))
+                      "badge": bool(mem[0xD356] & 1), "badges": bin(mem[0xD356]).count("1"), "advice": len(a.advice), "typed": typed, "said": said, "usd": round(before + a.total_cost, 4)}))
 
 
 if __name__ == "__main__":

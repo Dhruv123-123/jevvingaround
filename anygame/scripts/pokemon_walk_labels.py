@@ -30,6 +30,9 @@ def main() -> None:
             after = rows[i + 1][2] if i + 1 < len(rows) else d["end"] if "end" in d else None
             if after is not None and int(after[0]) != m:       # a step through a door to another map
                 n = tuple(int(v) for v in after)
+            elif after is not None and 0 < abs(int(after[1]) - x) + abs(int(after[2]) - y) <= 3:
+                n = tuple(int(v) for v in after)    # where the step really led: a jump down a ledge, a step that set
+                                                    # off a fight (not recorded), the first step after a door
             nxt[(m, x, y)].add((int(a), n))
             shots.append(s)
             wheres.append((m, x, y))

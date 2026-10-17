@@ -32,10 +32,19 @@ def flee(pb, heal: bool = False):
     for k in range(600):
         if not pb.memory[BATTLE]:
             return
-        if heal:                        # demos only: never lose a fight
+        if heal:                        # demos only: never lose a fight, never run out of moves
             pb.memory[0xD16C], pb.memory[0xD16D] = pb.memory[0xD18D], pb.memory[0xD18E]
+            for j in range(4):          # party PP and the battle copy of it
+                for a in (0xD188 + j, 0xD02D + j):
+                    if pb.memory[a] & 0x3F < 10:
+                        pb.memory[a] = (pb.memory[a] & 0xC0) | 10
         if pb.memory[BATTLE] == 1 and k % 4 == 0:
-            press(pb, "down"); press(pb, "right"); press(pb, "a", after=60)
+            press(pb, "b"); press(pb, "down"); press(pb, "right"); press(pb, "a", after=60)   # B: out of a menu opened by mistake
+        if pb.memory[BATTLE] == 2 and k % 4 == 0:
+            press(pb, "b"); press(pb, "up"); press(pb, "left")   # the menu remembers RUN from the last wild fight: back to FIGHT
+            press(pb, "a", after=30)
+            for _ in range(3):          # and the move list remembers the last move (Growl would never end it): the first
+                press(pb, "up")
         press(pb, "a", after=40)
 
 
@@ -99,7 +108,11 @@ def main() -> None:
     blocked: set = set()
     doors: set = set()
     m = pb.memory
+    debug = os.environ.get("FIXTURE_DEBUG") == "1"
     for i in range(20000):
+        if debug and i % 100 == 0:
+            print("step", i, "map", m[MAP], "x", m[X], "y", m[Y], "battle", m[BATTLE], "leg", leg, flush=True)
+            pb.screen.image.save(out + ".dbg.png")
         if m[BATTLE]:
             flee(pb, heal)
             continue
