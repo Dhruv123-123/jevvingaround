@@ -875,6 +875,23 @@ So the second badge is now won screen-only in pieces: Pewter to the Mt. Moon Cen
 Cerulean 2 of 5, Cerulean to the badge 3/3. The weak link is Mt. Moon: training wanders off, and the deepest floor
 still drains a lone Ivysaur. Data: `screen-only-phase1/skill-cerulean17/`, `skill-misty1/`, `fight-demos/`.
 
+### 18.25 Keeping training in the cave
+
+A stage's `redo` now takes a list of maps and counts its retries per stage. The training stage sends the run back
+to a "go into the cave" stage whenever it lands on Route 3 or wakes at the Mt. Moon Center
+(`skill-cerulean18/stages.json`). Five runs from the Center: a container restart killed all of them before any
+reached Cerulean (the shared mount lost their open logs; the chain now writes `KEEP-N.json` beside each save so a
+killed run still says how far it got). Resumed from their saves (`skill-cerulean19/`):
+
+| from | result |
+|---|---|
+| cave entrance, level 25, full health | **Cerulean**, level 29, 2 blackouts on the deepest floor first ($1.62 with the run before the restart) |
+| cave entrance, level 25, half health | **Cerulean**, level 27, after healing ($0.62 from that save) |
+| deepest floor, level 27 | walked back out the west entrance onto Route 3 (stopped) |
+
+Training back in the cave works, but it is slow: about 3 levels an hour, and the redo fires every few levels. The
+deepest floor is still reached with 4-21 HP in most tries, so the blackout-and-retry loop does the rest.
+
 ## Where this leaves things
 
 From power-on, with no save, the screen-only agent now wins the Boulder Badge in 10 of 10 runs, two rounds in a row (21-49k presses,
