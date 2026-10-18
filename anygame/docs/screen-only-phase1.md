@@ -909,6 +909,31 @@ behind you (`skill-cerulean21/`). From that run's deepest-floor save, three seed
 So from the deepest floor at level 28-29 it is now 4 of 4 (with retries). What remains slow is the training: about
 three levels an hour with a redo every few levels.
 
+### 18.27 Power-on to the Cascade Badge in one chain
+
+One 22-stage chain (`chain-cascade1/stages.json`): round 11's first-badge stages, the Pewter Center, Route 3 to
+the Mt. Moon Center, the cave stages of 18.25 (training to level 25), then the Cerulean Center and Misty. The
+chain's new per-stage `"with"` settings turn on the fight book and `ask_away` only after the first badge, so the
+first-badge stages run exactly as in round 11. Two seeds from power-on, no save:
+
+| seed | result |
+|---|---|
+| 601 | Boulder Badge (level 15, $0.55), Mt. Moon Center, trained to 25, **Cerulean** at level 28 after one blackout on the deepest floor ($3.18). Then the heal stage walked back west and healed at the Mt. Moon Center, so Misty's stage started on the wrong side of the cave and ran out of presses. |
+| 602 | Boulder Badge, Mt. Moon Center, then training ran out of presses at level 23 (6 redos from Route 3) |
+
+The fix is in the stage list (`stages2.json`): the Cerulean heal now targets `respawn3` and both Cerulean stages
+send the run back into the cave if it lands on the first floor or the Mt. Moon Center. Seed 601, resumed from its
+own save at the cave entrance (level 27) with the new list: deepest floor, **Cerulean** at level 29, Cerulean
+Center, then **beat Misty: Cascade Badge**, 3,195 presses in the gym stage, level 30.
+
+| from power-on | result |
+|---|---|
+| **two badges, screen-only** | **1 of 2** (seed 601, one resume from its own mid-cave save; about $5.50 of Azure in all) |
+
+Caveats: the resume is the same as a redo (the run's own save, no fixture), but it was started by hand. `respawn3`
+fired on entering the Cerulean Center, before the nurse, so Misty was fought at 27 of 83 HP and still won; a
+"healed and respawn3" target would be stricter. Training is still the slow part (about three levels an hour).
+
 ## Where this leaves things
 
 From power-on, with no save, the screen-only agent now wins the Boulder Badge in 10 of 10 runs, two rounds in a row (21-49k presses,
