@@ -892,6 +892,23 @@ killed run still says how far it got). Resumed from their saves (`skill-cerulean
 Training back in the cave works, but it is slow: about 3 levels an hour, and the redo fires every few levels. The
 deepest floor is still reached with 4-21 HP in most tries, so the blackout-and-retry loop does the rest.
 
+### 18.26 Training to level 28
+
+Same stages with the training target raised to level 28 (`skill-cerulean20/`, two runs from the Mt. Moon Center):
+both reached the deepest floor with 45-56 HP, against 4-21 at level 25-27. One went on to **Cerulean** at level 30
+in 1,226 more presses ($2.68 in all; the slow training is most of it). The other walked back up and out the west
+entrance onto Route 3. The last stage now also treats Route 3 as a redo, and its goal says the first floor is
+behind you (`skill-cerulean21/`). From that run's deepest-floor save, three seeds:
+
+| seed | result |
+|---|---|
+| 651 | **Cerulean**, level 30, after one redo from Route 3 ($1.20) |
+| 652 | **Cerulean**, level 30, after one blackout ($0.68) |
+| 653 | **Cerulean**, level 29, first try ($0.23) |
+
+So from the deepest floor at level 28-29 it is now 4 of 4 (with retries). What remains slow is the training: about
+three levels an hour with a redo every few levels.
+
 ## Where this leaves things
 
 From power-on, with no save, the screen-only agent now wins the Boulder Badge in 10 of 10 runs, two rounds in a row (21-49k presses,
