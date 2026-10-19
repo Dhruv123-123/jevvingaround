@@ -259,7 +259,7 @@ class FramewiseAgent(TypedScreenAgent):
 
     def __init__(self, device, decider, namer=None, labels: LabelCache | None = None, patience_ms: float = 600,
                  reuse: int = 2, asks_per_screen: int = 3, settle: int = 2, max_settle: int = 8, prefetch: bool = True,
-                 hold_idle: bool | None = None, cache: str | None = None, **kw):
+                 hold_idle: bool | None = None, cache: str | None = None, max_patience_ms: float = 4000, **kw):
         namer = namer if namer is not None else kw.pop("advisor", None)
         super().__init__(device, decider, namer=None, labels=labels, settle=settle, **kw)
         self.board = Blackboard(self.labels)
@@ -277,6 +277,7 @@ class FramewiseAgent(TypedScreenAgent):
                 self.fast.load(mp)
         self.patience_ms, self.reuse, self.asks_per_screen, self.prefetch = patience_ms, reuse, asks_per_screen, prefetch
         self.max_settle = max_settle
+        self.max_patience_ms = max_patience_ms
         # on a game clock (the emulator waits for us) a held frame re-reads the screen; on a wall clock the game runs on
         if hold_idle is None:
             hold_idle = getattr(device, "clock", "game") == "game" and hasattr(device, "screen")
@@ -489,10 +490,19 @@ class FramewiseAgent(TypedScreenAgent):
                 self.n["asks"] += 1
                 self.wait_from = time.perf_counter()
         if self.fast.pending(key) and self.wait_from is not None \
-                and (time.perf_counter() - self.wait_from) * 1000 < self.patience_ms:
+                and (time.perf_counter() - self.wait_from) * 1000 < self.patience():
             return None, "wait"
         self.wait_from = None
         return self.choose(state), "explore"
+
+    def patience(self) -> float:
+        """How long a labelled screen waits for its answer: `patience_ms`, or 1.5x the decider's recent median when
+        it is slower than that (a 2 s decider would otherwise lose every screen to the explorer), at most
+        `max_patience_ms`."""
+        recent = self.fast.ms[-20:]
+        if not recent:
+            return self.patience_ms
+        return min(self.max_patience_ms, max(self.patience_ms, 1.5 * float(np.median(recent))))
 
     def _settle_macro(self, j_after: int | None = None) -> None:
         """A macro just ended: did it find anything new? One that keeps finding nothing is forgotten, so the decider
