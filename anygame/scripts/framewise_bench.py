@@ -39,7 +39,8 @@ def main() -> None:
     decider = open_sensor(dec, timeout=20)
     goal = os.environ.get("BENCH_GOAL", "")
     if kind == "framewise":
-        a = FramewiseAgent(dev, decider, namer=chat, seed=seed)
+        # BENCH_KW: FramewiseAgent settings as JSON, e.g. '{"name_effort": "none"}'
+        a = FramewiseAgent(dev, decider, namer=chat, seed=seed, **json.loads(os.environ.get("BENCH_KW") or "{}"))
     else:
         a = TypedScreenAgent(dev, decider, namer=chat, seed=seed)
     a.goal = goal
