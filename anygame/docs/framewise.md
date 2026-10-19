@@ -54,6 +54,28 @@ Readout: the frame loop never waits, and in the same three minutes both models g
 because neither sits idle while the other runs. Neither run reached the Mart: the stub cannot judge, so progress has
 to be measured with Jev itself.
 
+## Round 2 (Oct 19): pixel reads and where options led
+
+`perceive/pixel_reads.py` reads gauges (HP bars) and a menu cursor from pixels by shape, with no game layout. A gauge
+is a thin band between two long dark lines over the same columns; a cursor is the small thing a d-pad press drew when
+little else changed. The fast lane's state now carries each bar's fill (and its last value), the cursor's text row,
+and, per option, where it led the last time it was picked on this screen. Off the map the memo key also holds the
+cursor row and whether a bar is low.
+
+Same setup as above but 300 s and stopping at the Mart, round 1 code vs round 2, `stub:400` decider (not a model):
+
+| | round 1 | round 2 |
+|---|---|---|
+| presses from Jev's macros | 147, 226 | 309, 259 |
+| decider calls | 79, 71 | 62, 56 |
+| places stood on | 24, 113 | 100, 109 |
+| maps entered | 2, 2 | 3, 3 |
+| reached the Mart | no, no | no, no |
+| Azure | $0.025–0.030 | $0.028–0.029 |
+
+The decider drives about 46% more presses with about 20% fewer calls, since replayed answers carry where they led.
+Cursor reads fired 6 and 2 times (Viridian has few menus). The Mart still needs a decider that can judge.
+
 ## Next
 
 1. With Jev credit: 10 power-on badge runs with `{"decider": "jev", "framewise": true}` against the Oct 15 typed
