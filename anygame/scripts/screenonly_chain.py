@@ -11,7 +11,8 @@ STAGES.json is a list of {"goal", "target" (map id, "levelN", "healed", "respawn
 stage), "walker" (a walk book for this stage, optional; it only acts on screens near its demos), "fresh" (true: a new agent
 for this stage, with no memory of the run so far), "with" (optional settings merged into the run's for this stage's fresh
 agent, e.g. a fight book only for the caves), "redo" (optional {"map": M, "from": K, "times": N}: landing on map M (or any map in a list), as
-a lost fight wakes up at the last Pokemon Center, sends the run back to stage K, at most N times from this stage)}.
+a lost fight wakes up at the last Pokemon Center, sends the run back to stage K, at most N times from this stage; {"hp": F,
+...} instead fires when a fight ends below that fraction of health; a list of these is checked in order)}.
 
 With {"decider": "openai"} or {"decider": "jev"} in the settings, the agent is anygame/typed_screen.py's: the Azure
 model names each new screen once and the typed decider picks what to do. Add "framewise": true for
@@ -27,6 +28,19 @@ import tempfile
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 ROM = "/mnt/project-files/roms/pokemon-red.gb"
+
+
+def redo_list(st: dict) -> list[dict]:
+    r = st.get("redo") or []
+    return r if isinstance(r, list) else [r]
+
+
+def redo_due(mem, r: dict, moved: bool) -> bool:
+    """A redo fires on landing on one of its maps, or (with "hp") when a fight ends with the first party member below
+    that fraction of its health (grader-side, like the targets)."""
+    if "hp" in r:
+        return not mem[0xD057] and mem[0xD16C] * 256 + mem[0xD16D] < r["hp"] * (mem[0xD18D] * 256 + mem[0xD18E])
+    return moved and mem[0xD35E] in (r["map"] if isinstance(r["map"], list) else [r["map"]])
 
 
 def done(mem, target: str) -> bool:
@@ -104,10 +118,9 @@ def main() -> None:
             if done(mem, st["target"]):
                 got = i
                 break
-            redo = st.get("redo")
-            if redo and moved and i and mem[0xD35E] in (redo["map"] if isinstance(redo["map"], list) else [redo["map"]]) \
-                    and redos.get(k, 0) < redo.get("times", 3):
-                got, redos[k], k = "redo", redos.get(k, 0) + 1, redo["from"]
+            back = next((r for r in redo_list(st) if i and redos.get(k, 0) < r.get("times", 3) and redo_due(mem, r, moved)), None)
+            if back:
+                got, redos[k], k = "redo", redos.get(k, 0) + 1, back["from"]
                 break
         out.append({"target": st["target"], "reached": got, "maps": maps[:30], "level": mem[0xD18C],
                     "hp": mem[0xD16C] * 256 + mem[0xD16D], "usd": round(before + a.total_cost, 4)})
