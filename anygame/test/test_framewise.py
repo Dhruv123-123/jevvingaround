@@ -154,3 +154,17 @@ def test_readings_and_outcomes_reach_the_decider_state():
     assert any("last time:" in o["desc"] for o in opts.values()), "an option tried before says where it led"
     assert a._key(0, {"kind": "battle"})[3] == 1 and a._key(0, {"kind": "map"})[3] == 0
     a.close()
+
+
+def test_patience_stretches_to_a_slow_decider():
+    from anygame.framewise import FramewiseAgent
+    from test_screen_agent import GridGame
+    a = FramewiseAgent(GridGame(), SlowDecider(0.0), namer=None, seed=1, patience_ms=600, max_patience_ms=4000)
+    assert a.patience() == 600
+    a.fast.ms = [2000] * 5
+    assert a.patience() == 3000
+    a.fast.ms = [9000] * 5
+    assert a.patience() == 4000
+    a.fast.ms = [400] * 5
+    assert a.patience() == 600
+    a.close()

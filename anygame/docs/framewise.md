@@ -76,6 +76,37 @@ Same setup as above but 300 s and stopping at the Mart, round 1 code vs round 2,
 The decider drives about 46% more presses with about 20% fewer calls, since replayed answers carry where they led.
 Cursor reads fired 6 and 2 times (Viridian has few menus). The Mart still needs a decider that can judge.
 
+### With a judging stand-in (Azure answering Jev's questions)
+
+Same runs with the Azure model as the decider (p50 about 2.1 s per answer, five times Jev's), round 1 vs round 2:
+
+| | round 1 | round 2 |
+|---|---|---|
+| presses from the decider's macros | 99, 137 | 106, 237 |
+| places stood on | 124, 142 | 98, 82 |
+| reached the Mart | no, no | no, no |
+| spend (labels + decisions) | $0.067, $0.054 | $0.064, $0.048 |
+
+No gain yet: neither version reached the Mart, and round 2 covered less ground. With a 2 s decider, the explorer
+plays 70–87% of presses because the 600 ms patience runs out first, so the decider's judgment barely steers.
+That is the next thing to fix, by waiting longer when the decider is slow or keeping the explorer to the heading the
+last answer gave. Total spend for these four runs was $0.23.
+
+### Round 3 (Oct 19): why the explorer still plays most presses
+
+The wait for an answer now stretches to 1.5x the decider's recent median (at most 4 s). Rerun with Azure as the
+decider (p50 2.0 s), 2 seeds: no Mart, 143 and 74 places, the explorer still played 82% of presses ($0.11).
+
+New counters (`explore_why` in the summary) show the cause: with the stub, about 80% of explorer presses happen on
+screens that have no label yet. A new view takes about 4 s to label, so after each door the explorer plays for a
+while. Timeouts are rare (2–6), and so are "explore" answers. "Explore" answers now expire after 8 presses instead
+of pinning a screen to the explorer for good.
+
+A fix tried for unlabelled views: keep the last map label when no scene change happened (`borrow=True`). That
+halves unlabelled explorer presses and raises the decider's presses on 2 of 3 seeds. Places reached: 21, 59, 84 with
+it vs 72, 26, 66 without, a wash. It stays off by default. The likely real fix is labelling faster (a smaller image,
+or a lower-detail first pass) so a new view is named in under a second.
+
 ## Next
 
 1. With Jev credit: 10 power-on badge runs with `{"decider": "jev", "framewise": true}` against the Oct 15 typed

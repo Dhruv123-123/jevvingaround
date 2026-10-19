@@ -259,7 +259,8 @@ class FramewiseAgent(TypedScreenAgent):
 
     def __init__(self, device, decider, namer=None, labels: LabelCache | None = None, patience_ms: float = 600,
                  reuse: int = 2, asks_per_screen: int = 3, settle: int = 2, max_settle: int = 8, prefetch: bool = True,
-                 hold_idle: bool | None = None, cache: str | None = None, **kw):
+                 hold_idle: bool | None = None, cache: str | None = None, max_patience_ms: float = 4000,
+                 borrow: bool = False, **kw):
         namer = namer if namer is not None else kw.pop("advisor", None)
         super().__init__(device, decider, namer=None, labels=labels, settle=settle, **kw)
         self.board = Blackboard(self.labels)
@@ -277,6 +278,9 @@ class FramewiseAgent(TypedScreenAgent):
                 self.fast.load(mp)
         self.patience_ms, self.reuse, self.asks_per_screen, self.prefetch = patience_ms, reuse, asks_per_screen, prefetch
         self.max_settle = max_settle
+        self.max_patience_ms = max_patience_ms
+        self.explore_for = 8
+        self.borrow = borrow
         # on a game clock (the emulator waits for us) a held frame re-reads the screen; on a wall clock the game runs on
         if hold_idle is None:
             hold_idle = getattr(device, "clock", "game") == "game" and hasattr(device, "screen")
@@ -350,6 +354,12 @@ class FramewiseAgent(TypedScreenAgent):
             if self.slow.want(b, img, self.recent[:-1], self.goal_now()):
                 self.n["named"] += 1
         state = self.state_now or node
+        if j is None and self.borrow and not self.scene and self.j_now is not None \
+                and self.board.label(self.j_now).get("kind") == "map":
+            # a map that walked past what the cache can match, with no scene change since: still the same place, so
+            # it keeps the last label (and its answers) while the slow lane names this view
+            j = self.j_now
+            self.n["borrowed"] += 1
         press, how = self._act(img, node, state, j)
         if press is None:
             return self._out(None, node, how, t0)
@@ -406,7 +416,8 @@ class FramewiseAgent(TypedScreenAgent):
     def _reads(self, img: np.ndarray, j: int | None, away: bool) -> None:
         if self.scene or j != self.j_now:
             self.cursor = None if self.cursor_j != j else self.cursor
-        self.j_now = j
+        if j is not None or self.scene:      # an unnamed view with no scene change is still the last named place
+            self.j_now = j
         was = {(g["x"] // 4, g["y"] // 4): g["fill"] for g in self.gauges}
         self.gauges = gauges(img)
         for g in self.gauges:
@@ -469,12 +480,19 @@ class FramewiseAgent(TypedScreenAgent):
         if m is not None:
             self._settle_macro(j)
         if j is None:
+            self.n["explore_unlabelled"] += 1
             return self.choose(state), "explore"
         key = self._key(j, label)
         e = self.fast.get(key)
         if e is not None:
             self.wait_from = None
             if e["pick"] == "explore" or not e["presses"]:
+                # "explore" is an answer for a while, not for good: after `explore_for` presses on this screen it is
+                # forgotten, so the decider is asked again (until asks_per_screen runs out)
+                e["uses"] += 1
+                if e["uses"] >= self.explore_for:
+                    self.fast.forget(key)
+                self.n["explore_picked"] += 1
                 return self.choose(state), "explore"
             e["uses"] += 1
             self.n["memo"] += 1
@@ -489,10 +507,20 @@ class FramewiseAgent(TypedScreenAgent):
                 self.n["asks"] += 1
                 self.wait_from = time.perf_counter()
         if self.fast.pending(key) and self.wait_from is not None \
-                and (time.perf_counter() - self.wait_from) * 1000 < self.patience_ms:
+                and (time.perf_counter() - self.wait_from) * 1000 < self.patience():
             return None, "wait"
+        self.n["explore_timeout" if self.fast.pending(key) else "explore_no_asks"] += 1
         self.wait_from = None
         return self.choose(state), "explore"
+
+    def patience(self) -> float:
+        """How long a labelled screen waits for its answer: `patience_ms`, or 1.5x the decider's recent median when
+        it is slower than that (a 2 s decider would otherwise lose every screen to the explorer), at most
+        `max_patience_ms`."""
+        recent = self.fast.ms[-20:]
+        if not recent:
+            return self.patience_ms
+        return min(self.max_patience_ms, max(self.patience_ms, 1.5 * float(np.median(recent))))
 
     def _settle_macro(self, j_after: int | None = None) -> None:
         """A macro just ended: did it find anything new? One that keeps finding nothing is forgotten, so the decider
@@ -528,7 +556,9 @@ class FramewiseAgent(TypedScreenAgent):
                 "decide_ms_p50": _pct(self.fast.ms, 50), "decide_dropped": self.fast.dropped,
                 "label_calls": s.calls if s else 0, "label_usd": round(s.cost, 4) if s else 0.0,
                 "label_ms_p50": _pct(s.ms, 50) if s else None, "label_dropped": s.dropped if s else 0,
-                "labels": len(self.labels.labels), "cursor_reads": self.n["cursor_reads"], "step_ms_p50": _pct(self.step_ms, 50),
+                "labels": len(self.labels.labels), "cursor_reads": self.n["cursor_reads"], "borrowed": self.n["borrowed"],
+                "explore_why": {k[8:]: self.n[k] for k in ("explore_unlabelled", "explore_picked", "explore_timeout",
+                                                          "explore_no_asks")}, "step_ms_p50": _pct(self.step_ms, 50),
                 "step_ms_p99": _pct(self.step_ms, 99), "step_ms_max": max(self.step_ms) if self.step_ms else None}
 
     def close(self) -> None:
