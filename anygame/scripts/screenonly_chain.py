@@ -7,7 +7,7 @@ screenonly_skill.py).
 A run cut off part-way resumes with CHAIN_FROM=K and STATE = its KEEP save after stage K-1 (redo indices stay
 those of the whole list).
 
-STAGES.json is a list of {"goal", "target" (map id, "levelN", "healed", "respawnMAP", "bagITEM", "nobagITEM", "partyN", "badge" or "badgeN"), "presses", "advice" (calls allowed in this
+STAGES.json is a list of {"goal", "target" (map id, "levelN", "healed", "respawnMAP", "bagITEM", "nobagITEM", "partyN", "moveN", "badge" or "badgeN"), "presses", "advice" (calls allowed in this
 stage), "walker" (a walk book for this stage, optional; it only acts on screens near its demos), "fresh" (true: a new agent
 for this stage, with no memory of the run so far), "with" (optional settings merged into the run's for this stage's fresh
 agent, e.g. a fight book only for the caves), "redo" (optional {"map": M, "from": K, "times": N}: landing on map M (or any map in a list), as
@@ -56,6 +56,8 @@ def done(mem, target: str) -> bool:
         return bool(mem[0xD356] >> (int(target[5:] or 1) - 1) & 1)
     if target.startswith("party"):              # this many Pokemon in the party (the starter is party1)
         return mem[0xD163] >= int(target[5:])
+    if target.startswith("move"):               # moveN: the first party member knows move N (15 is Cut)
+        return int(target[4:]) in [mem[0xD173 + k] for k in range(4)]
     if target.startswith("level"):
         return mem[0xD18C] >= int(target[5:])
     return mem[0xD35E] == int(target)
