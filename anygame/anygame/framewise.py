@@ -26,6 +26,7 @@ from collections import Counter, deque
 from typing import Any, Callable
 
 from .screen_agent import blocks, native
+from .perceive.pixel_reads import cursor, gauges
 from .typed_screen import DIRS, TypedScreenAgent
 
 import numpy as np
@@ -228,7 +229,7 @@ class FastLane:
 
     def save(self, path: str) -> None:
         with self.cv:
-            rows = [[k[0], k[1], e] for k, e in self.memo.items()]
+            rows = [[list(k), e] for k, e in self.memo.items()]
         with open(path, "w") as f:
             json.dump(rows, f)
 
@@ -236,8 +237,10 @@ class FastLane:
         with open(path) as f:
             rows = json.load(f)
         with self.cv:
-            for j, goal, e in rows:
-                self.memo.setdefault((j, goal), {**e, "uses": 0})
+            for row in rows:
+                k, e = (row[0], row[1]) if len(row) == 2 else ([row[0], row[1]], row[2])    # older memos: (label, goal)
+                k = tuple(k) + (None, 0)[len(k) - 2:] if len(k) < 4 else tuple(k)
+                self.memo.setdefault(k, {**e, "uses": 0})
             return len(self.memo)
 
     def close(self) -> None:
@@ -290,6 +293,16 @@ class FramewiseAgent(TypedScreenAgent):
         self.seen: tuple[bytes, int, int | None, str] | None = None
         self.n = Counter()
         self.wanted: dict[str, int] = {}
+        # pixel reads, refreshed whenever a press is judged: gauges (with their last fill) and the menu cursor, which
+        # is only trusted on the label it was read on
+        self.gauges: list[dict[str, Any]] = []
+        self.gauge_was: dict[tuple[int, int], float] = {}
+        self.cursor: tuple[int, int] | None = None
+        self.cursor_j: int | None = None
+        self.pre_img: np.ndarray | None = None
+        self.j_now: int | None = None
+        # where each (screen, option) led last time: the label it ended on, or that it found nothing
+        self.led: dict[tuple[int, str], str] = {}
         self.rewant = 240
         self.step_ms: list[float] = []
 
@@ -329,7 +342,7 @@ class FramewiseAgent(TypedScreenAgent):
         if not self.judged:
             if self.still < self.settle and self.since_press < self.max_settle:
                 return self._out(None, node, "settle", t0)
-            self._judge(img, node)
+            self._judge(img, node, j)
         # an unlabelled screen goes to the slow lane once (again after `rewant` frames, in case it was dropped)
         if j is None and self.slow is not None and self.still >= self.settle \
                 and self.n["frames"] - self.wanted.get(node, -10 ** 9) >= self.rewant:
@@ -340,6 +353,7 @@ class FramewiseAgent(TypedScreenAgent):
         press, how = self._act(img, node, state, j)
         if press is None:
             return self._out(None, node, how, t0)
+        self.pre_img = img
         self.dev.press(press)
         self.last, self.last_how = (state, press), how
         self.judged, self.since_press, self.still = False, 0, 0
@@ -367,10 +381,11 @@ class FramewiseAgent(TypedScreenAgent):
     def cost(self) -> float:
         return (self.slow.cost if self.slow else 0.0) + self.fast.cost
 
-    def _judge(self, img: np.ndarray, node: str) -> None:
-        """The screen graph's bookkeeping for the last press, as ScreenAgent.step does it."""
+    def _judge(self, img: np.ndarray, node: str, j: int | None = None) -> None:
+        """The screen graph's bookkeeping for the last press, as ScreenAgent.step does it, and the pixel reads."""
         self.judged = True
         place = self._where(img, node)
+        self._reads(img, j, place is None)
         state = place if place is not None else node
         if self.last is not None:
             prev, btn = self.last
@@ -388,6 +403,58 @@ class FramewiseAgent(TypedScreenAgent):
             self.recent = (self.recent + [img])[-3:]
         self.here = self.state_now = state
 
+    def _reads(self, img: np.ndarray, j: int | None, away: bool) -> None:
+        if self.scene or j != self.j_now:
+            self.cursor = None if self.cursor_j != j else self.cursor
+        self.j_now = j
+        was = {(g["x"] // 4, g["y"] // 4): g["fill"] for g in self.gauges}
+        self.gauges = gauges(img)
+        for g in self.gauges:
+            k = (g["x"] // 4, g["y"] // 4)
+            if k in was and was[k] != g["fill"]:
+                self.gauge_was[k] = was[k]
+        btn = self.last[1] if self.last else None
+        if away and btn in DIRS and self.pre_img is not None:
+            c = cursor(self.pre_img, img)
+            if c is not None:
+                self.cursor, self.cursor_j = c, j
+                self.n["cursor_reads"] += 1
+
+    def _key(self, j: int, label: dict[str, Any]) -> tuple:
+        """The memo key: the screen's label and the goal, and off the map the cursor's text row (a menu's options
+        depend on where it points) and whether a gauge is low (a fight is played differently on low HP)."""
+        crow = self.cursor[1] // 8 if self.cursor is not None and self.cursor_j == j and label.get("kind") != "map" else None
+        low = int(any(g["fill"] < 0.3 for g in self.gauges)) if label.get("kind") != "map" else 0
+        return (j, self.goal_now(), crow, low)
+
+    def _readings(self) -> dict[str, Any]:
+        out: dict[str, Any] = {}
+        if self.gauges:
+            bars = []
+            for g in self.gauges[:4]:
+                k = (g["x"] // 4, g["y"] // 4)
+                where = ("top" if g["y"] < 48 else "middle" if g["y"] < 96 else "bottom") + "-" + \
+                        ("left" if g["x"] + g["w"] / 2 < 80 else "right")
+                was = self.gauge_was.get(k)
+                bars.append(f"bar {where}: {round(g['fill'] * 100)}% full" + (f" (was {round(was * 100)}%)" if was is not None else ""))
+            out["bars (HP or similar)"] = bars
+        if self.cursor is not None and self.cursor_j == self.j_now:
+            out["menu cursor"] = f"on text row {self.cursor[1] // 8 + 1} of 18, column {self.cursor[0] // 8 + 1} of 20"
+        return out
+
+    def _state(self, label: dict[str, Any], node: str, stale: int = 0):
+        st, opts = super()._state(label, node, stale)
+        r = self._readings()
+        if r:
+            st["readings"] = r
+            if "menu cursor" in r and label.get("options"):
+                st["readings"]["note"] = "the options' presses were written for the screen as first seen; the cursor may have moved since"
+        j = self.j_now
+        for name, o in opts.items():
+            if j is not None and (j, name) in self.led:
+                o["desc"] += f"; last time: {self.led[(j, name)]}"
+        return st, opts
+
     def _act(self, img: np.ndarray, node: str, state: str, j: int | None) -> tuple[str | None, str]:
         label = self.board.label(j)
         m = self.macro_at
@@ -400,10 +467,10 @@ class FramewiseAgent(TypedScreenAgent):
         if self.macro:
             return self.macro.pop(0), "macro"
         if m is not None:
-            self._settle_macro()
+            self._settle_macro(j)
         if j is None:
             return self.choose(state), "explore"
-        key = (j, self.goal_now())
+        key = self._key(j, label)
         e = self.fast.get(key)
         if e is not None:
             self.wait_from = None
@@ -427,12 +494,14 @@ class FramewiseAgent(TypedScreenAgent):
         self.wait_from = None
         return self.choose(state), "explore"
 
-    def _settle_macro(self) -> None:
+    def _settle_macro(self, j_after: int | None = None) -> None:
         """A macro just ended: did it find anything new? One that keeps finding nothing is forgotten, so the decider
         is asked again (with what happened in its state) or, after `asks_per_screen` asks, the explorer takes over."""
         m, self.macro_at = self.macro_at, None
         e = m["entry"]
         new = len(self.visits) > m["states_at"]
+        after = self.board.label(j_after).get("where") if j_after is not None and j_after != m["j"] else None
+        self.led[(m["j"], e["pick"])] = (f"led to {after}" if after else "found something new") if new else "found nothing new"
         if not new:
             e["misses"] += 1
             if e["misses"] >= self.reuse:
@@ -441,7 +510,7 @@ class FramewiseAgent(TypedScreenAgent):
                             "heading": e["heading"], "memo_use": e["uses"]})
 
     def _prefetch(self, j: int) -> None:
-        key = (j, self.goal_now())
+        key = (j, self.goal_now(), None, 0)
         if self.fast.get(key) is None and not self.fast.pending(key) and self.asks[key] < self.asks_per_screen:
             label = self.board.label(j)
             st, opts = self._state(label, self.prev_node or "", self.since_new)
@@ -459,7 +528,7 @@ class FramewiseAgent(TypedScreenAgent):
                 "decide_ms_p50": _pct(self.fast.ms, 50), "decide_dropped": self.fast.dropped,
                 "label_calls": s.calls if s else 0, "label_usd": round(s.cost, 4) if s else 0.0,
                 "label_ms_p50": _pct(s.ms, 50) if s else None, "label_dropped": s.dropped if s else 0,
-                "labels": len(self.labels.labels), "step_ms_p50": _pct(self.step_ms, 50),
+                "labels": len(self.labels.labels), "cursor_reads": self.n["cursor_reads"], "step_ms_p50": _pct(self.step_ms, 50),
                 "step_ms_p99": _pct(self.step_ms, 99), "step_ms_max": max(self.step_ms) if self.step_ms else None}
 
     def close(self) -> None:
