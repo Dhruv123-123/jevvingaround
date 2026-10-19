@@ -76,6 +76,22 @@ Same setup as above but 300 s and stopping at the Mart, round 1 code vs round 2,
 The decider drives about 46% more presses with about 20% fewer calls, since replayed answers carry where they led.
 Cursor reads fired 6 and 2 times (Viridian has few menus). The Mart still needs a decider that can judge.
 
+### With a judging stand-in (Azure answering Jev's questions)
+
+Same runs with the Azure model as the decider (p50 about 2.1 s per answer, five times Jev's), round 1 vs round 2:
+
+| | round 1 | round 2 |
+|---|---|---|
+| presses from the decider's macros | 99, 137 | 106, 237 |
+| places stood on | 124, 142 | 98, 82 |
+| reached the Mart | no, no | no, no |
+| spend (labels + decisions) | $0.067, $0.054 | $0.064, $0.048 |
+
+No gain yet: neither version reached the Mart, and round 2 covered less ground. With a 2 s decider, the explorer
+plays 70–87% of presses because the 600 ms patience runs out first, so the decider's judgment barely steers.
+That is the next thing to fix, by waiting longer when the decider is slow or keeping the explorer to the heading the
+last answer gave. Total spend for these four runs was $0.23.
+
 ## Next
 
 1. With Jev credit: 10 power-on badge runs with `{"decider": "jev", "framewise": true}` against the Oct 15 typed
