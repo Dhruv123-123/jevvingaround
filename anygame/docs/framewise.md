@@ -107,6 +107,23 @@ halves unlabelled explorer presses and raises the decider's presses on 2 of 3 se
 it vs 72, 26, 66 without, a wash. It stays off by default. The likely real fix is labelling faster (a smaller image,
 or a lower-detail first pass) so a new view is named in under a second.
 
+### Round 4 (Oct 19): faster labels
+
+Azure gpt-5.6-luna labels a screen in about 2.3 s at reasoning effort "none", against 4–6 s at "low" ("minimal" is
+rejected). The cost is the same, about $0.0009 per label. With `name_effort="none"` and Azure as the decider, 2 seeds,
+300 s:
+
+| | round 3 (labels at "low") | round 4 (labels at "none") |
+|---|---|---|
+| presses from the decider's macros | 146, 134 | 302, 265 |
+| places stood on | 143, 74 | 95, 121 |
+| reached the Mart | no, no | no, no |
+| spend | $0.049, $0.061 | $0.038, $0.049 |
+
+The decider now steers twice as many presses, but it walks into the wrong building: both runs went in and out of
+map 44, a house, 5 to 10 times. Labels at either effort call Viridian City "a dungeon room with pillars", so the
+decider is choosing between doors it cannot tell apart. The next limit is what the labels say, not speed.
+
 ## Next
 
 1. With Jev credit: 10 power-on badge runs with `{"decider": "jev", "framewise": true}` against the Oct 15 typed

@@ -260,11 +260,14 @@ class FramewiseAgent(TypedScreenAgent):
     def __init__(self, device, decider, namer=None, labels: LabelCache | None = None, patience_ms: float = 600,
                  reuse: int = 2, asks_per_screen: int = 3, settle: int = 2, max_settle: int = 8, prefetch: bool = True,
                  hold_idle: bool | None = None, cache: str | None = None, max_patience_ms: float = 4000,
-                 borrow: bool = False, **kw):
+                 borrow: bool = False, name_effort: str | None = None, **kw):
         namer = namer if namer is not None else kw.pop("advisor", None)
         super().__init__(device, decider, namer=None, labels=labels, settle=settle, **kw)
         self.board = Blackboard(self.labels)
-        self.slow = SlowLane(namer, self.board, effort=self.effort, on_label=self._landed) if namer is not None else None
+        # name_effort: the namer's reasoning effort, apart from the advisor's ("none" on Azure gpt-5.6 names a screen
+        # in ~2.3 s against ~4-6 s at "low")
+        self.slow = SlowLane(namer, self.board, effort=name_effort or self.effort, on_label=self._landed) \
+            if namer is not None else None
         self.fast = FastLane(decider)
         # cache: a folder where labels (labels.npz) and the decision memo (memo.json) outlive the run. A later run
         # starts with every screen named and every answer it kept: the slow lane and the decider are only for what is new
