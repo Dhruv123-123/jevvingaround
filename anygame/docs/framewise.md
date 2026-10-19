@@ -80,5 +80,5 @@ Cursor reads fired 6 and 2 times (Viridian has few menus). The Mart still needs 
 
 1. With Jev credit: 10 power-on badge runs with `{"decider": "jev", "framewise": true}` against the Oct 15 typed
    numbers (8/10 at $0.33), plus Jev's share of presses and the memo hit rate. The cap is $3.
-2. Cheap pixel reads into the fast lane's state, such as the menu cursor row and HP bar fill, so menus and fights
-   can be decided without a new label.
+2. A judging stand-in until then (the Azure model answering Jev's questions), to measure whether the readings
+   and outcomes help it reach the Mart.
