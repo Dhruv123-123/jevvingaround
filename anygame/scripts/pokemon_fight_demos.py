@@ -95,7 +95,13 @@ def main() -> None:
                 m[0xD16C], m[0xD16D] = m[0xD18D], m[0xD18E]
         if m[0xD16C] * 256 + m[0xD16D] == 0:
             break
+        if m[0xC3A0 + 12 * 20] == 0x79:   # a message box (a trainer who saw the player talks first): A, not recorded
+            press(pb, "a", after=40)
+            continue
+        at = (m[0xD362], m[0xD361])
         press(pb, "up" if k % (up + down) < up else "down", after=12)
+        if (m[0xD362], m[0xD361]) == at and down == 0:   # walking on, held up: someone stands there, talk to them
+            press(pb, "a", after=40)
         k += 1
     np.savez_compressed(out, shots=np.array(shots), steps=np.array(steps, dtype=np.uint8))
     print("recorded", len(steps), "fight presses in", done, "fights to", out)
