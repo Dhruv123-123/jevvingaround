@@ -88,7 +88,7 @@ class MenuBook:
     def __init__(self, game):
         self.g = game
 
-    def act(self, img):
+    def act(self, img, box=True):
         return ({"menu0": "a", "menu1": "up"}.get(self.g.at),)
 
 

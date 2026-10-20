@@ -478,7 +478,7 @@ class ScreenAgent:
                     fought = self._unstick(seen_key, fought)
             if fought is not None:
                 self.book_since = 0
-                self.fight_blind.clear()          # back on a screen it knows: B did move on
+                self.fight_blind.clear()          # back on a screen it knows: the presses did move on
             elif (place is None and self.book_since < BLIND and self.fight_blind[seen_key] < BLIND_B
                   and (self.walker is None or self.walker.act(img)[0] is None)):
                 # a screen of the fight the book does not know (a menu it was never shown, the bag, a question):
