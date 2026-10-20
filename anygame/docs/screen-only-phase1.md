@@ -960,7 +960,16 @@ book walked it back, for 37,000 presses. Each repeat block on the same screen no
 | advisor-free training, then a heal stage | 1 of 3 (a heal stage stuck; the walk-book loop above) | $1.88 |
 | **advisor-free training, no heal stage** | **2 of 2** from the Center; 0 of 1 from a trained save (lost on the first floor, out of presses) | **$1.24-1.69** |
 
-Runs still going are in `skill-cerulean26/`.
+Eleven runs in all from the Mt. Moon Center with the no-heal stage list (`skill-cerulean26/`, seeds 801-819):
+
+| result | runs | Azure per run |
+|---|---|---|
+| **Cerulean** | **8 of 11** | $0.49-1.69 (median about $1.15), levels 29-31 |
+| training wandered back to Pewter and spent its 60,000 presses there (Pewter is now a training redo) | 1 | $0.25 |
+| still looping after 4-5 hours, stopped by hand: one kept walking into the Mt. Moon Center during training (each visit a redo); one kept losing to the fossil trainer on the deepest floor and walking out west | 2 | $2.8-3.8 |
+
+Before these changes the same leg was 2 of 5 at $1.28-1.62 (18.25) and the advisor's training alone cost about
+$2.50 (18.26).
 
 ## Where this leaves things
 
