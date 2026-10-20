@@ -5,6 +5,8 @@ slot). Each press is saved with the screen it was made on.
 
     python scripts/pokemon_fight_demos.py STATE OUT.npz FIGHTS [UP,DOWN pacing presses, default 4,3]
 
+FIXTURE_SCRAMBLE=1 moves the attack cursor somewhere at random (not recorded) each time the attack list opens, so the
+book also sees the list opened on another attack (the game opens it on the last one used).
 FIXTURE_HEAL=1 keeps the first party member above a third of its health between fights, so a demo is not cut short.
 """
 from __future__ import annotations
@@ -70,6 +72,8 @@ def main() -> None:
     state, out, fights = sys.argv[1], sys.argv[2], int(sys.argv[3])
     up, down = (int(v) for v in (sys.argv[4] if len(sys.argv) > 4 else "4,3").split(","))
     heal = os.environ.get("FIXTURE_HEAL") == "1"
+    scramble, listed = os.environ.get("FIXTURE_SCRAMBLE") == "1", False
+    rng = np.random.default_rng(int(os.environ.get("FIXTURE_SEED", "0")))
     pb = PyBoy(ROM, window="null", sound_emulated=False)
     with open(state, "rb") as f:
         pb.load_state(f)
@@ -78,6 +82,12 @@ def main() -> None:
     shots, steps, done, k = [], [], 0, 0
     while done < fights and k < 20000:
         if m[0xD057]:
+            cur = arrows(m)
+            in_list = bool(cur) and cur[0][0] == 5 and 13 <= cur[0][1] <= 16
+            if scramble and in_list and not listed:
+                for _ in range(int(rng.integers(0, 4))):
+                    press(pb, "down", after=12)
+            listed = in_list
             b = rule(m)
             shot = pb.screen.ndarray[:, :, :3].copy()
             if fight_screen(shot):         # not the map frames before the fight is drawn
