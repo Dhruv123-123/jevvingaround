@@ -964,7 +964,7 @@ Eleven runs in all from the Mt. Moon Center with the no-heal stage list (`skill-
 
 | result | runs | Azure per run |
 |---|---|---|
-| **Cerulean** | **8 of 11** | $0.49-1.69 (median about $1.15), levels 29-31 |
+| **Cerulean** | **8 of 11** | $0.49-1.69 (median $1.18), levels 29-31 |
 | training wandered back to Pewter and spent its 60,000 presses there (Pewter is now a training redo) | 1 | $0.25 |
 | still looping after 4-5 hours, stopped by hand: one kept walking into the Mt. Moon Center during training (each visit a redo); one kept losing to the fossil trainer on the deepest floor and walking out west | 2 | $2.8-3.8 |
 
