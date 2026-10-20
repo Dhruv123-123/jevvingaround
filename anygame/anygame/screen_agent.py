@@ -30,8 +30,8 @@ import numpy as np
 BUTTONS = ("up", "down", "left", "right", "a", "b", "start", "select")
 FUTILE = 3       # times the fight book may come back to the exact same menu before its press there counts as going nowhere
 BLIND = 40       # presses after the fight book's last answer during which a screen it does not know is still the fight
-BLIND_B = 3      # times B is pressed on such a screen before the advisor and the explorer get it
-CYCLE = ("down", "up", "b", "a")   # what a fight menu that goes nowhere gets instead, least tried first
+BLIND_B = 3      # presses on such a screen (A, then B) before the advisor and the explorer get it
+CYCLE = ("a", "down", "up", "b")   # what a fight menu that goes nowhere gets instead, least tried first
 # a prior on how often each button is worth trying before the agent has seen anything (as a person would: the pad
 # and A first, Start rarely, Select almost never)
 PRIOR = {"up": 1.0, "down": 1.0, "left": 1.0, "right": 1.0, "a": 1.0, "b": 0.6, "start": 0.3, "select": 0.1}
@@ -482,10 +482,10 @@ class ScreenAgent:
             elif (place is None and self.book_since < BLIND and self.fight_blind[seen_key] < BLIND_B
                   and (self.walker is None or self.walker.act(img)[0] is None)):
                 # a screen of the fight the book does not know (a menu it was never shown, the bag, a question):
-                # B, which backs out to a menu the book knows and moves the text on, instead of random presses that
-                # wander into the bag; a screen B has not moved on, or one the walker knows (the fight is over), is
-                # left to the others
-                fought = "b"
+                # A (what the cursor is on, or the text moved on), then B once A has come back to the same screen
+                # (backing out of the bag), instead of random presses that wander into the bag; a screen neither
+                # moved on, or one the walker knows (the fight is over), is left to the others
+                fought = "a" if self.fight_blind[seen_key] < BLIND_B - 1 else "b"
                 self.fight_blind[seen_key] += 1
             self.book_since += 1
             if fought is None and place is not None:

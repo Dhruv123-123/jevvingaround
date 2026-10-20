@@ -103,13 +103,14 @@ def test_a_fight_menu_that_goes_nowhere_gets_another_press():
     assert g.won
 
 
-def test_an_unknown_fight_screen_gets_b():
+def test_an_unknown_fight_screen_gets_a_then_b():
     g = MenuFight()
     agent = ScreenAgent(g, seed=2, place_weight=0)
     agent.fight_book = MenuBook(g)
     for _ in range(10):
         g.at = "menu1"
         agent.step()                         # the book knows this one
-        g.at = "bag"                         # wandered into the bag
-        agent.step()
+        g.at = "bag"                         # wandered into the bag: A on the item there says no and shows it again
+        for _ in range(3):
+            agent.step()
         assert g.at == "menu0"
