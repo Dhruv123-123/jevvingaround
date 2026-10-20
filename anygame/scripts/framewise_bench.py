@@ -39,12 +39,15 @@ def main() -> None:
     decider = open_sensor(dec, timeout=20)
     goal = os.environ.get("BENCH_GOAL", "")
     if kind == "framewise":
-        a = FramewiseAgent(dev, decider, namer=chat, seed=seed)
+        # BENCH_KW: FramewiseAgent settings as JSON, e.g. '{"name_effort": "none"}'
+        a = FramewiseAgent(dev, decider, namer=chat, seed=seed, **json.loads(os.environ.get("BENCH_KW") or "{}"))
     else:
         a = TypedScreenAgent(dev, decider, namer=chat, seed=seed)
     a.goal = goal
     mem = dev._pb.memory
     cells, maps, blocked, steps = set(), [], 0.0, 0
+    target = int(os.environ["BENCH_TARGET"]) if os.environ.get("BENCH_TARGET") else None   # a map id to reach
+    reached = None
     f0, t0 = dev.frames, time.perf_counter()
     while time.perf_counter() - t0 < secs:
         s = time.perf_counter()
@@ -61,11 +64,15 @@ def main() -> None:
         cells.add((mem[0xD35E], mem[0xD362], mem[0xD361]))
         if not maps or maps[-1] != mem[0xD35E]:
             maps.append(mem[0xD35E])
+        if target is not None and reached is None and mem[0xD35E] == target:
+            reached = round(time.perf_counter() - t0, 1)
+            if os.environ.get("BENCH_STOP"):
+                break
     wall = time.perf_counter() - t0
     out = {"agent": kind, "decider": dec, "state": os.path.basename(state), "seed": seed, "wall_s": round(wall, 1),
            "game_frames": dev.frames - f0, "steps": steps,
            "presses": a.n["presses"] if kind == "framewise" else steps, "graph_states": len(a.visits),
-           "cells": len(cells), "maps": maps[:40], "distinct_maps": len(set(maps)), "blocked_s": round(blocked, 1),
+           "cells": len(cells), "maps": maps[:40], "distinct_maps": len(set(maps)), "target": target, "reached_s": reached, "blocked_s": round(blocked, 1),
            "usd": round(a.total_cost if kind != "framewise" else a.cost(), 4), "typed": a.summary()}
     if hasattr(a, "close"):
         a.close()

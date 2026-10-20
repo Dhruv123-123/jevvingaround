@@ -54,9 +54,79 @@ Readout: the frame loop never waits, and in the same three minutes both models g
 because neither sits idle while the other runs. Neither run reached the Mart: the stub cannot judge, so progress has
 to be measured with Jev itself.
 
+## Round 2 (Oct 19): pixel reads and where options led
+
+`perceive/pixel_reads.py` reads gauges (HP bars) and a menu cursor from pixels by shape, with no game layout. A gauge
+is a thin band between two long dark lines over the same columns; a cursor is the small thing a d-pad press drew when
+little else changed. The fast lane's state now carries each bar's fill (and its last value), the cursor's text row,
+and, per option, where it led the last time it was picked on this screen. Off the map the memo key also holds the
+cursor row and whether a bar is low.
+
+Same setup as above but 300 s and stopping at the Mart, round 1 code vs round 2, `stub:400` decider (not a model):
+
+| | round 1 | round 2 |
+|---|---|---|
+| presses from Jev's macros | 147, 226 | 309, 259 |
+| decider calls | 79, 71 | 62, 56 |
+| places stood on | 24, 113 | 100, 109 |
+| maps entered | 2, 2 | 3, 3 |
+| reached the Mart | no, no | no, no |
+| Azure | $0.025–0.030 | $0.028–0.029 |
+
+The decider drives about 46% more presses with about 20% fewer calls, since replayed answers carry where they led.
+Cursor reads fired 6 and 2 times (Viridian has few menus). The Mart still needs a decider that can judge.
+
+### With a judging stand-in (Azure answering Jev's questions)
+
+Same runs with the Azure model as the decider (p50 about 2.1 s per answer, five times Jev's), round 1 vs round 2:
+
+| | round 1 | round 2 |
+|---|---|---|
+| presses from the decider's macros | 99, 137 | 106, 237 |
+| places stood on | 124, 142 | 98, 82 |
+| reached the Mart | no, no | no, no |
+| spend (labels + decisions) | $0.067, $0.054 | $0.064, $0.048 |
+
+No gain yet: neither version reached the Mart, and round 2 covered less ground. With a 2 s decider, the explorer
+plays 70–87% of presses because the 600 ms patience runs out first, so the decider's judgment barely steers.
+That is the next thing to fix, by waiting longer when the decider is slow or keeping the explorer to the heading the
+last answer gave. Total spend for these four runs was $0.23.
+
+### Round 3 (Oct 19): why the explorer still plays most presses
+
+The wait for an answer now stretches to 1.5x the decider's recent median (at most 4 s). Rerun with Azure as the
+decider (p50 2.0 s), 2 seeds: no Mart, 143 and 74 places, the explorer still played 82% of presses ($0.11).
+
+New counters (`explore_why` in the summary) show the cause: with the stub, about 80% of explorer presses happen on
+screens that have no label yet. A new view takes about 4 s to label, so after each door the explorer plays for a
+while. Timeouts are rare (2–6), and so are "explore" answers. "Explore" answers now expire after 8 presses instead
+of pinning a screen to the explorer for good.
+
+A fix tried for unlabelled views: keep the last map label when no scene change happened (`borrow=True`). That
+halves unlabelled explorer presses and raises the decider's presses on 2 of 3 seeds. Places reached: 21, 59, 84 with
+it vs 72, 26, 66 without, a wash. It stays off by default. The likely real fix is labelling faster (a smaller image,
+or a lower-detail first pass) so a new view is named in under a second.
+
+### Round 4 (Oct 19): faster labels
+
+Azure gpt-5.6-luna labels a screen in about 2.3 s at reasoning effort "none", against 4–6 s at "low" ("minimal" is
+rejected). The cost is the same, about $0.0009 per label. With `name_effort="none"` and Azure as the decider, 2 seeds,
+300 s:
+
+| | round 3 (labels at "low") | round 4 (labels at "none") |
+|---|---|---|
+| presses from the decider's macros | 146, 134 | 302, 265 |
+| places stood on | 143, 74 | 95, 121 |
+| reached the Mart | no, no | no, no |
+| spend | $0.049, $0.061 | $0.038, $0.049 |
+
+The decider now steers twice as many presses, but it walks into the wrong building: both runs went in and out of
+map 44, a house, 5 to 10 times. Labels at either effort call Viridian City "a dungeon room with pillars", so the
+decider is choosing between doors it cannot tell apart. The next limit is what the labels say, not speed.
+
 ## Next
 
 1. With Jev credit: 10 power-on badge runs with `{"decider": "jev", "framewise": true}` against the Oct 15 typed
    numbers (8/10 at $0.33), plus Jev's share of presses and the memo hit rate. The cap is $3.
-2. Cheap pixel reads into the fast lane's state, such as the menu cursor row and HP bar fill, so menus and fights
-   can be decided without a new label.
+2. A judging stand-in until then (the Azure model answering Jev's questions), to measure whether the readings
+   and outcomes help it reach the Mart.
