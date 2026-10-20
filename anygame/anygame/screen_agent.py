@@ -216,7 +216,7 @@ class ScreenAgent:
         self.fight_book = None
         if fight_book:
             from anygame.walk_book import FightBook
-            self.fight_book = FightBook(fight_book)
+            self.fight_book = FightBook(fight_book, box=True)
         self.fight_seen: Counter = Counter()
         # a learned menu book (the same nearest-screen book, from demonstrated menu errands such as teaching a move):
         # it plays every screen it knows, on the map too (where the errand starts by opening the menu)
@@ -448,20 +448,24 @@ class ScreenAgent:
         self.here = state
         self.since_ask += 1
         fought, booked = None, "fight"
-        if self.menu_book is not None and self.menu_seen[node] < 10:
-            fought = self.menu_book.act(img)[0]
+        # (counted by the exact screen, as an errand comes back to a screen many times, a step at a time: a sprite
+        # turning on the spot is the same node)
+        seen_key = hashlib.blake2b(img.tobytes(), digest_size=8).digest()
+        if self.menu_book is not None and self.menu_seen[seen_key] < 30:
+            fought = self.menu_book.act(img, self.last[1] if self.last else None)[0]
             if fought is not None:
-                self.menu_seen[node] += 1
+                self.menu_seen[seen_key] += 1
                 booked = "menu"
         if fought is None and self.fight_book is not None:
             # a screen the book keeps coming back to (an attack with no uses left, say) is left to the advisor and
-            # the explorer; the count starts again once the player is seen on the map
+            # the explorer; the count starts again once the player is seen on the map (counted by the exact screen:
+            # a long trainer fight comes back to the same menu node many times, with the health bars moving)
             if place is not None:
                 self.fight_seen.clear()
-            elif self.fight_seen[node] < 10:
+            elif self.fight_seen[seen_key] < 10:
                 fought = self.fight_book.act(img)[0]
                 if fought is not None:
-                    self.fight_seen[node] += 1
+                    self.fight_seen[seen_key] += 1
         if fought is None and not self.queue and self.nav is None and self.advisor is not None and len(self.advice) < self.max_advice and (
                 (self.since_new >= self.stuck and self.asked[node] < self.advice_per_screen)
                 or (self.ask_away and self.watch is not None and place is None and not self.scene and self.prev_img is not None)
