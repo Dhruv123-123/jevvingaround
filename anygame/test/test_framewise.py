@@ -168,3 +168,17 @@ def test_patience_stretches_to_a_slow_decider():
     a.fast.ms = [400] * 5
     assert a.patience() == 600
     a.close()
+
+
+def test_places_are_counted_by_name_and_handed_to_the_namer():
+    from anygame.framewise import FramewiseAgent
+    from test_screen_agent import GridGame
+    a = FramewiseAgent(GridGame(), SlowDecider(0.0), namer=SlowNamer(0.0), seed=1)
+    for w in ("town", "house", "town", "house"):
+        j = a.board.labels.add(np.random.default_rng(len(a.board.labels.labels)).integers(0, 4, (18, 20)).astype(np.uint8),
+                               {"kind": "map", "where": w, "options": []})
+        a._entered(j)
+    assert a.place_visits == {"town": 2, "house": 2} and a.slow.places == ["town", "house"] and a.slow.came_from == "town"
+    st, _ = a._state({"kind": "map", "where": "house"}, "n", 0)
+    assert st["places entered so far (times)"] == {"town": 2, "house": 2}
+    a.close()

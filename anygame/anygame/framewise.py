@@ -38,6 +38,11 @@ SUBGOAL = """
 The agent's goal: %s
 Add "subgoal" to the JSON: the next step toward that goal from exactly this screen, a few words."""
 
+PLACES = """
+Names already given to places in this game, most recent last: %s.
+If this screen is one of those places, or a part of one (a town seen from another spot), use that name exactly in
+"where", so the agent can tell places apart. Otherwise give a new name that says what is distinctive here.%s"""
+
 
 class Blackboard:
     """Labels by screen hash, written by the slow lane and read every frame by the fast one."""
@@ -81,6 +86,9 @@ class SlowLane:
         self.calls, self.errors, self.dropped, self.cost = 0, 0, 0, 0.0
         self.ms: list[int] = []
         self.busy = False
+        # set by the frame loop: the place names in use so far and the last one, so a place keeps one name
+        self.places: list[str] = []
+        self.came_from = ""
         self.t = threading.Thread(target=self._run, daemon=True, name="slow-lane")
         self.t.start()
 
@@ -129,6 +137,9 @@ class SlowLane:
             parts.append({"type": "image_url", "image_url": {"url": _png(im, 2), "detail": "low"}})
         parts.append({"type": "image_url", "image_url": {"url": _png(img), "detail": "high"}})
         system = NAME + (SUBGOAL % goal if goal else "")
+        places, came = list(self.places), self.came_from
+        if places:
+            system += PLACES % ("; ".join(places), f"\nThe player was last in: {came}." if came else "")
         t0 = time.perf_counter()
         try:
             before = self.namer.cost
@@ -310,6 +321,10 @@ class FramewiseAgent(TypedScreenAgent):
         self.j_now: int | None = None
         # where each (screen, option) led last time: the label it ended on, or that it found nothing
         self.led: dict[tuple[int, str], str] = {}
+        self.led_to: dict[tuple[int, str], str] = {}
+        # places by the name their label gives them: how often each was entered, and the order
+        self.place_visits: Counter = Counter()
+        self.place_trail: list[str] = []
         self.rewant = 240
         self.step_ms: list[float] = []
 
@@ -419,6 +434,8 @@ class FramewiseAgent(TypedScreenAgent):
     def _reads(self, img: np.ndarray, j: int | None, away: bool) -> None:
         if self.scene or j != self.j_now:
             self.cursor = None if self.cursor_j != j else self.cursor
+        if j is not None and j != self.j_now:
+            self._entered(j)
         if j is not None or self.scene:      # an unnamed view with no scene change is still the last named place
             self.j_now = j
         was = {(g["x"] // 4, g["y"] // 4): g["fill"] for g in self.gauges}
@@ -456,8 +473,22 @@ class FramewiseAgent(TypedScreenAgent):
             out["menu cursor"] = f"on text row {self.cursor[1] // 8 + 1} of 18, column {self.cursor[0] // 8 + 1} of 20"
         return out
 
+    def _entered(self, j: int) -> None:
+        """A new label is on screen: count the place by its name, and hand the names to the slow lane."""
+        where = (self.board.label(j).get("where") or "").strip()
+        if not where or (self.place_trail and self.place_trail[-1] == where):
+            return
+        self.place_visits[where] += 1
+        self.place_trail = (self.place_trail + [where])[-30:]
+        if self.slow is not None:
+            names = list(dict.fromkeys(reversed(self.place_trail)))[:15][::-1]
+            self.slow.places = names
+            self.slow.came_from = self.place_trail[-2] if len(self.place_trail) > 1 else ""
+
     def _state(self, label: dict[str, Any], node: str, stale: int = 0):
         st, opts = super()._state(label, node, stale)
+        if self.place_visits:
+            st["places entered so far (times)"] = dict(self.place_visits.most_common(10))
         r = self._readings()
         if r:
             st["readings"] = r
@@ -467,6 +498,9 @@ class FramewiseAgent(TypedScreenAgent):
         for name, o in opts.items():
             if j is not None and (j, name) in self.led:
                 o["desc"] += f"; last time: {self.led[(j, name)]}"
+                w = self.led_to.get((j, name))
+                if w and self.place_visits.get(w, 0) > 1:
+                    o["desc"] += f" (entered {self.place_visits[w]} times already)"
         return st, opts
 
     def _act(self, img: np.ndarray, node: str, state: str, j: int | None) -> tuple[str | None, str]:
@@ -533,6 +567,8 @@ class FramewiseAgent(TypedScreenAgent):
         new = len(self.visits) > m["states_at"]
         after = self.board.label(j_after).get("where") if j_after is not None and j_after != m["j"] else None
         self.led[(m["j"], e["pick"])] = (f"led to {after}" if after else "found something new") if new else "found nothing new"
+        if after:
+            self.led_to[(m["j"], e["pick"])] = after
         if not new:
             e["misses"] += 1
             if e["misses"] >= self.reuse:
