@@ -447,10 +447,13 @@ class ScreenAgent:
         self.here = state
         self.since_ask += 1
         fought, booked = None, "fight"
-        if self.menu_book is not None and self.menu_seen[node] < 10:
+        # (counted by the exact screen, as an errand comes back to a screen many times, a step at a time: a sprite
+        # turning on the spot is the same node)
+        seen_key = hashlib.blake2b(img.tobytes(), digest_size=8).digest()
+        if self.menu_book is not None and self.menu_seen[seen_key] < 30:
             fought = self.menu_book.act(img, self.last[1] if self.last else None)[0]
             if fought is not None:
-                self.menu_seen[node] += 1
+                self.menu_seen[seen_key] += 1
                 booked = "menu"
         if fought is None and self.fight_book is not None:
             # a screen the book keeps coming back to (an attack with no uses left, say) is left to the advisor and
