@@ -233,6 +233,7 @@ class ScreenAgent:
             self.walker = WalkBook(walker)
         self.walk_rest, self.walk_fails = 0, 0
         self.walk_talked: set = set()     # screens where a blocked step already pressed A
+        self.walk_blocks: Counter = Counter()   # how often the walker's step was blocked on each screen
         self.grid = grid or targets                    # draw a step grid on the picture the advisor sees
         self.nav: dict[str, Any] | None = None
         self.asked: Counter = Counter()
@@ -484,7 +485,10 @@ class ScreenAgent:
                 # the step is blocked: it has walked up to something (a counter, a person), so press A at it and
                 # through what it says before the explorer takes over (pressing B would answer "no")
                 # (once per screen: a person who only repeats a line would hold it there)
-                self.walk_rest, self.walk_fails = 8, 0
+                # each time it is blocked on the same screen again, the explorer gets twice as long before the
+                # walker takes over (a ledge or a tree the demos never met would otherwise hold it there for good)
+                self.walk_rest, self.walk_fails = min(8 << self.walk_blocks[state], 512), 0
+                self.walk_blocks[state] += 1
                 if state not in self.walk_talked:
                     self.walk_talked.add(state)
                     self.queue = ["a"] * 6

@@ -99,6 +99,8 @@ def main() -> None:
         a.goal = st["goal"]
         a.walker = WalkBook(st["walker"]) if st.get("walker") else None
         a.walk_talked = set()                   # a new stage may need the same person again (the nurse after training)
+        if hasattr(a, "walk_blocks"):
+            a.walk_blocks.clear()
         a.walk_rest = 0
         a.max_advice = len(a.advice) + st.get("advice", 150)
         got, maps = None, []
