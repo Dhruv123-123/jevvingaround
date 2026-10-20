@@ -124,6 +124,38 @@ The decider now steers twice as many presses, but it walks into the wrong buildi
 map 44, a house, 5 to 10 times. Labels at either effort call Viridian City "a dungeon room with pillars", so the
 decider is choosing between doors it cannot tell apart. The next limit is what the labels say, not speed.
 
+### Round 5 (Oct 20): place names with context, and door memory
+
+The labeller used to name each screen alone, so Viridian City came back as "a dungeon room with pillars" and the
+houses had no names the decider could tell apart. Now the namer is handed the place names already in use (the 15
+most recent) and the place the player came from, and asked to reuse a name when the screen is that place. The
+decider's state carries how many times each place was entered, and each option says how often the place it led to
+has been entered.
+
+Labels from one run now all say "Viridian City", "Viridian City, between buildings" or "Viridian City, building
+interior": no dungeon. But the model guesses where the Mart is from one screen ("upper-left", "lower-left",
+"upper-right", "directly above" in the same run), so the names got better while the heading did not.
+
+A door counter (which lane's press changed the scene) showed both lanes walk back through the same house door: 10
+explorer and 2 decider doors on one seed, 4 and 6 on the other. The explorer now skips a door it has been through
+twice from the same spot, and the decider is told where the doors by the player led.
+
+Azure as the decider, 2 seeds, 300 s, against round 4:
+
+| | round 4 | place names | + door memory |
+|---|---|---|---|
+| presses from the decider's macros | 302, 265 | 328, 262 | 252, 317 |
+| places stood on | 95, 121 | 117, 73 | 99, 124 |
+| times into the house (map 44) | 15, 5 | 4, 8 (0, 3 on a rerun) | 1, 3 |
+| reached the Mart | no, no | no, no | no, no |
+| spend | $0.038, $0.049 | $0.048, $0.041 | $0.034, $0.044 |
+
+The house loop is mostly gone, but the Mart still is not found in five minutes. Most of the drop came with the place
+names (a rerun of that version went into the house 0 and 3 times). The door skip never fired, because the explorer's
+"spot" rarely repeats exactly, so door memory adds little beyond telling the decider where doors led.
+What is missing now is a heading: the Mart is north of the start and is not on the first screen, and nothing in the
+agent remembers which parts of the town it has seen. Round 5 spend: $0.30.
+
 ## Next
 
 1. With Jev credit: 10 power-on badge runs with `{"decider": "jev", "framewise": true}` against the Oct 15 typed
