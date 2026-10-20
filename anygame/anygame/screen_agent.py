@@ -28,6 +28,10 @@ import cv2
 import numpy as np
 
 BUTTONS = ("up", "down", "left", "right", "a", "b", "start", "select")
+FUTILE = 3       # times the fight book may come back to the exact same menu before its press there counts as going nowhere
+BLIND = 40       # presses after the fight book's last answer during which a screen it does not know is still the fight
+BLIND_B = 3      # times B is pressed on such a screen before the advisor and the explorer get it
+CYCLE = ("down", "up", "b", "a")   # what a fight menu that goes nowhere gets instead, least tried first
 # a prior on how often each button is worth trying before the agent has seen anything (as a person would: the pad
 # and A first, Start rarely, Select almost never)
 PRIOR = {"up": 1.0, "down": 1.0, "left": 1.0, "right": 1.0, "a": 1.0, "b": 0.6, "start": 0.3, "select": 0.1}
@@ -218,6 +222,10 @@ class ScreenAgent:
             from anygame.walk_book import FightBook
             self.fight_book = FightBook(fight_book, box=True)
         self.fight_seen: Counter = Counter()
+        self.fight_blind: Counter = Counter()          # exact fight screens the book did not know, and B pressed there
+        self.book_since = BLIND                        # presses since the fight book last answered
+        self.fight_next: dict[tuple, bytes] = {}      # (exact screen, press) -> the exact screen it led to
+        self.fight_tried: dict[bytes, Counter] = defaultdict(Counter)   # exact screen -> presses made there
         # a learned menu book (the same nearest-screen book, from demonstrated menu errands such as teaching a move):
         # it plays every screen it knows, on the map too (where the errand starts by opening the menu)
         self.menu_book = None
@@ -252,6 +260,7 @@ class ScreenAgent:
         self.yield_: dict[str, list[float]] = {b: [PRIOR[b], 1.0] for b in self.buttons}       # button → [sum, n]
         self.last: tuple[str, str] | None = None
         self.last_how = ""
+        self.last_key: tuple | None = None
         # odometry (press-and-watch): the camera's place in the current room, from how the picture scrolled, plus the
         # player's place on screen when it is known; a room starts at every scene change and is named by its first
         # screen. New places are novelty too, so walking into unseen ground counts even where screens never repeat.
@@ -466,8 +475,25 @@ class ScreenAgent:
                 fought = self.fight_book.act(img)[0]
                 if fought is not None:
                     self.fight_seen[seen_key] += 1
+                    fought = self._unstick(seen_key, fought)
+            if fought is not None:
+                self.book_since = 0
+                self.fight_blind.clear()          # back on a screen it knows: B did move on
+            elif (place is None and self.book_since < BLIND and self.fight_blind[seen_key] < BLIND_B
+                  and (self.walker is None or self.walker.act(img)[0] is None)):
+                # a screen of the fight the book does not know (a menu it was never shown, the bag, a question):
+                # B, which backs out to a menu the book knows and moves the text on, instead of random presses that
+                # wander into the bag; a screen B has not moved on, or one the walker knows (the fight is over), is
+                # left to the others
+                fought = "b"
+                self.fight_blind[seen_key] += 1
+            self.book_since += 1
             if fought is None and place is not None:
+                self.fight_blind.clear()
+                self.book_since = BLIND
                 self.fight_seen.clear()
+                self.fight_next.clear()
+                self.fight_tried.clear()
         if fought is None and not self.queue and self.nav is None and self.advisor is not None and len(self.advice) < self.max_advice and (
                 (self.since_new >= self.stuck and self.asked[node] < self.advice_per_screen)
                 or (self.ask_away and self.watch is not None and place is None and not self.scene and self.prev_img is not None)
@@ -528,10 +554,24 @@ class ScreenAgent:
             b, how = self.queue.pop(0), "advice"
         else:
             b = self.choose(state)
+        if self.last_key is not None:
+            self.fight_next[self.last_key] = seen_key
+        self.last_key = (seen_key, b) if how == "fight" else None
         self.dev.press(b)
         self.last, self.last_how = (state, b), how
         return {"action": b, "choice": {"node": node, "place": place, "states": len(self.visits), "how": how},
                 "cost_usd": self.total_cost}
+
+    def _unstick(self, key: bytes, b: str) -> str:
+        """The fight book's press, unless it goes round in a circle. A menu the book keeps coming back to with nothing
+        changed (an attack with no uses left: choosing it says so and shows the menu again) gets the press least tried
+        there instead, and a press seen to lead to such a menu becomes A, choosing what the cursor is on."""
+        if self.fight_seen[key] > FUTILE:
+            b = min(CYCLE, key=lambda c: (self.fight_tried[key][c], CYCLE.index(c)))
+        elif self.fight_seen[self.fight_next.get((key, b), b"")] > FUTILE:
+            b = "a"
+        self.fight_tried[key][b] += 1
+        return b
 
     def _ask(self, img: np.ndarray, node: str) -> None:
         self.asked[node] += 1
