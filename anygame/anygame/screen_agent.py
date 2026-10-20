@@ -448,7 +448,7 @@ class ScreenAgent:
         self.since_ask += 1
         fought, booked = None, "fight"
         if self.menu_book is not None and self.menu_seen[node] < 10:
-            fought = self.menu_book.act(img)[0]
+            fought = self.menu_book.act(img, self.last[1] if self.last else None)[0]
             if fought is not None:
                 self.menu_seen[node] += 1
                 booked = "menu"

@@ -67,21 +67,27 @@ class FightBook:
     a small cursor, so it takes the single nearest screen rather than a vote."""
 
     def __init__(self, pattern: str, near: float = 4.0):
-        views, steps = [], []
+        views, steps, prevs = [], [], []
         for path in sorted(p for part in pattern.split("|") for p in glob.glob(part)):
             d = np.load(path)
             views += [fight_view(s) for s in d["shots"]]
             steps += list(d["steps"])
+            # demos may keep the press made before each screen ("prev"), so one screen can take different presses
+            # (a trash can: A when just walked up to it, walk on once its message is closed)
+            prevs += list(d["prev"]) if "prev" in d.files else [-1] * len(d["steps"])
         self.x = np.array(views, dtype=np.float32)
         self.y = np.array(steps, dtype=np.int64)
+        self.p = np.array(prevs, dtype=np.int64)
         self.near = near
 
     def __len__(self) -> int:
         return len(self.y)
 
-    def act(self, img: np.ndarray) -> tuple[str | None, float]:
+    def act(self, img: np.ndarray, prev: str | None = None) -> tuple[str | None, float]:
         if not len(self.y):
             return None, float("inf")
         d = np.abs(self.x - fight_view(img)).mean(axis=1)
+        if prev in STEPS:                     # demos made after the same press, or demos that kept no press
+            d = np.where((self.p == STEPS.index(prev)) | (self.p < 0), d, np.inf)
         i = int(np.argmin(d))
         return (STEPS[self.y[i]] if d[i] <= self.near else None), float(d[i])

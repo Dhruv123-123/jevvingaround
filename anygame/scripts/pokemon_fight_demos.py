@@ -21,7 +21,7 @@ ROM = "/mnt/project-files/roms/pokemon-red.gb"
 STEPS = ("up", "down", "left", "right", "a", "b")
 ARROW = 0xED                         # the menu cursor tile in the tile map at 0xC3A0 (20 x 18)
 # attacks the rule knows: id -> (power, type); types as the game numbers them
-MOVES = {33: (35, 0), 22: (35, 22), 75: (55, 22), 10: (40, 0), 1: (40, 0), 52: (40, 20), 55: (40, 21), 84: (40, 23)}
+MOVES = {33: (35, 0), 15: (50, 0), 22: (35, 22), 75: (55, 22), 10: (40, 0), 1: (40, 0), 52: (40, 20), 55: (40, 21), 84: (40, 23)}
 STAB = {22}                          # the starter here is a grass type
 WEAK = {22: {2, 3, 7, 20, 22, 26}, 0: {5}}            # attack type -> foe types that halve it
 STRONG = {22: {4, 5, 21}}                              # attack type -> foe types that double it
