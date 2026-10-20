@@ -934,6 +934,34 @@ Caveats: the resume is the same as a redo (the run's own save, no fixture), but 
 fired on entering the Cerulean Center, before the nurse, so Misty was fought at 27 of 83 HP and still won; a
 "healed and respawn3" target would be stricter. Training is still the slow part (about three levels an hour).
 
+### 18.28 Cheaper training: no advisor in the fights, and let a blackout heal
+
+Why training was slow: in the training stage Ivysaur fought on while nearly fainted, and most advisor calls
+(about 4,000 a run) went to trying to flee. Three changes, measured from the Mt. Moon Center save (level 17-18):
+
+- **Heal at 30%** (`redo` with `{"hp": 0.3}`, PR #77; `skill-cerulean22/`): a fight that ends below 30% health
+  sends the run to a heal stage. One run reached **Cerulean** at level 29, but at $3.36; the heal trips cost
+  more than they save, and one heal stage ran out of presses at the Center.
+- **No advisor in training fights** (stage `"with": {"ask_away": false}`, 300 advice calls;
+  `skill-cerulean25/`): level 28 for **$0.27-0.39** (was about $2.50), in 20-90 minutes. The fight book and the
+  explorer carry the fights; the run grinds in the cave or the grass of Route 3.
+- **No heal stage** (`skill-cerulean26/`): training ends, the run goes straight into the cave; a blackout wakes it
+  at the Center with full health, and the cave stages' redo sends it back in. A blackout heals for free.
+
+One more fix came from a stuck run: on Route 4 a learned walk step was blocked, the explorer got 8 presses, and the
+book walked it back, for 37,000 presses. Each repeat block on the same screen now doubles the explorer's turn
+(PR #83); from that save the last leg reached Cerulean 2 of 2 ($0.22, $0.54).
+
+| Mt. Moon Center to Cerulean | runs | Azure per run |
+|---|---|---|
+| level 25 training with advisor (18.25) | 2 of 5 | $1.28-1.62 |
+| level 28 training with advisor (18.26) | 1 of 2 | $2.68 |
+| heal at 30% | 1 of 3 (one heal stage stuck) | $3.36 |
+| advisor-free training, then a heal stage | 1 of 3 (a heal stage stuck; the walk-book loop above) | $1.88 |
+| **advisor-free training, no heal stage** | **2 of 2** from the Center; 0 of 1 from a trained save (lost on the first floor, out of presses) | **$1.24-1.69** |
+
+Runs still going are in `skill-cerulean26/`.
+
 ## Where this leaves things
 
 From power-on, with no save, the screen-only agent now wins the Boulder Badge in 10 of 10 runs, two rounds in a row (21-49k presses,
