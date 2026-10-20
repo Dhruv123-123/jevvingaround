@@ -10,7 +10,7 @@ import glob
 
 import numpy as np
 
-STEPS = ("up", "down", "left", "right", "a", "b")
+STEPS = ("up", "down", "left", "right", "a", "b", "start", "select")
 
 
 def thumb(img: np.ndarray, k: int = 4) -> np.ndarray:
