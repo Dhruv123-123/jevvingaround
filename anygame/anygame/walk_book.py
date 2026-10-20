@@ -44,7 +44,10 @@ class WalkBook:
         if d[idx[0]] > self.near:
             return None, float(d[idx[0]])
         votes = np.zeros(len(STEPS))
-        for i in idx:
+        # a screen seen exactly as it is now goes by the steps taken there: next to a door, the screens a step
+        # away are often near enough to outvote it (a ship corridor where the stairs are one step to the side)
+        exact = [i for i in idx if d[i] < 1e-3]
+        for i in exact or idx:
             if d[i] <= self.near:
                 votes[self.y[i]] += 1.0 / (1.0 + d[i])
         return STEPS[int(votes.argmax())], float(d[idx[0]])
