@@ -325,6 +325,12 @@ class FramewiseAgent(TypedScreenAgent):
         # places by the name their label gives them: how often each was entered, and the order
         self.place_visits: Counter = Counter()
         self.place_trail: list[str] = []
+        # doors: (state, press) pairs that changed the scene, how often, and the place they led to. The explorer
+        # stops taking a door it has been through twice; the decider is told where the doors by it led.
+        self.doors: Counter = Counter()
+        self.door_to: dict[tuple[str, str], str] = {}
+        self.door_open: tuple[str, str] | None = None
+        self.door_limit = 2
         self.rewant = 240
         self.step_ms: list[float] = []
 
@@ -413,6 +419,10 @@ class FramewiseAgent(TypedScreenAgent):
         """The screen graph's bookkeeping for the last press, as ScreenAgent.step does it, and the pixel reads."""
         self.judged = True
         place = self._where(img, node)
+        if self.scene and self.last is not None:
+            self.n["door_" + self.last_how] += 1          # which lane's press went through a door
+            self.doors[self.last] += 1
+            self.door_open = self.last                     # its name is filled in when the next label lands
         self._reads(img, j, place is None)
         state = place if place is not None else node
         if self.last is not None:
@@ -479,17 +489,35 @@ class FramewiseAgent(TypedScreenAgent):
         if not where or (self.place_trail and self.place_trail[-1] == where):
             return
         self.place_visits[where] += 1
+        if self.door_open is not None:
+            self.door_to[self.door_open] = where
+            self.door_open = None
         self.place_trail = (self.place_trail + [where])[-30:]
         if self.slow is not None:
             names = list(dict.fromkeys(reversed(self.place_trail)))[:15][::-1]
             self.slow.places = names
             self.slow.came_from = self.place_trail[-2] if len(self.place_trail) > 1 else ""
 
+    def _explore(self, state: str) -> str:
+        """The explorer's press, but not through a door it has already been through `door_limit` times, when
+        another press is worth trying (it re-draws a few times rather than changing ScreenAgent's choice)."""
+        b = self.choose(state)
+        for _ in range(4):
+            if self.doors[(state, b)] < self.door_limit:
+                return b
+            self.n["door_skipped"] += 1
+            b = self.choose(state)
+        return b
+
     def _state(self, label: dict[str, Any], node: str, stale: int = 0):
         st, opts = super()._state(label, node, stale)
         if self.place_visits:
             st["places entered so far (times)"] = dict(self.place_visits.most_common(10))
         r = self._readings()
+        here = [f"press {b} went through a door {n} times" + (f", to {self.door_to[(s_, b)]}" if (s_, b) in self.door_to else "")
+                for (s_, b), n in self.doors.items() if s_ == self.state_now]
+        if here:
+            r["doors from where the player stands"] = here
         if r:
             st["readings"] = r
             if "menu cursor" in r and label.get("options"):
@@ -518,7 +546,7 @@ class FramewiseAgent(TypedScreenAgent):
             self._settle_macro(j)
         if j is None:
             self.n["explore_unlabelled"] += 1
-            return self.choose(state), "explore"
+            return self._explore(state), "explore"
         key = self._key(j, label)
         e = self.fast.get(key)
         if e is not None:
@@ -530,7 +558,7 @@ class FramewiseAgent(TypedScreenAgent):
                 if e["uses"] >= self.explore_for:
                     self.fast.forget(key)
                 self.n["explore_picked"] += 1
-                return self.choose(state), "explore"
+                return self._explore(state), "explore"
             e["uses"] += 1
             self.n["memo"] += 1
             self.macro = list(e["presses"])
@@ -548,7 +576,7 @@ class FramewiseAgent(TypedScreenAgent):
             return None, "wait"
         self.n["explore_timeout" if self.fast.pending(key) else "explore_no_asks"] += 1
         self.wait_from = None
-        return self.choose(state), "explore"
+        return self._explore(state), "explore"
 
     def patience(self) -> float:
         """How long a labelled screen waits for its answer: `patience_ms`, or 1.5x the decider's recent median when
@@ -597,7 +625,9 @@ class FramewiseAgent(TypedScreenAgent):
                 "label_ms_p50": _pct(s.ms, 50) if s else None, "label_dropped": s.dropped if s else 0,
                 "labels": len(self.labels.labels), "cursor_reads": self.n["cursor_reads"], "borrowed": self.n["borrowed"],
                 "explore_why": {k[8:]: self.n[k] for k in ("explore_unlabelled", "explore_picked", "explore_timeout",
-                                                          "explore_no_asks")}, "step_ms_p50": _pct(self.step_ms, 50),
+                                                          "explore_no_asks")},
+                "doors_by": {k[5:]: v for k, v in self.n.items() if k.startswith("door_") and k != "door_skipped"},
+                "door_skipped": self.n["door_skipped"], "step_ms_p50": _pct(self.step_ms, 50),
                 "step_ms_p99": _pct(self.step_ms, 99), "step_ms_max": max(self.step_ms) if self.step_ms else None}
 
     def close(self) -> None:
