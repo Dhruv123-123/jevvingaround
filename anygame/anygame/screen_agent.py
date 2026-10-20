@@ -460,10 +460,10 @@ class ScreenAgent:
             # a screen the book keeps coming back to (an attack with no uses left, say) is left to the advisor and
             # the explorer; the count starts again once the player is seen on the map (counted by the exact screen:
             # a long trainer fight comes back to the same menu node many times, with the health bars moving)
-            # (asked even where the odometer thinks it sees the player: a fight's sprites can pass for one, and the
-            # book only answers screens close to its own fights)
+            # (asked even where the odometer thinks it sees the player, as a fight's sprites can pass for one; but
+            # then by the whole screen only, as a talk on the map has a message box like a fight's)
             if self.fight_seen[seen_key] < 10:
-                fought = self.fight_book.act(img)[0]
+                fought = self.fight_book.act(img, box=place is None)[0]
                 if fought is not None:
                     self.fight_seen[seen_key] += 1
             if fought is None and place is not None:

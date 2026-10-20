@@ -86,14 +86,14 @@ class FightBook:
     def __len__(self) -> int:
         return len(self.y)
 
-    def act(self, img: np.ndarray, prev: str | None = None) -> tuple[str | None, float]:
+    def act(self, img: np.ndarray, prev: str | None = None, box: bool = True) -> tuple[str | None, float]:
         if not len(self.y):
             return None, float("inf")
         d = np.abs(self.x - fight_view(img)).mean(axis=1)
         if prev in STEPS:                     # demos made after the same press, or demos that kept no press
             d = np.where((self.p == STEPS.index(prev)) | (self.p < 0), d, np.inf)
         i = int(np.argmin(d))
-        if d[i] > self.near and self.box:
+        if d[i] > self.near and self.box and box:
             v = fight_view(img)[: self.box]
             db = np.abs(self.x[:, : self.box] - v).mean(axis=1)
             j = int(np.argmin(db))
