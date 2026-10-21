@@ -8,6 +8,9 @@ slot). Each press is saved with the screen it was made on.
 FIXTURE_SCRAMBLE=1 moves the attack cursor somewhere at random (not recorded) each time the attack list opens, so the
 book also sees the list opened on another attack (the game opens it on the last one used).
 FIXTURE_HEAL=1 keeps the first party member above a third of its health between fights, so a demo is not cut short.
+FIXTURE_MOVES=33,45,73,22 puts the first party member's attacks in this order (with full uses) before the first fight,
+so the book also sees attack lists in the orders a run may have left them in (the book goes by the screen: a list in an
+order no demo had gets the press of a list that looks alike, and a run with GROWL moved to the top played GROWL).
 """
 from __future__ import annotations
 import os
@@ -24,6 +27,7 @@ STEPS = ("up", "down", "left", "right", "a", "b")
 ARROW = 0xED                         # the menu cursor tile in the tile map at 0xC3A0 (20 x 18)
 # attacks the rule knows: id -> (power, type); types as the game numbers them
 MOVES = {33: (35, 0), 15: (50, 0), 22: (35, 22), 75: (55, 22), 10: (40, 0), 1: (40, 0), 52: (40, 20), 55: (40, 21), 84: (40, 23)}
+PP = {33: 35, 45: 40, 73: 10, 22: 10, 77: 35, 75: 25, 15: 30}    # full uses, for FIXTURE_MOVES
 STAB = {22}                          # the starter here is a grass type
 WEAK = {22: {2, 3, 7, 20, 22, 26}, 0: {5}}            # attack type -> foe types that halve it
 STRONG = {22: {4, 5, 21}}                              # attack type -> foe types that double it
@@ -79,6 +83,9 @@ def main() -> None:
         pb.load_state(f)
     pb.tick(60)
     m = pb.memory
+    if os.environ.get("FIXTURE_MOVES"):
+        for j, mid in enumerate(int(v) for v in os.environ["FIXTURE_MOVES"].split(",")):
+            m[0xD173 + j], m[0xD188 + j] = mid, PP.get(mid, 10)
     shots, steps, done, k = [], [], 0, 0
     while done < fights and k < 20000:
         if m[0xD057]:
