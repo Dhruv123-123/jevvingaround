@@ -10,7 +10,6 @@ first move (press DOWN), after DOWN it is on the second (press A).
     python scripts/pokemon_learn_demos.py OUT.npz RUNS STATE [STATE ...]   (states on the map, not in a fight)
 """
 from __future__ import annotations
-import io
 import os
 import random
 import sys
