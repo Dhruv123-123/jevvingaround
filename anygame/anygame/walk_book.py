@@ -96,8 +96,10 @@ class FightBook:
         if prev in STEPS:                     # demos made after the same press, or demos that kept no press
             d = np.where((self.p == STEPS.index(prev)) | (self.p < 0), d, np.inf)
         i = int(np.argmin(d))
-        if d[i] > self.near and self.box and box:
-            v = fight_view(img)[: self.box]
+        v = fight_view(img)[: self.box]
+        # (a box of one colour is no box: a map whose bottom third is the black past its edge, a cave entrance, matched
+        # the black frames of a fight's opening flash, and the presses there walked out of the cave)
+        if d[i] > self.near and self.box and box and v.std() > 1.0:
             db = np.abs(self.x[:, : self.box] - v).mean(axis=1)
             j = int(np.argmin(db))
             if db[j] <= self.near:
