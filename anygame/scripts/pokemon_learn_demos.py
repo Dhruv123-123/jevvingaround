@@ -5,12 +5,13 @@ fight book's habit) forgot the first move: Ivysaur lost TACKLE to POISONPOWDER a
 A run may have moved its attacks around (SELECT in the attack list), so the demos go through every order.
 A RAM rule drives each demo (grader side, a test helper like pokemon_menu_demos.py): set the level and experience
 one win short of a new move, walk into a wild fight, win it with the best attack, and on the move list go down to the move to drop.
-Only the move list screens are saved, each with the press made before it ("prev"): the list opens on the first move
-after an A, and each DOWN moves it on a row.
+Only the move list screens are saved: the list with the cursor on each of its four rows (the agent may have moved it),
+going by the screen alone, as the press before it may be anyone's (the agent's own presses, the explorer's).
 
     python scripts/pokemon_learn_demos.py OUT.npz RUNS STATE [STATE ...]   (states on the map, not in a fight)
 """
 from __future__ import annotations
+import io
 import itertools
 import os
 import random
@@ -45,7 +46,7 @@ def move_list(m) -> bool:
 def main() -> None:
     out, runs, states = sys.argv[1], int(sys.argv[2]), sys.argv[3:]
     rng = random.Random(1)
-    shots, steps, prevs, ok = [], [], [], 0
+    shots, steps, ok = [], [], 0
     pb = PyBoy(ROM, window="null", sound_emulated=False)
     m = pb.memory
     for r in range(runs):
@@ -63,27 +64,33 @@ def main() -> None:
         while not m[BATTLE] and n < 3000:
             press(pb, rng.choice(("up", "down", "left", "right")), after=10)
             n += 1
-        prev, seen = "a", set()
+        listed = False
         for _ in range(600):
             if not m[BATTLE] and m[MOVES + row] != drop:
                 break
             b = rule(m)                        # the fight: its best attack, A through messages
             if move_list(m) and m[MOVES + row] == drop:
+                if not listed:                 # the list with the cursor on each row, and the press to make there
+                    listed = True
+                    here = io.BytesIO()
+                    pb.save_state(here)
+                    for k in range(4):
+                        here.seek(0)
+                        pb.load_state(here)
+                        for _ in range(k):
+                            press(pb, "down", after=12)
+                        shots.append(pb.screen.ndarray[:, :, :3].copy())
+                        steps.append(STEPS.index("down" if k < row else "a" if k == row else "up"))
+                    here.seek(0)
+                    pb.load_state(here)
                 b = "down" if m[CURSOR] < row else "a" if m[CURSOR] == row else "up"
-                if m[CURSOR] not in seen:      # (once per cursor row: the menu's RAM outlives the list)
-                    seen.add(m[CURSOR])
-                    shots.append(pb.screen.ndarray[:, :, :3].copy())
-                    steps.append(STEPS.index(b))
-                    prevs.append(STEPS.index(prev))
             press(pb, b, after=30 + rng.randrange(20))
-            prev = b
         got = [m[MOVES + k] for k in range(4)]
         good = got == [new if k == row else v for k, v in enumerate(moves)]
         ok += good
         print(r, "level", m[LEVEL], "moves", got, "ok" if good else "MISSED", flush=True)
     pb.stop(save=False)
-    np.savez_compressed(out, shots=np.array(shots, dtype=np.uint8), steps=np.array(steps, dtype=np.int64),
-                        prev=np.array(prevs, dtype=np.int64))
+    np.savez_compressed(out, shots=np.array(shots, dtype=np.uint8), steps=np.array(steps, dtype=np.int64))
     print(f"{ok}/{runs} runs dropped the move that does no damage; {len(steps)} list screens -> {out}")
 
 
