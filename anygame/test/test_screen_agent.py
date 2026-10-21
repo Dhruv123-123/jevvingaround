@@ -58,3 +58,57 @@ def test_parse_presses():
     assert parse_presses('ok {"why": "go", "presses": ["Right", "jump", "a"]}', ["right", "a"]) == (["right", "a"], "go")
     assert parse_presses('{"presses": ["up*3", "a*x", "b"]}', ["up", "a", "b"])[0] == ["up", "up", "up", "a", "b"]
     assert parse_presses("no json", ["a"]) == ([], "")
+
+
+class MenuFight:
+    """A fight seen only as screens: a two-entry move menu (the first entry has no uses left: choosing it says so and
+    shows the menu again), and a bag that B closes. Every screen is a different flat pattern."""
+
+    def __init__(self):
+        self.at, self.won, self.in_bag = "menu0", False, 0
+
+    def frame(self):
+        img = np.zeros((144, 160, 3), np.uint8)
+        k = ["menu0", "menu1", "nopp", "bag", "won"].index(self.at)
+        img[:, :] = 30 + 40 * k
+        img[16 * k:16 * k + 40, 20:140] = 250 - 30 * k
+        return img
+
+    def press(self, b, hold=None, after=None):
+        self.in_bag += self.at == "bag"
+        self.at = {("menu0", "a"): "nopp", ("menu0", "down"): "menu1", ("menu0", "right"): "bag",
+                   ("menu1", "a"): "won", ("menu1", "up"): "menu0", ("menu1", "right"): "bag",
+                   ("nopp", "a"): "menu0", ("nopp", "b"): "menu0", ("bag", "b"): "menu0"}.get((self.at, b), self.at)
+        self.won = self.won or self.at == "won"
+
+
+class MenuBook:
+    """A fight book that was only ever shown the move menu, choosing the first entry."""
+
+    def __init__(self, game):
+        self.g = game
+
+    def act(self, img, box=True):
+        return ({"menu0": "a", "menu1": "up"}.get(self.g.at),)
+
+
+def test_a_fight_menu_that_goes_nowhere_gets_another_press():
+    g = MenuFight()
+    agent = ScreenAgent(g, seed=1, place_weight=0)
+    agent.fight_book = MenuBook(g)
+    for _ in range(60):
+        agent.step()
+        if g.won:
+            break
+    assert g.won
+
+
+def test_an_unknown_fight_screen_gets_a_then_b():
+    g = MenuFight()
+    agent = ScreenAgent(g, seed=2, place_weight=0)
+    agent.fight_book = MenuBook(g)
+    g.at = "menu1"
+    agent.step()                             # the book knows this one
+    g.at = "bag"                             # wandered into the bag: A on the item there says no and shows it again
+    assert [agent.step()["action"] for _ in range(3)] == ["a", "a", "b"]
+    assert g.at == "menu0"
