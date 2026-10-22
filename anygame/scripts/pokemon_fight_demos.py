@@ -8,6 +8,7 @@ slot). Each press is saved with the screen it was made on.
 FIXTURE_SCRAMBLE=1 moves the attack cursor somewhere at random (not recorded) each time the attack list opens, so the
 book also sees the list opened on another attack (the game opens it on the last one used).
 FIXTURE_HEAL=1 keeps the first party member above a third of its health between fights, so a demo is not cut short.
+FIXTURE_PP=0,35,10,0 then sets their uses (a run that has spent its attacks, so the book sees what to do then).
 FIXTURE_MOVES=33,45,73,22 puts the first party member's attacks in this order (with full uses) before the first fight,
 so the book also sees attack lists in the orders a run may have left them in (the book goes by the screen: a list in an
 order no demo had gets the press of a list that looks alike, and a run with GROWL moved to the top played GROWL).
@@ -28,6 +29,7 @@ ARROW = 0xED                         # the menu cursor tile in the tile map at 0
 # attacks the rule knows: id -> (power, type); types as the game numbers them
 MOVES = {33: (35, 0), 15: (50, 0), 22: (35, 22), 75: (55, 22), 10: (40, 0), 1: (40, 0), 52: (40, 20), 55: (40, 21), 84: (40, 23)}
 PP = {33: 35, 45: 40, 73: 10, 22: 10, 77: 35, 75: 25, 15: 30}    # full uses, for FIXTURE_MOVES
+STATUS = {73: 3.0, 77: 2.0, 45: 1.0}    # moves that do no direct damage, best first: LEECH SEED, POISONPOWDER, GROWL
 STAB = {22}                          # the starter here is a grass type
 WEAK = {22: {2, 3, 7, 20, 22, 26}, 0: {5}}            # attack type -> foe types that halve it
 STRONG = {22: {4, 5, 21}}                              # attack type -> foe types that double it
@@ -51,6 +53,10 @@ def best_move(m) -> int:
         for f in foe:
             s *= 0.5 if f in WEAK.get(typ, ()) else 2.0 if f in STRONG.get(typ, ()) else 1.0
         score.append(s)
+    if max(score) < 0:
+        # no attack that hurts has uses left: any move with uses left (LEECH SEED, POISONPOWDER drain the foe),
+        # rather than the first one again and its "No PP left" message
+        score = [STATUS.get(m[0xD01C + j], 0.5) if m[0xD01C + j] and m[0xD02D + j] & 0x3F else -1.0 for j in range(4)]
     return int(np.argmax(score))
 
 
@@ -86,6 +92,9 @@ def main() -> None:
     if os.environ.get("FIXTURE_MOVES"):
         for j, mid in enumerate(int(v) for v in os.environ["FIXTURE_MOVES"].split(",")):
             m[0xD173 + j], m[0xD188 + j] = mid, PP.get(mid, 10)
+    if os.environ.get("FIXTURE_PP"):
+        for j, pp in enumerate(int(v) for v in os.environ["FIXTURE_PP"].split(",")):
+            m[0xD188 + j] = pp
     shots, steps, done, k = [], [], 0, 0
     while done < fights and k < 20000:
         if m[0xD057]:
