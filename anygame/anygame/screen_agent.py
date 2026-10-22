@@ -30,6 +30,7 @@ import numpy as np
 BUTTONS = ("up", "down", "left", "right", "a", "b", "start", "select")
 FUTILE = 3       # times the fight book may come back to the exact same menu before its press there counts as going nowhere
 BLIND = 40       # presses after the fight book's last answer during which a screen it does not know is still the fight
+REVIVE = 400    # presses off the map with no answer from the fight book before it, and its counts, get a fresh go
 BLIND_B = 3      # presses on such a screen (A, then B) before the advisor and the explorer get it
 CYCLE = ("a", "down", "up", "b")   # what a fight menu that goes nowhere gets instead, least tried first
 # a prior on how often each button is worth trying before the agent has seen anything (as a person would: the pad
@@ -487,6 +488,15 @@ class ScreenAgent:
                 fought = "a" if self.fight_blind[seen_key] < BLIND_B - 1 else "b"
                 self.fight_blind[seen_key] += 1
             self.book_since += 1
+            if fought is None and place is None and self.book_since >= BLIND + REVIVE:
+                # a fight held for hundreds of presses on screens the book has given up on (the bag left open on a
+                # TM in the middle of a cave fight held one run for 58,000 presses): forget the counts, so the book
+                # and the A-then-B rule get a fresh go, as they would after the fight
+                self.fight_blind.clear()
+                self.book_since = 0
+                self.fight_seen.clear()
+                self.fight_next.clear()
+                self.fight_tried.clear()
             if fought is None and place is not None:
                 self.fight_blind.clear()
                 self.book_since = BLIND
